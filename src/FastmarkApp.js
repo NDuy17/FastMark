@@ -5,17 +5,24 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import AuthenticatedHome from './features/auth/AuthenticatedHome';
 import AuthScreen from './features/auth/AuthScreen';
+import { selectAuthStatus } from './features/auth/authSelectors';
 import {
-  hydrateAuthSession,
+  loadUserProfile,
   setAuthChecking,
+  setAuthUser,
   setConfigError,
+  setUnauthenticated,
 } from './features/auth/authSlice';
-import { subscribeToAuthChanges } from './services/authService';
+import { store } from './store';
+import {
+  serializeAuthUser,
+  subscribeToAuthChanges,
+} from './services/authService';
 import { getBackendConfigError } from './services/env';
 
 export default function FastmarkApp() {
   const dispatch = useDispatch();
-  const { status } = useSelector((state) => state.auth);
+  const status = useSelector(selectAuthStatus);
 
   useEffect(() => {
     const configError = getBackendConfigError();
@@ -29,8 +36,20 @@ export default function FastmarkApp() {
 
     try {
       const unsubscribe = subscribeToAuthChanges(
-        () => {
-          dispatch(hydrateAuthSession());
+        (firebaseUser) => {
+          if (!firebaseUser) {
+            dispatch(setUnauthenticated());
+            return;
+          }
+
+          const user = serializeAuthUser(firebaseUser);
+          const currentUid = store.getState().auth.user?.uid;
+
+          dispatch(setAuthUser(user));
+
+          if (currentUid !== user.uid) {
+            dispatch(loadUserProfile());
+          }
         },
         (error) => {
           dispatch(setConfigError(error?.message || 'Không khởi tạo được xác thực.'));

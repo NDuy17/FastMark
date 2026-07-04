@@ -12,7 +12,28 @@
           "package_name": "com.nduy17.fastmark"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "356316104950-02l8hmosnbvd97knh60qcjo80ob81ker.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nduy17.fastmark",
+            "certificate_hash": "f09f9d5ccf7de6c486d869c21b5a0d310bb9381d"
+          }
+        },
+        {
+          "client_id": "356316104950-m36vptachsd6jb2blns3si067u1qlgol.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nduy17.fastmark",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "356316104950-799dkpvcf6br1e8drjvbeukvfu1ovcsu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBXEVywMc6Ej_qgt3RvKeaPzI29pYhpVEk"
@@ -20,7 +41,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "356316104950-799dkpvcf6br1e8drjvbeukvfu1ovcsu.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

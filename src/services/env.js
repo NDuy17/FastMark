@@ -1,3 +1,8 @@
+import {
+  getAndroidOAuthClientIdFromGoogleServices,
+  getWebOAuthClientIdFromGoogleServices,
+} from './googleServicesConfig';
+
 const env = process.env || {};
 
 export const firebaseConfig = {
@@ -14,6 +19,20 @@ export const supabaseConfig = {
   key: env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
 };
 
+export const nodeApiUrl = env.EXPO_PUBLIC_NODE_API_URL || '';
+
+export const googleOAuthConfig = {
+  webClientId:
+    env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    getWebOAuthClientIdFromGoogleServices() ||
+    '',
+  androidClientId:
+    env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+    getAndroidOAuthClientIdFromGoogleServices() ||
+    '',
+  iosClientId: env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '',
+};
+
 const firebaseRequiredKeys = [
   ['EXPO_PUBLIC_FIREBASE_API_KEY', 'apiKey'],
   ['EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN', 'authDomain'],
@@ -28,6 +47,10 @@ export function getMissingFirebaseEnv() {
 }
 
 export function getMissingSupabaseEnv() {
+  if (nodeApiUrl) {
+    return [];
+  }
+
   const missing = [];
 
   if (!supabaseConfig.url) {
@@ -41,6 +64,10 @@ export function getMissingSupabaseEnv() {
   return missing;
 }
 
+export function getNodeApiUrl() {
+  return nodeApiUrl;
+}
+
 export function getMissingBackendEnv() {
   return [...getMissingFirebaseEnv(), ...getMissingSupabaseEnv()];
 }
@@ -49,7 +76,7 @@ export function assertBackendEnv() {
   const missing = getMissingBackendEnv();
 
   if (missing.length > 0) {
-    throw new Error(`Thieu cau hinh ket noi: ${missing.join(', ')}`);
+    throw new Error(`Thiếu cấu hình kết nối: ${missing.join(', ')}`);
   }
 }
 
@@ -60,5 +87,5 @@ export function getBackendConfigError() {
     return '';
   }
 
-  return `Can bo sung cac bien trong .env: ${missing.join(', ')}`;
+  return `Cần bổ sung các biến trong .env: ${missing.join(', ')}`;
 }

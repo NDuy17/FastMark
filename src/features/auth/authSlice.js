@@ -7,12 +7,12 @@ import {
   logoutCurrentUser,
   registerWithEmail,
   serializeAuthUser,
-  signInWithFacebookCredential,
   signInWithGoogleCredential,
   updateCurrentUserProfile,
 } from '../../services/authService';
 import { getBackendConfigError } from '../../services/env';
-import { readUserProfile, upsertUserProfile } from '../../services/profileService';
+import { readUserProfile, upsertUserProfile, makeProfileFromAuthUser } from '../../services/profileService';
+import { readCachedProfile, writeCachedProfile } from '../../services/profileCache';
 import { toReadableAuthError } from './authErrors';
 
 const initialState = {
@@ -20,6 +20,7 @@ const initialState = {
   actionStatus: 'idle',
   user: null,
   profile: null,
+  profileStatus: 'idle',
   error: null,
   successMessage: null,
   configError: null,
@@ -51,6 +52,29 @@ export const hydrateAuthSession = createAsyncThunk(
       return { user, profile };
     } catch (error) {
       return rejectWithReadableError(error, rejectWithValue);
+    }
+  }
+);
+
+export const loadUserProfile = createAsyncThunk(
+  'auth/loadProfile',
+  async (_, { getState }) => {
+    const { user } = getState().auth;
+    if (!user) {
+      return { profile: null };
+    }
+
+    const cached = await readCachedProfile(user.uid);
+    if (cached) {
+      return { profile: makeProfileFromAuthUser(user, cached) };
+    }
+
+    try {
+      const profile = await readUserProfile(user);
+      await writeCachedProfile(profile);
+      return { profile };
+    } catch {
+      return { profile: makeProfileFromAuthUser(user) };
     }
   }
 );
@@ -112,18 +136,39 @@ export const logoutUser = createAsyncThunk(
 
 export const updateUserProfile = createAsyncThunk(
   'auth/updateProfile',
-  async (payload, { getState, rejectWithValue }) => {
-    try {
-      const currentProfile = getState().auth.profile;
-      const user = await updateCurrentUserProfile(payload);
-      const profile = await upsertUserProfile(user, {
-        ...currentProfile,
-        ...payload,
-      });
+  async (payload, { getState }) => {
+    const state = getState();
+    const authUser = state.auth.user;
+    const currentProfile = state.auth.profile;
 
-      return { user, profile, message: 'Đã cập nhật thông tin.' };
+    if (!authUser) {
+      return;
+    }
+
+    const updates = {
+      fullName: payload.fullName?.trim() || '',
+      phone: payload.phone?.trim() || '',
+      photoUrl: payload.photoUrl?.trim() || '',
+    };
+
+    try {
+      await updateCurrentUserProfile({
+        fullName: updates.fullName,
+        photoUrl: updates.photoUrl,
+      });
     } catch (error) {
-      return rejectWithReadableError(error, rejectWithValue);
+      console.warn('Firebase Auth profile sync failed:', error?.message || error);
+    }
+
+    try {
+      const profile = await upsertUserProfile(
+        authUser,
+        { ...currentProfile, ...updates },
+        { existingProfile: currentProfile }
+      );
+      await writeCachedProfile(profile);
+    } catch (error) {
+      console.warn('Remote profile sync failed:', error?.message || error);
     }
   }
 );
@@ -143,19 +188,12 @@ export const changePassword = createAsyncThunk(
 
 export const socialLogin = createAsyncThunk(
   'auth/socialLogin',
-  async ({ provider, token }, { rejectWithValue }) => {
+  async ({ token }, { rejectWithValue }) => {
     try {
       const configError = getBackendConfigError();
       if (configError) throw new Error(configError);
 
-      let user;
-      if (provider === 'google') {
-        user = await signInWithGoogleCredential(token);
-      } else if (provider === 'facebook') {
-        user = await signInWithFacebookCredential(token);
-      } else {
-        throw new Error('Nhà cung cấp xác thực không hợp lệ.');
-      }
+      const user = await signInWithGoogleCredential(token);
 
       const profile = await upsertUserProfile(user);
       return { user, profile, message: 'Đăng nhập thành công.' };
@@ -174,6 +212,64 @@ const authSlice = createSlice({
       state.error = null;
       state.successMessage = null;
     },
+    setAuthUser(state, action) {
+      const nextUser = action.payload;
+      const sameUser = state.user?.uid === nextUser?.uid;
+
+      state.status = 'authenticated';
+      state.user = nextUser;
+      state.error = null;
+      state.configError = null;
+
+      if (!sameUser) {
+        state.profile = null;
+        state.profileStatus = 'loading';
+      }
+    },
+    setProfile(state, action) {
+      state.profile = action.payload;
+    },
+    applyProfileLocally(state, action) {
+      const { fullName, phone, photoUrl } = action.payload;
+
+      if (!state.user) {
+        return;
+      }
+
+      const trimmedName = fullName?.trim() || '';
+      const trimmedPhone = phone?.trim() || '';
+      const trimmedPhoto = photoUrl?.trim() || '';
+      const timestamp = new Date().toISOString();
+
+      state.user = {
+        ...state.user,
+        displayName: trimmedName,
+        photoURL: trimmedPhoto || state.user.photoURL || '',
+      };
+
+      state.profile = {
+        ...(state.profile || {}),
+        id: state.user.uid,
+        email: state.user.email || state.profile?.email || '',
+        fullName: trimmedName,
+        phone: trimmedPhone,
+        photoUrl: trimmedPhoto || state.profile?.photoUrl || state.user.photoURL || '',
+        createdAt: state.profile?.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      state.profileStatus = 'succeeded';
+      state.error = null;
+      state.successMessage = 'Đã lưu.';
+    },
+    setUnauthenticated(state) {
+      state.status = 'unauthenticated';
+      state.user = null;
+      state.profile = null;
+      state.profileStatus = 'idle';
+      state.actionStatus = 'idle';
+      state.error = null;
+      state.successMessage = null;
+    },
     setConfigError(state, action) {
       state.status = 'unauthenticated';
       state.configError = action.payload;
@@ -183,6 +279,12 @@ const authSlice = createSlice({
     clearAuthFeedback(state) {
       state.error = null;
       state.successMessage = null;
+    },
+    resetActionStatus(state) {
+      state.actionStatus = 'idle';
+      if (state.profileStatus === 'loading' && state.profile) {
+        state.profileStatus = 'succeeded';
+      }
     },
   },
   extraReducers: (builder) => {
@@ -202,11 +304,26 @@ const authSlice = createSlice({
         state.status = 'unauthenticated';
         state.user = null;
         state.profile = null;
+        state.profileStatus = 'idle';
+        state.error = action.payload;
+      })
+      .addCase(loadUserProfile.pending, (state) => {
+        state.profileStatus = 'loading';
+        state.error = null;
+      })
+      .addCase(loadUserProfile.fulfilled, (state, action) => {
+        state.profileStatus = 'succeeded';
+        state.profile = action.payload.profile;
+        state.error = null;
+      })
+      .addCase(loadUserProfile.rejected, (state, action) => {
+        state.profileStatus = 'failed';
         state.error = action.payload;
       })
       .addCase(logoutUser.fulfilled, (state) => {
         state.status = 'unauthenticated';
         state.actionStatus = 'idle';
+        state.profileStatus = 'idle';
         state.user = null;
         state.profile = null;
         state.error = null;
@@ -223,7 +340,6 @@ const authSlice = createSlice({
             registerUser.pending.type,
             loginUser.pending.type,
             logoutUser.pending.type,
-            updateUserProfile.pending.type,
             changePassword.pending.type,
             socialLogin.pending.type,
           ].includes(action.type),
@@ -238,7 +354,6 @@ const authSlice = createSlice({
           [
             registerUser.fulfilled.type,
             loginUser.fulfilled.type,
-            updateUserProfile.fulfilled.type,
             socialLogin.fulfilled.type,
           ].includes(action.type),
         (state, action) => {
@@ -256,7 +371,6 @@ const authSlice = createSlice({
             registerUser.rejected.type,
             loginUser.rejected.type,
             logoutUser.rejected.type,
-            updateUserProfile.rejected.type,
             changePassword.rejected.type,
             socialLogin.rejected.type,
           ].includes(action.type),
@@ -269,7 +383,15 @@ const authSlice = createSlice({
   },
 });
 
-export const { clearAuthFeedback, setAuthChecking, setConfigError } =
-  authSlice.actions;
+export const {
+  applyProfileLocally,
+  clearAuthFeedback,
+  resetActionStatus,
+  setAuthChecking,
+  setAuthUser,
+  setProfile,
+  setUnauthenticated,
+  setConfigError,
+} = authSlice.actions;
 
 export default authSlice.reducer;

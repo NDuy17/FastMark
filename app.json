@@ -14,7 +14,8 @@
           "locationWhenInUsePermission": "Allow Fastmark to use your location for maps and distance measuring."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin"
     ],
     "ios": {
       "supportsTablet": true,
@@ -22,6 +23,7 @@
     },
     "android": {
       "package": "com.nduy17.fastmark",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

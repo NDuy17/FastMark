@@ -8,8 +8,7 @@ const MAP_COMMAND_SOURCE = 'fastmark-map-command';
 
 export default function LeafletMap({
   currentLocation,
-  measureEnabled,
-  clearSignal,
+  radiusCircle,
   recenterSignal,
   restaurants,
   onEvent,
@@ -54,35 +53,28 @@ export default function LeafletMap({
       return;
     }
 
+    sendCommand({
+      type: 'location',
+      location: currentLocation,
+      recenter: !hasCenteredRef.current,
+    });
+
     if (!hasCenteredRef.current) {
       hasCenteredRef.current = true;
-      sendCommand({
-        type: 'location',
-        location: currentLocation,
-        recenter: true,
-      });
-    } else {
-      sendCommand({
-        type: 'location',
-        location: currentLocation,
-        recenter: false,
-      });
     }
   }, [currentLocation, ready]);
-
-  useEffect(() => {
-    sendCommand({ type: 'measureMode', enabled: measureEnabled });
-  }, [measureEnabled, ready]);
 
   useEffect(() => {
     sendCommand({ type: 'showRestaurants', restaurants });
   }, [restaurants, ready]);
 
   useEffect(() => {
-    if (clearSignal > 0) {
-      sendCommand({ type: 'clearMeasure' });
-    }
-  }, [clearSignal, ready]);
+    sendCommand({
+      type: 'radiusCircle',
+      center: radiusCircle?.center ?? null,
+      radius: radiusCircle?.radius ?? null,
+    });
+  }, [radiusCircle, ready]);
 
   useEffect(() => {
     if (recenterSignal > 0 && hasValidLocation(currentLocation)) {

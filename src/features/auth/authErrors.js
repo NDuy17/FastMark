@@ -13,7 +13,7 @@ const firebaseErrorMessages = {
 
 export function toReadableAuthError(error) {
   if (!error) {
-    return 'Da co loi xay ra.';
+    return 'Đã có lỗi xảy ra.';
   }
 
   if (firebaseErrorMessages[error.code]) {
@@ -24,5 +24,5 @@ export function toReadableAuthError(error) {
     return error.message;
   }
 
-  return 'Da co loi xay ra.';
+  return 'Đã có lỗi xảy ra.';
 }

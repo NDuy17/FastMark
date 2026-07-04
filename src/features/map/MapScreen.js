@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
 
@@ -12,11 +12,8 @@ export default function MapScreen({ children }) {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [recenterSignal, setRecenterSignal] = useState(0);
 
-  // States for new features
   const [menuVisible, setMenuVisible] = useState(false);
-  const [measureEnabled, setMeasureEnabled] = useState(false);
-  const [clearSignal, setClearSignal] = useState(0);
-  const [measurement, setMeasurement] = useState(null);
+  const [selectedRadius, setSelectedRadius] = useState(500);
   const [selectedCategory, setSelectedCategory] = useState('none');
   const [restaurants, setRestaurants] = useState([]);
   const lastAcceptedRef = useRef(null);
@@ -132,6 +129,29 @@ export default function MapScreen({ children }) {
     };
   }, [selectedCategory]);
 
+  // Lọc quán theo bán kính (mặc định 500 m, phạm vi 100 m – 2 km)
+  const visibleRestaurants = useMemo(() => {
+    if (!hasValidLocation(currentLocation) || restaurants.length === 0) {
+      return restaurants;
+    }
+    if (!selectedRadius) {
+      return restaurants;
+    }
+    return restaurants.filter((r) => {
+      if (!r.latitude || !r.longitude) return false;
+      const dist = calculateDistanceMeters(currentLocation, {
+        latitude: r.latitude,
+        longitude: r.longitude,
+      });
+      return dist !== null && dist <= selectedRadius;
+    });
+  }, [restaurants, currentLocation, selectedRadius]);
+
+  const radiusCircleProp =
+    selectedRadius && hasValidLocation(currentLocation)
+      ? { center: currentLocation, radius: selectedRadius }
+      : null;
+
   function handleRecenterPress() {
     if (hasValidLocation(currentLocation)) {
       setRecenterSignal((value) => value + 1);
@@ -141,24 +161,17 @@ export default function MapScreen({ children }) {
     startLocationTracking();
   }
 
-  function handleMapEvent(payload) {
-    if (payload.type === 'measurement') {
-      setMeasurement(payload);
-    }
+  function handleMapEvent(_payload) {
+    // reserved for future events
   }
 
-  function handleClearMeasure() {
-    setClearSignal((prev) => prev + 1);
-    setMeasurement(null);
-  }
-
-  function toggleMeasureMode() {
-    const nextState = !measureEnabled;
-    setMeasureEnabled(nextState);
-    if (!nextState) {
-      handleClearMeasure();
-    }
-  }
+  const radiusOptions = [
+    { key: null, label: '🚫 Tắt bán kính' },
+    { key: 100, label: '📍 100 m' },
+    { key: 500, label: '📍 500 m' },
+    { key: 1000, label: '📍 1 km' },
+    { key: 2000, label: '📍 2 km' },
+  ];
 
   const restaurantCategories = [
     { key: 'none', label: '🚫 Ẩn tất cả' },
@@ -173,16 +186,15 @@ export default function MapScreen({ children }) {
     <View style={styles.container}>
       <LeafletMap
         currentLocation={currentLocation}
-        measureEnabled={measureEnabled}
-        clearSignal={clearSignal}
+        radiusCircle={radiusCircleProp}
         recenterSignal={recenterSignal}
-        restaurants={restaurants}
+        restaurants={visibleRestaurants}
         onEvent={handleMapEvent}
       />
 
       {children}
 
-      {/* Floating Menu Button (3-dot icon) */}
+      {/* Floating Menu Button (settings icon) */}
       <View style={styles.menuOverlay} pointerEvents="box-none">
         <Pressable
           accessibilityRole="button"
@@ -202,22 +214,30 @@ export default function MapScreen({ children }) {
       {/* Dropdown Menu Card */}
       {menuVisible && (
         <View style={styles.dropdownCard}>
-          <Text style={styles.menuHeader}>Bản đồ tiện ích</Text>
+          <Text style={styles.menuHeader}>Bộ lọc bản đồ</Text>
 
-          {/* Toggle Measure */}
-          <Pressable
-            style={[styles.menuItem, measureEnabled && styles.menuItemActive]}
-            onPress={toggleMeasureMode}
-          >
-            <Text style={styles.menuItemEmoji}>📏</Text>
-            <Text style={[styles.menuItemText, measureEnabled && styles.menuItemTextActive]}>
-              Đo khoảng cách: {measureEnabled ? 'Bật' : 'Tắt'}
-            </Text>
-          </Pressable>
+          {/* Radius filter */}
+          <Text style={styles.menuSubHeader}>Bán kính hiển thị</Text>
+          {radiusOptions.map((opt) => {
+            const isSelected = selectedRadius === opt.key;
+            return (
+              <Pressable
+                key={String(opt.key)}
+                style={[styles.categoryItem, isSelected && styles.categoryItemActive]}
+                onPress={() => setSelectedRadius(opt.key)}
+              >
+                <Text style={[styles.categoryText, isSelected && styles.categoryTextActive]}>
+                  {opt.label}
+                </Text>
+                {isSelected && <Text style={styles.checkmark}>✓</Text>}
+              </Pressable>
+            );
+          })}
 
           <View style={styles.divider} />
-          
-          <Text style={styles.menuSubHeader}>Loại quán hiển thị</Text>
+
+          {/* Category filter */}
+          <Text style={styles.menuSubHeader}>Loại quán</Text>
           {restaurantCategories.map((cat) => {
             const isSelected = selectedCategory === cat.key;
             return (
@@ -233,20 +253,6 @@ export default function MapScreen({ children }) {
               </Pressable>
             );
           })}
-        </View>
-      )}
-
-      {/* Distance Measurement Result Banner */}
-      {measureEnabled && measurement && measurement.pointCount > 0 && (
-        <View style={styles.measureBanner}>
-          <View style={styles.measureInfo}>
-            <Text style={styles.measureLabel}>Thước đo khoảng cách</Text>
-            <Text style={styles.measureDistance}>{measurement.formattedDistance}</Text>
-            <Text style={styles.measurePoints}>Số điểm chọn: {measurement.pointCount}</Text>
-          </View>
-          <Pressable style={styles.clearMeasureButton} onPress={handleClearMeasure}>
-            <Text style={styles.clearMeasureButtonText}>Xóa đo</Text>
-          </Pressable>
         </View>
       )}
 
@@ -273,11 +279,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#eef2f0',
   },
   recenterOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
-    paddingRight: 16,
-    paddingBottom: 16,
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    zIndex: 999,
   },
   recenterButton: {
     minHeight: 44,
@@ -369,28 +374,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#e2e8f0',
     marginVertical: 6,
   },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-  },
-  menuItemActive: {
-    backgroundColor: '#f0fdf4',
-  },
-  menuItemEmoji: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  menuItemText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  menuItemTextActive: {
-    color: '#15803d',
-  },
   categoryItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -415,54 +398,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0f766e',
     fontWeight: 'bold',
-  },
-  measureBanner: {
-    position: 'absolute',
-    bottom: 80,
-    left: 16,
-    right: 16,
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 998,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  measureInfo: {
-    flex: 1,
-  },
-  measureLabel: {
-    color: '#94a3b8',
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  measureDistance: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '900',
-    marginVertical: 2,
-  },
-  measurePoints: {
-    color: '#cbd5e1',
-    fontSize: 12,
-    fontWeight: '550',
-  },
-  clearMeasureButton: {
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  clearMeasureButtonText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '800',
   },
 });

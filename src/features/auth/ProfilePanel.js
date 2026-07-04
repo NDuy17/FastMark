@@ -12,17 +12,30 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
+  selectAuthError,
+  selectAuthProfile,
+  selectAuthProfileStatus,
+  selectAuthSuccessMessage,
+  selectAuthUser,
+} from './authSelectors';
+import { store } from '../../store';
+import { writeCachedProfile } from '../../services/profileCache';
+import {
+  applyProfileLocally,
   changePassword,
   clearAuthFeedback,
+  loadUserProfile,
   logoutUser,
   updateUserProfile,
 } from './authSlice';
 
 export default function ProfilePanel() {
   const dispatch = useDispatch();
-  const { actionStatus, error, profile, successMessage, user } = useSelector(
-    (state) => state.auth
-  );
+  const error = useSelector(selectAuthError);
+  const profile = useSelector(selectAuthProfile);
+  const profileStatus = useSelector(selectAuthProfileStatus);
+  const successMessage = useSelector(selectAuthSuccessMessage);
+  const user = useSelector(selectAuthUser);
   const [section, setSection] = useState('profile');
   const [profileForm, setProfileForm] = useState({
     fullName: '',
@@ -35,9 +48,17 @@ export default function ProfilePanel() {
     confirmPassword: '',
   });
   const [localError, setLocalError] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
-  const isLoading = actionStatus === 'loading';
+  const isProfileLoading = profileStatus === 'loading';
   const displayName = profile?.fullName || user?.displayName || 'Fastmark user';
+
+  useEffect(() => {
+    if (!user || profile) {
+      return;
+    }
+    dispatch(loadUserProfile());
+  }, [dispatch, user, profile]);
 
   useEffect(() => {
     setProfileForm({
@@ -63,6 +84,24 @@ export default function ProfilePanel() {
   }
 
   function handleSaveProfile() {
+    if (!user) {
+      setLocalError('Vui lòng đăng nhập lại trước khi cập nhật hồ sơ.');
+      return;
+    }
+
+    if (!profileForm.fullName.trim()) {
+      setLocalError('Vui lòng điền họ tên.');
+      return;
+    }
+
+    setLocalError('');
+    dispatch(applyProfileLocally(profileForm));
+
+    const savedProfile = store.getState().auth.profile;
+    if (savedProfile) {
+      writeCachedProfile(savedProfile);
+    }
+
     dispatch(updateUserProfile(profileForm));
   }
 
@@ -86,16 +125,27 @@ export default function ProfilePanel() {
       return;
     }
 
-    dispatch(changePassword(passwordForm)).then((result) => {
-      if (changePassword.fulfilled.match(result)) {
+    setLocalError('');
+    setIsChangingPassword(true);
+
+    dispatch(changePassword(passwordForm))
+      .unwrap()
+      .then(() => {
         setPasswordForm({
           currentPassword: '',
           newPassword: '',
           confirmPassword: '',
         });
-      }
-    });
+      })
+      .catch((message) => {
+        setLocalError(typeof message === 'string' ? message : 'Không đổi được mật khẩu.');
+      })
+      .finally(() => {
+        setIsChangingPassword(false);
+      });
   }
+
+  const feedbackError = localError || error;
 
   return (
     <KeyboardAvoidingView
@@ -116,7 +166,6 @@ export default function ProfilePanel() {
         <Pressable
           style={({ pressed }) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}
           onPress={() => dispatch(logoutUser())}
-          disabled={isLoading}
         >
           <Text style={styles.logoutText}>Đăng xuất</Text>
         </Pressable>
@@ -134,6 +183,7 @@ export default function ProfilePanel() {
         </Pressable>
         <Pressable
           style={[styles.segment, section === 'security' && styles.segmentActive]}
+          pressRetentionOffset={8}
           onPress={() => setSection('security')}
         >
           <Text style={[styles.segmentText, section === 'security' && styles.segmentTextActive]}>
@@ -173,8 +223,7 @@ export default function ProfilePanel() {
               placeholder="https://..."
             />
             <ActionButton
-              disabled={isLoading}
-              label={isLoading ? 'Đang lưu...' : 'Lưu thay đổi'}
+              label="Lưu thay đổi"
               onPress={handleSaveProfile}
             />
           </>
@@ -188,6 +237,7 @@ export default function ProfilePanel() {
               autoCapitalize="none"
               autoComplete="password"
               placeholder="••••••••"
+              editable={!isChangingPassword}
             />
             <LabeledInput
               label="Mật khẩu mới"
@@ -197,6 +247,7 @@ export default function ProfilePanel() {
               autoCapitalize="none"
               autoComplete="new-password"
               placeholder="Tối thiểu 6 ký tự"
+              editable={!isChangingPassword}
             />
             <LabeledInput
               label="Xác nhận mật khẩu mới"
@@ -206,17 +257,22 @@ export default function ProfilePanel() {
               autoCapitalize="none"
               autoComplete="new-password"
               placeholder="Nhập lại mật khẩu mới"
+              editable={!isChangingPassword}
             />
             <ActionButton
-              disabled={isLoading}
-              label={isLoading ? 'Đang đổi...' : 'Đổi mật khẩu'}
+              disabled={isChangingPassword}
+              label={isChangingPassword ? 'Đang đổi...' : 'Đổi mật khẩu'}
               onPress={handleChangePassword}
             />
           </>
         )}
 
-        {localError || error ? (
-          <Text style={styles.errorText}>{localError || error}</Text>
+        {isProfileLoading && !profile ? (
+          <Text style={styles.infoText}>Đang tải dữ liệu hồ sơ...</Text>
+        ) : null}
+
+        {feedbackError ? (
+          <Text style={styles.errorText}>{feedbackError}</Text>
         ) : null}
 
         {successMessage ? (
@@ -240,7 +296,7 @@ function LabeledInput({ label, ...props }) {
   );
 }
 
-function ActionButton({ disabled, label, onPress }) {
+function ActionButton({ disabled = false, label, onPress }) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -265,7 +321,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
     paddingTop: 56,
     paddingBottom: 20,
     paddingHorizontal: 20,
@@ -286,6 +341,7 @@ const styles = StyleSheet.create({
   },
   headerInfo: {
     flex: 1,
+    marginLeft: 12,
   },
   headerName: {
     color: '#ffffff',
@@ -392,6 +448,12 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '900',
+  },
+  infoText: {
+    marginTop: 14,
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '600',
   },
   errorText: {
     marginTop: 14,

@@ -1,5 +1,3 @@
-import * as Google from 'expo-auth-session/providers/google';
-import * as Facebook from 'expo-auth-session/providers/facebook';
 import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useState } from 'react';
 import {
@@ -14,23 +12,21 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { clearAuthFeedback, loginUser, registerUser, socialLogin } from './authSlice';
+import {
+  selectAuthActionStatus,
+  selectAuthConfigError,
+  selectAuthError,
+  selectAuthSuccessMessage,
+} from './authSelectors';
+import { clearAuthFeedback, loginUser, registerUser } from './authSlice';
+import GoogleSignInButton from './GoogleSignInButton';
+import { getGoogleAuthSetupError } from './googleAuthConfig';
 
 // Required for Expo OAuth redirect handling
 WebBrowser.maybeCompleteAuthSession();
 
-// ──────────────────────────────────────────────────────────
-// THAY CÁC GIÁ TRỊ NÀY BẰNG CLIENT IDs THỰC TẾ CỦA BẠN
-// Google: Lấy từ Firebase Console > Authentication > Sign-in method > Google > Web SDK config
-// Facebook: Lấy từ developers.facebook.com > App ID
-// ──────────────────────────────────────────────────────────
-const GOOGLE_WEB_CLIENT_ID = '356316104950-799dkpvcf6br1e8drjvbeukvfu1ovcsu.apps.googleusercontent.com';
-const FACEBOOK_APP_ID = 'YOUR_FACEBOOK_APP_ID';
-
-// Facebook useAuthRequest expects a numeric string ID, using a dummy one to prevent rendering crash on Android
-const SAFE_FACEBOOK_APP_ID = FACEBOOK_APP_ID === 'YOUR_FACEBOOK_APP_ID' ? '123456789012345' : FACEBOOK_APP_ID;
-
 const emptyForm = {
+  fullName: '',
   email: '',
   password: '',
   confirmPassword: '',
@@ -38,9 +34,10 @@ const emptyForm = {
 
 export default function AuthScreen() {
   const dispatch = useDispatch();
-  const { actionStatus, configError, error, successMessage } = useSelector(
-    (state) => state.auth
-  );
+  const actionStatus = useSelector(selectAuthActionStatus);
+  const configError = useSelector(selectAuthConfigError);
+  const error = useSelector(selectAuthError);
+  const successMessage = useSelector(selectAuthSuccessMessage);
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState(emptyForm);
   const [localError, setLocalError] = useState('');
@@ -48,62 +45,7 @@ export default function AuthScreen() {
   const isRegister = mode === 'register';
   const isLoading = actionStatus === 'loading';
   const isDisabled = isLoading || Boolean(configError);
-
-  // ── Google OAuth ─────────────────────────────────────────
-  const [, googleResponse, promptGoogle] = Google.useAuthRequest({
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-    androidClientId: GOOGLE_WEB_CLIENT_ID,
-    iosClientId: GOOGLE_WEB_CLIENT_ID,
-    responseType: 'id_token',
-    usePKCE: false,
-  });
-
-  // ── Facebook OAuth ───────────────────────────────────────
-  const [, facebookResponse, promptFacebook] = Facebook.useAuthRequest({
-    clientId: SAFE_FACEBOOK_APP_ID,
-  });
-
-  const handleGoogleLogin = () => {
-    if (GOOGLE_WEB_CLIENT_ID.includes('YOUR_')) {
-      setLocalError('Vui lòng cấu hình GOOGLE_WEB_CLIENT_ID thực tế.');
-      return;
-    }
-    try {
-      promptGoogle();
-    } catch (err) {
-      setLocalError('Không thể mở đăng nhập Google: ' + err.message);
-    }
-  };
-
-  const handleFacebookLogin = () => {
-    if (FACEBOOK_APP_ID === 'YOUR_FACEBOOK_APP_ID') {
-      setLocalError('Vui lòng cấu hình FACEBOOK_APP_ID thực tế.');
-      return;
-    }
-    try {
-      promptFacebook();
-    } catch (err) {
-      setLocalError('Không thể mở đăng nhập Facebook: ' + err.message);
-    }
-  };
-
-  useEffect(() => {
-    if (googleResponse?.type === 'success') {
-      const { id_token } = googleResponse.params;
-      if (id_token) {
-        dispatch(socialLogin({ provider: 'google', token: id_token }));
-      }
-    }
-  }, [googleResponse, dispatch]);
-
-  useEffect(() => {
-    if (facebookResponse?.type === 'success') {
-      const { access_token } = facebookResponse.params;
-      if (access_token) {
-        dispatch(socialLogin({ provider: 'facebook', token: access_token }));
-      }
-    }
-  }, [facebookResponse, dispatch]);
+  const googleSetupError = getGoogleAuthSetupError();
 
   useEffect(() => {
     setLocalError('');
@@ -116,6 +58,9 @@ export default function AuthScreen() {
   }
 
   function validateForm() {
+    if (isRegister && !form.fullName.trim()) {
+      return 'Vui lòng nhập họ tên.';
+    }
     if (!form.email.trim() || !form.password) {
       return 'Vui lòng nhập email và mật khẩu.';
     }
@@ -181,6 +126,16 @@ export default function AuthScreen() {
           </View>
 
           {/* Email / Password fields */}
+          {isRegister && (
+            <LabeledInput
+              label="Họ tên"
+              value={form.fullName}
+              onChangeText={(v) => updateField('fullName', v)}
+              autoCapitalize="words"
+              autoComplete="name"
+              placeholder="Nguyễn Văn A"
+            />
+          )}
           <LabeledInput
             label="Email"
             value={form.email}
@@ -250,40 +205,17 @@ export default function AuthScreen() {
             <View style={styles.dividerLine} />
           </View>
 
-          {/* Social Buttons */}
-          <View style={styles.socialRow}>
-            {/* Google */}
-            <Pressable
-              style={({ pressed }) => [
-                styles.socialButton,
-                pressed && styles.socialButtonPressed,
-                isDisabled && styles.socialButtonDisabled,
-              ]}
+          {/* Google */}
+          {googleSetupError ? (
+            <View style={styles.googleSetupBox}>
+              <Text style={styles.googleSetupText}>{googleSetupError}</Text>
+            </View>
+          ) : (
+            <GoogleSignInButton
               disabled={isDisabled}
-              onPress={handleGoogleLogin}
-              accessibilityLabel="Đăng nhập bằng Google"
-            >
-              {/* Google "G" logo using colored letters */}
-              <Text style={styles.googleIcon}>G</Text>
-              <Text style={styles.socialButtonText}>Google</Text>
-            </Pressable>
-
-            {/* Facebook */}
-            <Pressable
-              style={({ pressed }) => [
-                styles.socialButton,
-                styles.facebookButton,
-                pressed && styles.socialButtonPressed,
-                isDisabled && styles.socialButtonDisabled,
-              ]}
-              disabled={isDisabled}
-              onPress={handleFacebookLogin}
-              accessibilityLabel="Đăng nhập bằng Facebook"
-            >
-              <Text style={styles.facebookIcon}>f</Text>
-              <Text style={styles.facebookButtonText}>Facebook</Text>
-            </Pressable>
-          </View>
+              onError={setLocalError}
+            />
+          )}
         </View>
 
         <Text style={styles.footerNote}>
@@ -478,7 +410,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginVertical: 20,
-    gap: 10,
   },
   dividerLine: {
     flex: 1,
@@ -491,53 +422,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // ── Social Buttons ────────────────────────────────────────
-  socialRow: {
-    flexDirection: 'row',
-    gap: 12,
+  // ── Google setup hint ─────────────────────────────────────
+  googleSetupBox: {
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#fffbeb',
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
   },
-  socialButton: {
-    flex: 1,
-    height: 50,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  socialButtonPressed: {
-    backgroundColor: '#f8fafc',
-    opacity: 0.85,
-  },
-  socialButtonDisabled: {
-    opacity: 0.5,
-  },
-  googleIcon: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#ea4335',
-  },
-  socialButtonText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#334155',
-  },
-  facebookButton: {
-    backgroundColor: '#1877f2',
-    borderColor: '#1877f2',
-  },
-  facebookIcon: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#ffffff',
-  },
-  facebookButtonText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#ffffff',
+  googleSetupText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400e',
+    lineHeight: 18,
   },
 
   // ── Footer ────────────────────────────────────────────────

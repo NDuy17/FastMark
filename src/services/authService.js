@@ -1,6 +1,5 @@
 import {
   EmailAuthProvider,
-  FacebookAuthProvider,
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -70,7 +69,7 @@ export async function updateCurrentUserProfile({ fullName, photoUrl }) {
   const user = getCurrentFirebaseUser();
 
   if (!user) {
-    throw new Error('Ban can dang nhap lai.');
+    throw new Error('Bạn cần đăng nhập lại.');
   }
 
   await updateProfile(user, {
@@ -93,16 +92,19 @@ export async function changeCurrentUserPassword({ currentPassword, newPassword }
   await updatePassword(user, newPassword);
 }
 
+export async function getCurrentUserIdToken(forceRefresh = false) {
+  const user = getCurrentFirebaseUser();
+
+  if (!user) {
+    return null;
+  }
+
+  return user.getIdToken(forceRefresh);
+}
+
 export async function signInWithGoogleCredential(idToken) {
   const auth = ensureFirebaseAuth();
   const credential = GoogleAuthProvider.credential(idToken);
-  const result = await signInWithCredential(auth, credential);
-  return serializeAuthUser(result.user);
-}
-
-export async function signInWithFacebookCredential(accessToken) {
-  const auth = ensureFirebaseAuth();
-  const credential = FacebookAuthProvider.credential(accessToken);
   const result = await signInWithCredential(auth, credential);
   return serializeAuthUser(result.user);
 }

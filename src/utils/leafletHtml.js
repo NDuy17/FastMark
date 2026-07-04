@@ -63,33 +63,6 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         background: #f7c948;
       }
 
-      .measure-marker {
-        display: grid;
-        place-items: center;
-        width: 28px;
-        height: 28px;
-        border-radius: 999px;
-        background: #f97316;
-        border: 3px solid #ffffff;
-        color: #ffffff;
-        font-weight: 800;
-        font-size: 13px;
-        box-shadow: 0 8px 18px rgba(249, 115, 22, 0.32);
-      }
-
-      .measure-label {
-        display: inline-flex;
-        white-space: nowrap;
-        transform: translate(-50%, -50%);
-        padding: 5px 8px;
-        border-radius: 8px;
-        background: rgba(17, 24, 39, 0.86);
-        color: #ffffff;
-        font-size: 12px;
-        font-weight: 750;
-        box-shadow: 0 8px 20px rgba(17, 24, 39, 0.22);
-      }
-
       .leaflet-bottom.leaflet-right {
         margin-bottom: 154px;
       }
@@ -109,40 +82,10 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       .marker-food { background: #e11d48; }
       .marker-milktea { background: #8b5cf6; }
       .marker-snack { background: #10b981; }
-
-      .hint {
-        position: absolute;
-        top: 72px;
-        left: 16px;
-        right: 16px;
-        z-index: 600;
-        display: none;
-        justify-content: center;
-        pointer-events: none;
-      }
-
-      .hint span {
-        max-width: 320px;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.94);
-        color: #182421;
-        font-size: 13px;
-        font-weight: 650;
-        text-align: center;
-        box-shadow: 0 10px 30px rgba(24, 36, 33, 0.16);
-      }
-
-      .hint.visible {
-        display: flex;
-      }
     </style>
   </head>
   <body>
     <div id="map"></div>
-    <div id="hint" class="hint">
-      <span>Cham tren ban do de them diem do khoang cach</span>
-    </div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
       const EVENT_SOURCE = '${MAP_EVENT_SOURCE}';
@@ -151,11 +94,8 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
 
       let currentMarker = null;
       let accuracyCircle = null;
-      let measureEnabled = false;
-      let measurePoints = [];
-      let measureMarkers = [];
-      let measureLabels = [];
-      let measureLine = null;
+      let radiusCircleLayer = null;
+      let activeRadiusMeters = null;
       let userMovedMap = false;
       let restaurantMarkers = [];
 
@@ -178,20 +118,6 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         };
       }
 
-      function formatDistance(distanceMeters) {
-        const distance = Number(distanceMeters);
-
-        if (!Number.isFinite(distance)) {
-          return '--';
-        }
-
-        if (distance >= 1000) {
-          return (distance / 1000).toFixed(distance >= 10000 ? 1 : 2) + ' km';
-        }
-
-        return Math.round(distance) + ' m';
-      }
-
       function postToApp(payload) {
         const message = { source: EVENT_SOURCE, payload };
 
@@ -210,7 +136,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       const map = L.map('map', {
         zoomControl: false,
         attributionControl: true,
-      }).setView(getLatLng(startLocation), 15);
+      }).setView(getLatLng(startLocation), 18);
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
@@ -226,13 +152,27 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         iconAnchor: [14, 14],
       });
 
+      function hideAccuracyCircle() {
+        if (accuracyCircle) {
+          map.removeLayer(accuracyCircle);
+          accuracyCircle = null;
+        }
+      }
+
+      function fitMapToRadius(center, radiusMeters) {
+        if (!hasLocation(center) || !radiusMeters) {
+          return;
+        }
+        const bounds = L.circle(getLatLng(center), { radius: radiusMeters }).getBounds();
+        map.fitBounds(bounds, { padding: [48, 48], maxZoom: 18, animate: true });
+      }
+
       function drawCurrentLocation(location, options) {
         if (!hasLocation(location)) {
           return;
         }
 
         const latLng = getLatLng(location);
-        const accuracy = Number(location.accuracy);
 
         if (!currentMarker) {
           currentMarker = L.marker(latLng, { icon: userIcon, interactive: false }).addTo(map);
@@ -240,46 +180,54 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           currentMarker.setLatLng(latLng);
         }
 
-        if (Number.isFinite(accuracy) && accuracy > 0) {
-          if (!accuracyCircle) {
-            accuracyCircle = L.circle(latLng, {
-              radius: accuracy,
-              color: '#0f766e',
-              weight: 1,
-              opacity: 0.55,
-              fillColor: '#14b8a6',
-              fillOpacity: 0.12,
-              interactive: false,
-            }).addTo(map);
-          } else {
-            accuracyCircle.setLatLng(latLng);
-            accuracyCircle.setRadius(accuracy);
-          }
-        }
+        hideAccuracyCircle();
 
         if (options && options.recenter) {
           userMovedMap = false;
-          map.setView(latLng, Math.max(map.getZoom(), 16), { animate: true });
+          if (activeRadiusMeters) {
+            fitMapToRadius(location, activeRadiusMeters);
+          } else {
+            map.setView(latLng, 18, { animate: true });
+          }
         }
       }
 
-      function getMeasureDistance() {
-        return measurePoints.reduce(function(total, point, index) {
-          if (index === 0) {
-            return 0;
+      function drawRadiusCircle(center, radiusMeters) {
+        activeRadiusMeters = radiusMeters || null;
+
+        if (radiusCircleLayer) {
+          map.removeLayer(radiusCircleLayer);
+          radiusCircleLayer = null;
+        }
+
+        if (!center || !hasLocation(center) || !radiusMeters) {
+          if (currentMarker) {
+            const latLng = currentMarker.getLatLng();
+            drawCurrentLocation(
+              { latitude: latLng.lat, longitude: latLng.lng },
+              { recenter: !userMovedMap }
+            );
           }
+          return;
+        }
 
-          return total + point.distanceTo(measurePoints[index - 1]);
-        }, 0);
-      }
+        hideAccuracyCircle();
 
-      function makeMeasureIcon(index) {
-        return L.divIcon({
-          className: '',
-          html: '<div class="measure-marker">' + index + '</div>',
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
-        });
+        const latLng = getLatLng(center);
+        radiusCircleLayer = L.circle(latLng, {
+          radius: radiusMeters,
+          color: '#0f766e',
+          weight: 2,
+          opacity: 0.85,
+          fillColor: '#14b8a6',
+          fillOpacity: 0.14,
+          dashArray: '8, 6',
+          interactive: false,
+        }).addTo(map);
+
+        if (!userMovedMap) {
+          fitMapToRadius(center, radiusMeters);
+        }
       }
 
       function clearLayerList(layers) {
@@ -287,83 +235,6 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           map.removeLayer(layer);
         });
         layers.length = 0;
-      }
-
-      function renderMeasurements() {
-        clearLayerList(measureMarkers);
-        clearLayerList(measureLabels);
-
-        if (measureLine) {
-          map.removeLayer(measureLine);
-          measureLine = null;
-        }
-
-        measurePoints.forEach(function(point, index) {
-          measureMarkers.push(
-            L.marker(point, {
-              icon: makeMeasureIcon(index + 1),
-              zIndexOffset: 600,
-            }).addTo(map)
-          );
-
-          if (index > 0) {
-            const previousPoint = measurePoints[index - 1];
-            const middlePoint = L.latLng(
-              (previousPoint.lat + point.lat) / 2,
-              (previousPoint.lng + point.lng) / 2
-            );
-            const segmentDistance = point.distanceTo(previousPoint);
-
-            measureLabels.push(
-              L.marker(middlePoint, {
-                interactive: false,
-                icon: L.divIcon({
-                  className: '',
-                  html: '<span class="measure-label">' + formatDistance(segmentDistance) + '</span>',
-                  iconSize: [1, 1],
-                  iconAnchor: [0, 0],
-                }),
-              }).addTo(map)
-            );
-          }
-        });
-
-        if (measurePoints.length > 1) {
-          measureLine = L.polyline(measurePoints, {
-            color: '#f97316',
-            weight: 5,
-            opacity: 0.92,
-            lineCap: 'round',
-            lineJoin: 'round',
-          }).addTo(map);
-        }
-
-        const totalDistance = getMeasureDistance();
-        const lastPoint = measurePoints.length ? toLocation(measurePoints[measurePoints.length - 1]) : null;
-
-        postToApp({
-          type: 'measurement',
-          pointCount: measurePoints.length,
-          distance: totalDistance,
-          formattedDistance: formatDistance(totalDistance),
-          lastPoint,
-        });
-      }
-
-      function addMeasurePoint(latLng) {
-        measurePoints.push(L.latLng(latLng.lat, latLng.lng));
-        renderMeasurements();
-      }
-
-      function clearMeasurements() {
-        measurePoints = [];
-        renderMeasurements();
-      }
-
-      function setMeasureEnabled(enabled) {
-        measureEnabled = Boolean(enabled);
-        document.getElementById('hint').classList.toggle('visible', measureEnabled);
-        postToApp({ type: 'measureMode', enabled: measureEnabled });
       }
 
       function getRestaurantEmoji(type) {
@@ -420,20 +291,19 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           drawCurrentLocation(command.location, { recenter: command.recenter });
         }
 
-        if (command.type === 'measureMode') {
-          setMeasureEnabled(command.enabled);
-        }
-
-        if (command.type === 'clearMeasure') {
-          clearMeasurements();
-        }
-
         if (command.type === 'recenter' && hasLocation(command.location)) {
           drawCurrentLocation(command.location, { recenter: true });
+          if (activeRadiusMeters) {
+            fitMapToRadius(command.location, activeRadiusMeters);
+          }
         }
 
         if (command.type === 'showRestaurants') {
           drawRestaurants(command.restaurants);
+        }
+
+        if (command.type === 'radiusCircle') {
+          drawRadiusCircle(command.center, command.radius);
         }
       }
 
@@ -446,11 +316,6 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       });
 
       map.on('click', function(event) {
-        if (measureEnabled) {
-          addMeasurePoint(event.latlng);
-          return;
-        }
-
         postToApp({
           type: 'mapTap',
           location: toLocation(event.latlng),
@@ -461,9 +326,8 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         userMovedMap = true;
       });
 
-      drawCurrentLocation(startLocation, { recenter: false });
+      drawCurrentLocation(startLocation, { recenter: true });
       postToApp({ type: 'ready' });
-      renderMeasurements();
     </script>
   </body>
 </html>`;
