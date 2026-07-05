@@ -1,37 +1,50 @@
 import { useEffect } from 'react';
 import { useDispatch } from 'react-redux';
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import { GoogleSignin } from '@react-native-google-signin/google-signin/lib/module/signIn/GoogleSignin';
+import { statusCodes } from '@react-native-google-signin/google-signin/lib/module/errors/errorCodes';
 
 import { googleOAuthConfig } from '../../services/env';
-import { describeNativeGoogleError } from './googleAuthConfig';
+import { describeNativeGoogleError, getGoogleAuthSetupError } from './googleAuthConfig';
 import { socialLogin } from './authSlice';
 import { GoogleSignInPressable } from './googleSignInShared';
 
 export default function GoogleSignInNativeImpl({ disabled, onError }) {
   const dispatch = useDispatch();
+  const setupError = getGoogleAuthSetupError();
 
   useEffect(() => {
+    if (setupError) {
+      return;
+    }
+
     GoogleSignin.configure({
       webClientId: googleOAuthConfig.webClientId,
       offlineAccess: false,
     });
-  }, []);
+  }, [setupError]);
 
   async function handlePress() {
     onError?.('');
+
+    if (setupError) {
+      onError?.(setupError);
+      return;
+    }
 
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const response = await GoogleSignin.signIn();
 
-      if (response.type === 'cancelled') {
+      if (response?.type === 'cancelled') {
         return;
       }
 
-      let idToken = response.data?.idToken;
+      const userData = response?.data || response;
+      let idToken = userData?.idToken || userData?.user?.idToken;
+
       if (!idToken) {
         const tokens = await GoogleSignin.getTokens();
-        idToken = tokens.idToken;
+        idToken = tokens?.idToken;
       }
 
       if (!idToken) {
@@ -51,7 +64,7 @@ export default function GoogleSignInNativeImpl({ disabled, onError }) {
 
   return (
     <GoogleSignInPressable
-      disabled={disabled}
+      disabled={disabled || Boolean(setupError)}
       onPress={handlePress}
     />
   );

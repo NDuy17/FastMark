@@ -10,7 +10,7 @@ import {
   signInWithGoogleCredential,
   updateCurrentUserProfile,
 } from '../../services/authService';
-import { getBackendConfigError } from '../../services/env';
+import { getAuthConfigError } from '../../services/env';
 import { readUserProfile, upsertUserProfile, makeProfileFromAuthUser } from '../../services/profileService';
 import { readCachedProfile, writeCachedProfile } from '../../services/profileCache';
 import { toReadableAuthError } from './authErrors';
@@ -34,7 +34,7 @@ export const hydrateAuthSession = createAsyncThunk(
   'auth/hydrateSession',
   async (_, { rejectWithValue }) => {
     try {
-      const configError = getBackendConfigError();
+      const configError = getAuthConfigError();
 
       if (configError) {
         throw new Error(configError);
@@ -83,7 +83,7 @@ export const registerUser = createAsyncThunk(
   'auth/register',
   async (payload, { rejectWithValue }) => {
     try {
-      const configError = getBackendConfigError();
+      const configError = getAuthConfigError();
 
       if (configError) {
         throw new Error(configError);
@@ -107,7 +107,7 @@ export const loginUser = createAsyncThunk(
   'auth/login',
   async (payload, { rejectWithValue }) => {
     try {
-      const configError = getBackendConfigError();
+      const configError = getAuthConfigError();
 
       if (configError) {
         throw new Error(configError);
@@ -190,12 +190,19 @@ export const socialLogin = createAsyncThunk(
   'auth/socialLogin',
   async ({ token }, { rejectWithValue }) => {
     try {
-      const configError = getBackendConfigError();
+      const configError = getAuthConfigError();
       if (configError) throw new Error(configError);
 
       const user = await signInWithGoogleCredential(token);
 
-      const profile = await upsertUserProfile(user);
+      let profile;
+      try {
+        profile = await upsertUserProfile(user);
+      } catch (profileError) {
+        console.warn('Profile sync after Google login failed:', profileError?.message || profileError);
+        profile = makeProfileFromAuthUser(user);
+      }
+
       return { user, profile, message: 'Đăng nhập thành công.' };
     } catch (error) {
       return rejectWithReadableError(error, rejectWithValue);

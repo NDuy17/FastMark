@@ -72,6 +72,16 @@ export function getMissingBackendEnv() {
   return [...getMissingFirebaseEnv(), ...getMissingSupabaseEnv()];
 }
 
+export function getAuthConfigError() {
+  const missing = getMissingFirebaseEnv();
+
+  if (missing.length === 0) {
+    return '';
+  }
+
+  return `Cần bổ sung các biến trong .env: ${missing.join(', ')}`;
+}
+
 export function assertBackendEnv() {
   const missing = getMissingBackendEnv();
 

@@ -1,6 +1,18 @@
-import { Platform } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { makeRedirectUri, ResponseType } from 'expo-auth-session';
 
 import { googleOAuthConfig } from '../../services/env';
+
+export function isExpoGoClient() {
+  return Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+}
+
+export function getGoogleBrowserRedirectUri() {
+  return makeRedirectUri({
+    scheme: 'fastmark',
+    path: 'oauthredirect',
+  });
+}
 
 export function getGoogleBrowserAuthRequestConfig() {
   const { webClientId } = googleOAuthConfig;
@@ -8,16 +20,25 @@ export function getGoogleBrowserAuthRequestConfig() {
   return {
     webClientId,
     clientId: webClientId,
+    redirectUri: getGoogleBrowserRedirectUri(),
+    responseType: ResponseType.IdToken,
     scopes: ['openid', 'profile', 'email'],
     selectAccount: true,
   };
 }
 
 export function getGoogleBrowserAuthRedirectUriOptions() {
-  return { scheme: 'fastmark' };
+  return {
+    scheme: 'fastmark',
+    path: 'oauthredirect',
+  };
 }
 
 export function getGoogleAuthSetupError() {
+  if (isExpoGoClient()) {
+    return 'Google Sign-In không chạy trên Expo Go. Chạy: npx expo run:android';
+  }
+
   const { webClientId } = googleOAuthConfig;
 
   if (!webClientId) {
@@ -34,16 +55,27 @@ export function describeGoogleOAuthError(response) {
 
   const code = response.error?.code || response.params?.error;
   const description = response.error?.message || response.params?.error_description || '';
+  const redirectUri = getGoogleBrowserRedirectUri();
 
   if (code === 'redirect_uri_mismatch' || description.includes('redirect_uri')) {
     return (
-      'Lỗi redirect_uri: thêm redirect URI của app vào Google Cloud Console (OAuth Web client → Authorized redirect URIs).'
+      `Redirect URI chưa khớp. Thêm vào Google Cloud Console (OAuth Web client → Authorized redirect URIs): ${redirectUri}`
     );
   }
 
-  if (code === 'invalid_request' || description.includes('invalid_request')) {
+  if (
+    code === 'invalid_request' ||
+    description.includes('invalid_request') ||
+    description.includes('400')
+  ) {
+    if (isExpoGoClient()) {
+      return (
+        'Expo Go không hỗ trợ Google Sign-In (redirect exp://). Chạy bản native: npx expo run:android'
+      );
+    }
+
     return (
-      'Google từ chối yêu cầu OAuth. Trên Android, hãy build native app (npx expo run:android) thay vì Expo Go. Nếu dùng Expo Go, thêm redirect URI https://auth.expo.io vào Web client trên Google Cloud.'
+      `Google từ chối OAuth (400). Thêm redirect URI vào Web client trên Google Cloud: ${redirectUri} — rồi chạy lại npx expo run:android.`
     );
   }
 
@@ -61,6 +93,14 @@ export function describeNativeGoogleError(error) {
     return (
       'Cấu hình Google chưa khớp. Thêm SHA-1 vào Firebase, tải lại google-services.json, rồi rebuild: npx expo run:android.'
     );
+  }
+
+  if (
+    message.includes('RNGoogleSignin') ||
+    message.includes('Native module') ||
+    message.includes('TurboModule')
+  ) {
+    return 'App chưa rebuild native. Google Sign-In cần chạy: npx expo run:android (không dùng Expo Go).';
   }
 
   if (message.includes('NETWORK_ERROR')) {

@@ -22,9 +22,12 @@ export default function LeafletMap({
   onEvent,
 }) {
   const webViewRef = useRef(null);
+  const onEventRef = useRef(onEvent);
   const initialLocationRef = useRef(currentLocation);
   const hasCenteredRef = useRef(false);
   const [ready, setReady] = useState(false);
+
+  onEventRef.current = onEvent;
 
   const html = useMemo(
     () => createLeafletHtml({ currentLocation: initialLocationRef.current }),
@@ -91,7 +94,7 @@ export default function LeafletMap({
           const payload = parseMapMessage(event.nativeEvent.data);
 
           if (payload) {
-            onEvent?.(payload);
+            onEventRef.current?.(payload);
           }
         }}
       />

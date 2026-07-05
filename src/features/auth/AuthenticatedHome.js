@@ -14,7 +14,6 @@ export default function AuthenticatedHome() {
 
   return (
     <View style={styles.root}>
-      {/* Main content area */}
       <View style={styles.content}>
         {activeTab === 'map' ? (
           <MapScreen />
@@ -23,7 +22,6 @@ export default function AuthenticatedHome() {
         )}
       </View>
 
-      {/* Bottom Tab Bar */}
       <View style={styles.tabBar}>
         {TABS.map((tab) => {
           const isActive = activeTab === tab.key;

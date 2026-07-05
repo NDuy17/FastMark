@@ -44,8 +44,9 @@ export default function AuthScreen() {
 
   const isRegister = mode === 'register';
   const isLoading = actionStatus === 'loading';
-  const isDisabled = isLoading || Boolean(configError);
+  const isFormDisabled = isLoading || Boolean(configError);
   const googleSetupError = getGoogleAuthSetupError();
+  const isGoogleDisabled = isLoading || Boolean(googleSetupError);
 
   useEffect(() => {
     setLocalError('');
@@ -181,11 +182,11 @@ export default function AuthScreen() {
           {/* Primary CTA */}
           <Pressable
             accessibilityRole="button"
-            disabled={isDisabled}
+            disabled={isFormDisabled}
             style={({ pressed }) => [
               styles.primaryButton,
               (pressed || isLoading) && styles.primaryButtonPressed,
-              isDisabled && styles.primaryButtonDisabled,
+              isFormDisabled && styles.primaryButtonDisabled,
             ]}
             onPress={handleSubmit}
           >
@@ -212,7 +213,7 @@ export default function AuthScreen() {
             </View>
           ) : (
             <GoogleSignInButton
-              disabled={isDisabled}
+              disabled={isGoogleDisabled}
               onError={setLocalError}
             />
           )}

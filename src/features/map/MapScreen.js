@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
 
 import LeafletMap from '../../components/LeafletMap';
+import ProductDetailScreen from '../store/ProductDetailScreen';
+import StoreDetailScreen from '../store/StoreDetailScreen';
 import { calculateDistanceMeters, hasValidLocation, normalizeExpoLocation } from '../../utils/geo';
 import { fetchRestaurants } from '../../services/restaurantService';
+
+const TYPE_EMOJI = {
+  cafe: '☕',
+  food: '🍜',
+  milktea: '🧋',
+  snack: '🍿',
+};
 
 export default function MapScreen({ children }) {
   const watcherRef = useRef(null);
@@ -14,9 +23,35 @@ export default function MapScreen({ children }) {
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [selectedRadius, setSelectedRadius] = useState(500);
-  const [selectedCategory, setSelectedCategory] = useState('none');
+  const [selectedCategory, setSelectedCategory] = useState('all');
   const [restaurants, setRestaurants] = useState([]);
+  const [storeNav, setStoreNav] = useState(null);
   const lastAcceptedRef = useRef(null);
+
+  const openStore = useCallback((storeId) => {
+    setStoreNav({ screen: 'store', storeId: String(storeId) });
+  }, []);
+
+  const openProduct = useCallback((productId) => {
+    setStoreNav((prev) => ({
+      screen: 'product',
+      productId: String(productId),
+      storeId: prev?.storeId,
+    }));
+  }, []);
+
+  const closeStoreNav = useCallback(() => {
+    setStoreNav(null);
+  }, []);
+
+  const goBackStoreNav = useCallback(() => {
+    setStoreNav((prev) => {
+      if (prev?.screen === 'product' && prev.storeId) {
+        return { screen: 'store', storeId: prev.storeId };
+      }
+      return null;
+    });
+  }, []);
 
   const startLocationTracking = useCallback(async () => {
     watcherRef.current?.remove();
@@ -29,19 +64,15 @@ export default function MapScreen({ children }) {
 
       const prev = lastAcceptedRef.current;
       if (!prev) {
-        // Chưa có vị trí nào: Nhận ngay lập tức để định vị bản đồ đúng thành phố/khu vực
         lastAcceptedRef.current = loc;
         setCurrentLocation(loc);
         return;
       }
 
-      // Đã có vị trí: Lọc nhiễu chống nhảy vị trí
-      // 1. Bỏ qua nếu độ chính xác quá thấp (> 150m)
       if (loc.accuracy > 150) {
         return;
       }
 
-      // 2. Bỏ qua nếu vị trí chưa thực sự thay đổi đáng kể (< 3m) để tránh rung lắc
       const dist = calculateDistanceMeters(prev, loc);
       if (dist !== null && dist < 3) {
         return;
@@ -58,7 +89,6 @@ export default function MapScreen({ children }) {
         return;
       }
 
-      // 1. Thử lấy vị trí cũ nhanh
       const lastKnown = await Location.getLastKnownPositionAsync({
         maxAge: 60000,
         requiredAccuracy: 200,
@@ -68,7 +98,6 @@ export default function MapScreen({ children }) {
         updateLocationSafely(normalizeExpoLocation(lastKnown));
       }
 
-      // 2. Thử lấy vị trí GPS chính xác cao ngay lập tức
       const preciseLocation = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       }).catch(() => null);
@@ -77,7 +106,6 @@ export default function MapScreen({ children }) {
         updateLocationSafely(normalizeExpoLocation(preciseLocation));
       }
 
-      // 3. Theo dõi liên tục
       const watcher = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
@@ -110,7 +138,6 @@ export default function MapScreen({ children }) {
     };
   }, [startLocationTracking]);
 
-  // Fetch restaurants when category changes
   useEffect(() => {
     if (selectedCategory === 'none') {
       setRestaurants([]);
@@ -129,7 +156,6 @@ export default function MapScreen({ children }) {
     };
   }, [selectedCategory]);
 
-  // Lọc quán theo bán kính (mặc định 500 m, phạm vi 100 m – 2 km)
   const visibleRestaurants = useMemo(() => {
     if (!hasValidLocation(currentLocation) || restaurants.length === 0) {
       return restaurants;
@@ -161,9 +187,11 @@ export default function MapScreen({ children }) {
     startLocationTracking();
   }
 
-  function handleMapEvent(_payload) {
-    // reserved for future events
-  }
+  const handleMapEvent = useCallback((payload) => {
+    if (payload?.type === 'restaurantTap' && payload.restaurant?.id != null) {
+      openStore(payload.restaurant.id);
+    }
+  }, [openStore]);
 
   const radiusOptions = [
     { key: null, label: '🚫 Tắt bán kính' },
@@ -182,20 +210,32 @@ export default function MapScreen({ children }) {
     { key: 'snack', label: '🍿 Ăn vặt' },
   ];
 
+  const showNearbyPanel =
+    selectedCategory !== 'none' && visibleRestaurants.length > 0 && !storeNav;
+
+  if (storeNav?.screen === 'store') {
+    return (
+      <StoreDetailScreen
+        storeId={storeNav.storeId}
+        onBack={closeStoreNav}
+        onProductPress={openProduct}
+      />
+    );
+  }
+
+  if (storeNav?.screen === 'product') {
+    return (
+      <ProductDetailScreen
+        productId={storeNav.productId}
+        onBack={goBackStoreNav}
+        onStorePress={openStore}
+      />
+    );
+  }
+
   return (
     <View style={styles.container}>
-      <LeafletMap
-        currentLocation={currentLocation}
-        radiusCircle={radiusCircleProp}
-        recenterSignal={recenterSignal}
-        restaurants={visibleRestaurants}
-        onEvent={handleMapEvent}
-      />
-
-      {children}
-
-      {/* Floating Menu Button (settings icon) */}
-      <View style={styles.menuOverlay} pointerEvents="box-none">
+      <View style={styles.topControls}>
         <Pressable
           accessibilityRole="button"
           style={({ pressed }) => [
@@ -209,14 +249,23 @@ export default function MapScreen({ children }) {
             {menuVisible ? '✕' : '⚙️'}
           </Text>
         </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.recenterButton,
+            pressed && styles.recenterButtonPressed,
+          ]}
+          onPress={handleRecenterPress}
+        >
+          <Text style={styles.recenterButtonText}>Về vị trí của tôi</Text>
+        </Pressable>
       </View>
 
-      {/* Dropdown Menu Card */}
       {menuVisible && (
         <View style={styles.dropdownCard}>
           <Text style={styles.menuHeader}>Bộ lọc bản đồ</Text>
 
-          {/* Radius filter */}
           <Text style={styles.menuSubHeader}>Bán kính hiển thị</Text>
           {radiusOptions.map((opt) => {
             const isSelected = selectedRadius === opt.key;
@@ -236,7 +285,6 @@ export default function MapScreen({ children }) {
 
           <View style={styles.divider} />
 
-          {/* Category filter */}
           <Text style={styles.menuSubHeader}>Loại quán</Text>
           {restaurantCategories.map((cat) => {
             const isSelected = selectedCategory === cat.key;
@@ -256,18 +304,47 @@ export default function MapScreen({ children }) {
         </View>
       )}
 
-      {/* Recenter Button */}
-      <View style={styles.recenterOverlay} pointerEvents="box-none">
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.recenterButton,
-            pressed && styles.recenterButtonPressed,
-          ]}
-          onPress={handleRecenterPress}
-        >
-          <Text style={styles.recenterButtonText}>Về vị trí của tôi</Text>
-        </Pressable>
+      <View style={styles.mapArea}>
+        <LeafletMap
+          currentLocation={currentLocation}
+          radiusCircle={radiusCircleProp}
+          recenterSignal={recenterSignal}
+          restaurants={visibleRestaurants}
+          onEvent={handleMapEvent}
+        />
+        {children}
+      </View>
+
+      <View style={styles.nearbyPanel}>
+        <Text style={styles.nearbyTitle}>
+          {showNearbyPanel ? `${visibleRestaurants.length} quán gần bạn — chạm để xem` : 'Chọn loại quán để xem danh sách'}
+        </Text>
+        {showNearbyPanel ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.nearbyList}
+          >
+            {visibleRestaurants.map((restaurant) => (
+              <Pressable
+                key={String(restaurant.id)}
+                style={({ pressed }) => [
+                  styles.nearbyCard,
+                  pressed && styles.nearbyCardPressed,
+                ]}
+                onPress={() => openStore(restaurant.id)}
+              >
+                <Text style={styles.nearbyEmoji}>
+                  {TYPE_EMOJI[restaurant.type] || '🏪'}
+                </Text>
+                <Text style={styles.nearbyName} numberOfLines={2}>
+                  {restaurant.name}
+                </Text>
+                <Text style={styles.nearbyAction}>Xem gian hàng →</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        ) : null}
       </View>
     </View>
   );
@@ -278,11 +355,66 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#eef2f0',
   },
-  recenterOverlay: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
-    zIndex: 999,
+  topControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    backgroundColor: '#eef2f0',
+  },
+  mapArea: {
+    flex: 1,
+    minHeight: 260,
+  },
+  nearbyPanel: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  nearbyTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  nearbyList: {
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  nearbyCard: {
+    width: 140,
+    backgroundColor: '#f0fdfa',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#99f6e4',
+  },
+  nearbyCardPressed: {
+    opacity: 0.8,
+    backgroundColor: '#ccfbf1',
+  },
+  nearbyEmoji: {
+    fontSize: 28,
+    marginBottom: 6,
+  },
+  nearbyName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    minHeight: 34,
+    marginBottom: 6,
+  },
+  nearbyAction: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0f766e',
   },
   recenterButton: {
     minHeight: 44,
@@ -291,12 +423,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#0ea5e9',
-    // Cross-platform standard shadow
     shadowColor: '#0ea5e9',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.28,
     shadowRadius: 10,
     elevation: 6,
+    flex: 1,
   },
   recenterButtonPressed: {
     opacity: 0.78,
@@ -305,12 +437,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '800',
-  },
-  menuOverlay: {
-    position: 'absolute',
-    top: 104,
-    right: 16,
-    zIndex: 999,
   },
   menuButton: {
     width: 44,
@@ -341,19 +467,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   dropdownCard: {
-    position: 'absolute',
-    top: 156,
-    right: 16,
-    width: 200,
+    marginHorizontal: 16,
+    marginBottom: 10,
     borderRadius: 12,
     backgroundColor: '#ffffff',
     padding: 12,
-    zIndex: 999,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 8,
+    elevation: 4,
   },
   menuHeader: {
     fontSize: 15,

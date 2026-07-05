@@ -82,6 +82,36 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       .marker-food { background: #e11d48; }
       .marker-milktea { background: #8b5cf6; }
       .marker-snack { background: #10b981; }
+
+      .fastmark-restaurant-icon {
+        background: transparent !important;
+        border: none !important;
+      }
+
+      .fastmark-restaurant-icon .restaurant-marker {
+        pointer-events: auto;
+        touch-action: manipulation;
+      }
+
+      .view-store-btn {
+        display: block;
+        width: 100%;
+        margin-top: 10px;
+        padding: 10px 12px;
+        border: none;
+        border-radius: 8px;
+        background: #0f766e;
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 800;
+        font-family: sans-serif;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+
+      .view-store-btn:active {
+        opacity: 0.85;
+      }
     </style>
   </head>
   <body>
@@ -127,6 +157,20 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         }
 
         window.parent.postMessage(message, '*');
+      }
+
+      function openRestaurant(restaurant) {
+        if (!restaurant || restaurant.id == null) {
+          return;
+        }
+
+        postToApp({
+          type: 'restaurantTap',
+          restaurant: {
+            id: String(restaurant.id),
+            name: restaurant.name || '',
+          },
+        });
       }
 
       const startLocation = hasLocation(initialData.currentLocation)
@@ -263,21 +307,57 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           const emoji = getRestaurantEmoji(r.type);
           
           const icon = L.divIcon({
-            className: '',
+            className: 'fastmark-restaurant-icon',
             html: '<div class="restaurant-marker marker-' + (r.type || 'food') + '">' + emoji + '</div>',
-            iconSize: [32, 32],
-            iconAnchor: [16, 16],
+            iconSize: [44, 44],
+            iconAnchor: [22, 22],
           });
 
-          const marker = L.marker(latLng, { icon: icon }).addTo(map);
-          
-          const popupContent = 
-            '<div style="font-family: sans-serif; padding: 2px;">' +
-            '<b style="font-size: 14px; color: #0f172a;">' + r.name + '</b><br>' +
-            '<span style="font-size: 12px; color: #475569;">' + (r.address || '') + '</span>' +
+          const marker = L.marker(latLng, {
+            icon: icon,
+            bubblingMouseEvents: true,
+            riseOnHover: true,
+          }).addTo(map);
+
+          const restaurantData = {
+            id: String(r.id),
+            name: r.name || '',
+            address: r.address || '',
+          };
+
+          const popupContent =
+            '<div class="restaurant-popup" style="font-family: sans-serif; padding: 2px; min-width: 180px;">' +
+            '<b style="font-size: 14px; color: #0f172a;">' + restaurantData.name + '</b><br>' +
+            '<span style="font-size: 12px; color: #475569;">' + restaurantData.address + '</span>' +
+            '<button type="button" class="view-store-btn">Xem gian hàng</button>' +
             '</div>';
 
-          marker.bindPopup(popupContent);
+          marker.bindPopup(popupContent, { closeOnClick: true, autoPan: true });
+
+          marker.on('click', function() {
+            openRestaurant(restaurantData);
+          });
+
+          marker.on('popupopen', function(event) {
+            const popupEl = event.popup.getElement();
+            if (!popupEl) {
+              return;
+            }
+
+            const button = popupEl.querySelector('.view-store-btn');
+            if (!button) {
+              return;
+            }
+
+            button.onclick = function(clickEvent) {
+              if (clickEvent) {
+                clickEvent.preventDefault();
+                clickEvent.stopPropagation();
+              }
+              openRestaurant(restaurantData);
+            };
+          });
+
           restaurantMarkers.push(marker);
         });
       }
@@ -307,7 +387,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         }
       }
 
-      window.FastmarkMap = { receive };
+      window.FastmarkMap = { receive, openRestaurant };
 
       window.addEventListener('message', function(event) {
         const data = event.data || {};

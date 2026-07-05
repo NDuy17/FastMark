@@ -4,7 +4,6 @@ import { useDispatch } from 'react-redux';
 
 import {
   describeGoogleOAuthError,
-  getGoogleBrowserAuthRedirectUriOptions,
   getGoogleBrowserAuthRequestConfig,
 } from './googleAuthConfig';
 import { socialLogin } from './authSlice';
@@ -12,9 +11,8 @@ import { GoogleSignInPressable } from './googleSignInShared';
 
 export default function GoogleSignInBrowserButton({ disabled, onError }) {
   const dispatch = useDispatch();
-  const [request, googleResponse, promptGoogle] = Google.useIdTokenAuthRequest(
-    getGoogleBrowserAuthRequestConfig(),
-    getGoogleBrowserAuthRedirectUriOptions()
+  const [request, googleResponse, promptGoogle] = Google.useAuthRequest(
+    getGoogleBrowserAuthRequestConfig()
   );
 
   useEffect(() => {
@@ -46,12 +44,18 @@ export default function GoogleSignInBrowserButton({ disabled, onError }) {
 
   function handlePress() {
     onError?.('');
+
+    if (!request) {
+      onError?.('Google Sign-In đang khởi tạo. Thử lại sau vài giây.');
+      return;
+    }
+
     promptGoogle();
   }
 
   return (
     <GoogleSignInPressable
-      disabled={disabled || !request}
+      disabled={disabled}
       onPress={handlePress}
     />
   );

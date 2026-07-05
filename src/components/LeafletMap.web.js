@@ -14,9 +14,12 @@ export default function LeafletMap({
   onEvent,
 }) {
   const iframeRef = useRef(null);
+  const onEventRef = useRef(onEvent);
   const initialLocationRef = useRef(currentLocation);
   const hasCenteredRef = useRef(false);
   const [ready, setReady] = useState(false);
+
+  onEventRef.current = onEvent;
 
   const html = useMemo(
     () => createLeafletHtml({ currentLocation: initialLocationRef.current }),
@@ -39,7 +42,7 @@ export default function LeafletMap({
       const message = event.data;
 
       if (message?.source === MAP_EVENT_SOURCE) {
-        onEvent?.(message.payload);
+        onEventRef.current?.(message.payload);
       }
     }
 

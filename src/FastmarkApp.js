@@ -18,14 +18,14 @@ import {
   serializeAuthUser,
   subscribeToAuthChanges,
 } from './services/authService';
-import { getBackendConfigError } from './services/env';
+import { getAuthConfigError } from './services/env';
 
 export default function FastmarkApp() {
   const dispatch = useDispatch();
   const status = useSelector(selectAuthStatus);
 
   useEffect(() => {
-    const configError = getBackendConfigError();
+    const configError = getAuthConfigError();
 
     if (configError) {
       dispatch(setConfigError(configError));
