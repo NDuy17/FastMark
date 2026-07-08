@@ -1,11 +1,14 @@
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { makeRedirectUri, ResponseType } from 'expo-auth-session';
 
 import { googleOAuthConfig } from '../../core/config/env';
 import { validateGoogleOAuthSetup } from '../../core/utils/authDiagnostics';
-
+import {
+  hasGoogleSigninNativeBinary,
+  isExpoGoRuntime,
+  isNativeGoogleSignInAvailable,
+} from './googleSignInModule';
 export function isExpoGoClient() {
-  return Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+  return isExpoGoRuntime();
 }
 
 export function getGoogleBrowserRedirectUri() {
@@ -29,25 +32,33 @@ export function getGoogleBrowserAuthRequestConfig() {
 }
 
 export function getGoogleAuthSetupError() {
-  if (isExpoGoClient()) {
-    return 'Google Sign-In không chạy trên Expo Go. Chạy: npx expo run:android';
+  if (isExpoGoRuntime()) {
+    return 'Bạn đang mở app bằng Expo Go. Hãy mở app FastMark đã cài sau khi chạy npx expo run:android.';
   }
 
-  const { webClientId } = googleOAuthConfig;
-
-  if (!webClientId) {
-    return 'Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID trong .env (lấy từ Firebase → Authentication → Google).';
+  if (!hasGoogleSigninNativeBinary()) {
+    return 'Google Sign-In chưa sẵn sàng trên bản build này. Chạy lại: npx expo run:android';
   }
 
-  const oauthIssues = validateGoogleOAuthSetup().filter(
-    (issue) => issue.includes('Client ID in .env does not match google-services.json')
-  );
+  if (isNativeGoogleSignInAvailable()) {
+    const { webClientId } = googleOAuthConfig;
 
-  if (oauthIssues.length > 0) {
-    return 'Client ID Google trong .env không khớp google-services.json. Web = client_type 3, Android = client_type 1. Tải lại file từ Firebase rồi cập nhật .env.';
+    if (!webClientId) {
+      return 'Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID trong .env (lấy từ Firebase → Authentication → Google).';
+    }
+
+    const oauthIssues = validateGoogleOAuthSetup().filter(
+      (issue) => issue.includes('Client ID in .env does not match google-services.json')
+    );
+
+    if (oauthIssues.length > 0) {
+      return 'Client ID Google trong .env không khớp google-services.json. Web = client_type 3, Android = client_type 1.';
+    }
+
+    return null;
   }
 
-  return null;
+  return 'Google Sign-In chưa sẵn sàng trên bản build này. Chạy lại: npx expo run:android';
 }
 
 export function describeGoogleOAuthError(response) {
@@ -71,13 +82,11 @@ export function describeGoogleOAuthError(response) {
     description.includes('400')
   ) {
     if (isExpoGoClient()) {
-      return (
-        'Expo Go không hỗ trợ Google Sign-In (redirect exp://). Chạy bản native: npx expo run:android'
-      );
+      return 'Expo Go không hỗ trợ Google Sign-In. Mở app FastMark đã build bằng npx expo run:android.';
     }
 
     return (
-      `Google từ chối OAuth (400). Thêm redirect URI vào Web client trên Google Cloud: ${redirectUri} — rồi chạy lại npx expo run:android.`
+      `Google từ chối OAuth (400). Thêm redirect URI vào Web client trên Google Cloud: ${redirectUri}`
     );
   }
 
@@ -92,13 +101,8 @@ export function describeNativeGoogleError(error) {
   const message = error.message || '';
 
   if (message.includes('DEVELOPER_ERROR') || error.code === '10') {
-    const setupHint = getGoogleAuthSetupError();
-    if (setupHint) {
-      return setupHint;
-    }
-
     return (
-      'Cấu hình Google chưa khớp. Kiểm tra EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID (loại Web, client_type 3) và SHA-1 trong Firebase, tải lại google-services.json, rồi rebuild: npx expo run:android.'
+      'Cấu hình Google chưa khớp. Kiểm tra EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID (Web, client_type 3), SHA-1 trong Firebase và google-services.json.'
     );
   }
 
@@ -107,7 +111,11 @@ export function describeNativeGoogleError(error) {
     message.includes('Native module') ||
     message.includes('TurboModule')
   ) {
-    return 'App chưa rebuild native. Google Sign-In cần chạy: npx expo run:android (không dùng Expo Go).';
+    if (isExpoGoClient()) {
+      return 'Bạn đang dùng Expo Go. Mở app FastMark đã cài sau khi chạy npx expo run:android.';
+    }
+
+    return 'Native Google Sign-In chưa được tích hợp. Chạy lại: npx expo run:android';
   }
 
   if (message.includes('NETWORK_ERROR')) {
