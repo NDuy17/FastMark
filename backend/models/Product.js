@@ -1,26 +1,25 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const productSchema = new mongoose.Schema(
-  {
-    externalId: { type: String, required: true, unique: true, index: true },
-    store_id: { type: String, required: true, index: true },
-    name: { type: String, required: true },
-    price: { type: Number, required: true },
-    description: { type: String, default: '' },
-    image_emoji: { type: String, default: '📦' },
-  },
-  { timestamps: true, versionKey: false }
-);
+const ProductSchema = new mongoose.Schema({
+    shopId:{type:mongoose.Schema.Types.ObjectId,ref:"ShopProfile"},
+    categoryId:{type:mongoose.Schema.Types.ObjectId,ref:"Category"},
 
-productSchema.methods.toClientProduct = function toClientProduct() {
-  return {
-    id: this.externalId,
-    store_id: this.store_id,
-    name: this.name,
-    price: this.price,
-    description: this.description,
-    image_emoji: this.image_emoji,
-  };
-};
+    productName:{type:String,required:true},
+    description:String,
 
-module.exports = mongoose.model('Product', productSchema);
+    donVi:String,
+    thumbnail:String,
+
+    minPrice:Number,
+    maxPrice:Number,
+
+    status:{type:Number,default:1},
+
+    viewCount:{type:Number,default:0},
+    likeCount:{type:Number,default:0},
+
+    CreatedAt:{type:Date,default:Date.now},
+    UpdatedAt:{type:Date,default:Date.now}
+});
+
+module.exports = mongoose.model("Product",ProductSchema);

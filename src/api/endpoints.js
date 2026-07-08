@@ -6,4 +6,12 @@ export const API_ENDPOINTS = {
   restaurantProducts: (id) => `/api/restaurants/${id}/products`,
   restaurantReviews: (id) => `/api/restaurants/${id}/reviews`,
   product: (id) => `/api/products/${id}`,
+  authRegisterEmail: '/api/auth/register/email',
+  authLoginEmail: '/api/auth/login/email',
+  authGoogle: '/api/auth/google',
+  authMe: '/api/auth/me',
+  authUpdateMe: '/api/auth/me',
+  authUploadAvatar: '/api/auth/avatar',
+  authVerifyEmailRequest: '/api/auth/verify-email/request',
+  authVerifyEmailConfirm: '/api/auth/verify-email/confirm',
 };

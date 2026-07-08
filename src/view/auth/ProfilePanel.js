@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -25,6 +28,7 @@ import {
   loadUserProfile,
   logoutUser,
   updateUserProfile,
+  uploadUserAvatar,
 } from '../../viewmodel/auth/authSlice';
 
 export default function ProfilePanel() {
@@ -47,9 +51,11 @@ export default function ProfilePanel() {
   });
   const [localError, setLocalError] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   const isProfileLoading = profileStatus === 'loading';
   const displayName = profile?.fullName || user?.displayName || 'Fastmark user';
+  const avatarUrl = profileForm.photoUrl || profile?.photoUrl || user?.photoURL || '';
 
   useEffect(() => {
     if (!user || profile) {
@@ -95,6 +101,61 @@ export default function ProfilePanel() {
     setLocalError('');
     dispatch(applyProfileWithCache(profileForm));
     dispatch(updateUserProfile(profileForm));
+  }
+
+  async function handlePickAvatar() {
+    if (!user) {
+      setLocalError('Vui lòng đăng nhập lại trước khi đổi ảnh đại diện.');
+      return;
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setLocalError('Cần quyền truy cập thư viện ảnh để chọn avatar.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets?.[0]) {
+      return;
+    }
+
+    const asset = result.assets[0];
+
+    if (!asset.base64) {
+      setLocalError('Không đọc được ảnh đã chọn. Vui lòng thử lại.');
+      return;
+    }
+
+    setLocalError('');
+    setIsUploadingAvatar(true);
+
+    dispatch(
+      uploadUserAvatar({
+        imageBase64: asset.base64,
+        mimeType: asset.mimeType || 'image/jpeg',
+      })
+    )
+      .unwrap()
+      .then((payload) => {
+        setProfileForm((current) => ({
+          ...current,
+          photoUrl: payload.profile?.photoUrl || current.photoUrl,
+        }));
+      })
+      .catch((message) => {
+        setLocalError(typeof message === 'string' ? message : 'Không upload được ảnh đại diện.');
+      })
+      .finally(() => {
+        setIsUploadingAvatar(false);
+      });
   }
 
   function handleChangePassword() {
@@ -144,13 +205,8 @@ export default function ProfilePanel() {
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.avatarCircle}>
-          <Text style={styles.avatarText}>
-            {displayName.charAt(0).toUpperCase()}
-          </Text>
-        </View>
+        <AvatarPreview name={displayName} photoUrl={avatarUrl} size={48} />
         <View style={styles.headerInfo}>
           <Text style={styles.headerName} numberOfLines={1}>{displayName}</Text>
           <Text style={styles.headerEmail} numberOfLines={1}>{user?.email}</Text>
@@ -163,7 +219,6 @@ export default function ProfilePanel() {
         </Pressable>
       </View>
 
-      {/* Segmented Control */}
       <View style={styles.segmentedControl}>
         <Pressable
           style={[styles.segment, section === 'profile' && styles.segmentActive]}
@@ -191,6 +246,29 @@ export default function ProfilePanel() {
       >
         {section === 'profile' ? (
           <>
+            <View style={styles.avatarSection}>
+              <AvatarPreview name={displayName} photoUrl={avatarUrl} size={96} />
+              <Pressable
+                accessibilityRole="button"
+                disabled={isUploadingAvatar}
+                style={({ pressed }) => [
+                  styles.avatarButton,
+                  pressed && styles.avatarButtonPressed,
+                  isUploadingAvatar && styles.avatarButtonDisabled,
+                ]}
+                onPress={handlePickAvatar}
+              >
+                {isUploadingAvatar ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.avatarButtonText}>Chọn ảnh đại diện</Text>
+                )}
+              </Pressable>
+              <Text style={styles.avatarHint}>
+                Ảnh sẽ được lưu trên Supabase và đồng bộ vào tài khoản của bạn.
+              </Text>
+            </View>
+
             <LabeledInput
               label="Họ tên"
               value={profileForm.fullName}
@@ -205,14 +283,6 @@ export default function ProfilePanel() {
               keyboardType="phone-pad"
               autoComplete="tel"
               placeholder="Nhập số điện thoại"
-            />
-            <LabeledInput
-              label="Ảnh đại diện URL"
-              value={profileForm.photoUrl}
-              onChangeText={(value) => updateProfileField('photoUrl', value)}
-              keyboardType="url"
-              autoCapitalize="none"
-              placeholder="https://..."
             />
             <ActionButton
               label="Lưu thay đổi"
@@ -275,6 +345,41 @@ export default function ProfilePanel() {
   );
 }
 
+function AvatarPreview({ name, photoUrl, size }) {
+  const initial = (name || 'U').charAt(0).toUpperCase();
+
+  if (photoUrl) {
+    return (
+      <Image
+        source={{ uri: photoUrl }}
+        style={[
+          styles.avatarImage,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          },
+        ]}
+      />
+    );
+  }
+
+  return (
+    <View
+      style={[
+        styles.avatarCircle,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+        },
+      ]}
+    >
+      <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>{initial}</Text>
+    </View>
+  );
+}
+
 function LabeledInput({ label, ...props }) {
   return (
     <View style={styles.field}>
@@ -319,16 +424,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f766e',
   },
   avatarCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
     backgroundColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarImage: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
   avatarText: {
     color: '#ffffff',
-    fontSize: 20,
     fontWeight: '900',
   },
   headerInfo: {
@@ -402,6 +506,45 @@ const styles = StyleSheet.create({
   bodyContent: {
     paddingHorizontal: 16,
     paddingBottom: 32,
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 8,
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  avatarButton: {
+    minHeight: 44,
+    marginTop: 14,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f766e',
+  },
+  avatarButtonPressed: {
+    opacity: 0.82,
+  },
+  avatarButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  avatarButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  avatarHint: {
+    marginTop: 10,
+    paddingHorizontal: 20,
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 18,
   },
   field: {
     marginTop: 14,

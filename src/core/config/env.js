@@ -1,3 +1,6 @@
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+
 import {
   getAndroidOAuthClientIdFromGoogleServices,
   getWebOAuthClientIdFromGoogleServices,
@@ -18,6 +21,37 @@ export const firebaseConfig = {
 };
 
 export const nodeApiUrl = env.EXPO_PUBLIC_NODE_API_URL || '';
+
+function readSupabaseEnv(...keys) {
+  for (const key of keys) {
+    const value = env[key];
+    if (value !== undefined && String(value).trim() !== '') {
+      return String(value).trim();
+    }
+  }
+
+  return '';
+}
+
+export const supabaseConfig = {
+  url: readSupabaseEnv('EXPO_PUBLIC_SUPABASE_URL', 'VITE_SUPABASE_URL'),
+  anonKey: readSupabaseEnv(
+    'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+    'VITE_SUPABASE_ANON_KEY'
+  ),
+};
+
+export function getSupabaseConfig() {
+  return supabaseConfig;
+}
+
+export function getSupabaseConfigError() {
+  if (!supabaseConfig.url || !supabaseConfig.anonKey) {
+    return 'Thiếu EXPO_PUBLIC_SUPABASE_URL hoặc EXPO_PUBLIC_SUPABASE_ANON_KEY trong .env';
+  }
+
+  return '';
+}
 
 export const googleOAuthConfig = {
   webClientId:
@@ -45,7 +79,20 @@ export function getMissingFirebaseEnv() {
 }
 
 export function getNodeApiUrl() {
-  return nodeApiUrl;
+  const configured = String(nodeApiUrl || '').trim().replace(/\/$/, '');
+
+  if (!configured) {
+    return '';
+  }
+
+  // Android emulator: localhost/LAN IP on host machine maps to 10.0.2.2
+  if (Platform.OS === 'android' && Constants.isDevice === false) {
+    const portMatch = configured.match(/:(\d+)(?:\/|$)/);
+    const port = portMatch?.[1] || '5000';
+    return `http://10.0.2.2:${port}`;
+  }
+
+  return configured;
 }
 
 export function getAuthConfigError() {

@@ -1,49 +1,23 @@
-const admin = require('firebase-admin');
-const path = require('path');
-const fs = require('fs');
-
-let initialized = false;
-
-function loadServiceAccount() {
-  const jsonEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (jsonEnv) {
-    return JSON.parse(jsonEnv);
-  }
-
-  const accountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-  if (accountPath) {
-    const resolved = path.isAbsolute(accountPath)
-      ? accountPath
-      : path.resolve(process.cwd(), accountPath);
-    return JSON.parse(fs.readFileSync(resolved, 'utf8'));
-  }
-
-  return null;
-}
+const { initializeApp, getApps, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const {firebaseProjectId,firebaseClientEmail,firebasePrivateKey,} = require("./env");
 
 function initFirebaseAdmin() {
-  if (initialized || admin.apps.length > 0) {
-    return admin;
+  if (getApps().length > 0) {
+    const app = getApps()[0];
+    return { app, auth: getAuth(app) };
   }
 
-  const serviceAccount = loadServiceAccount();
-  const projectId = process.env.FIREBASE_PROJECT_ID || 'fastmark-e881d';
+  const app = initializeApp({
+    credential: cert({
+      projectId: firebaseProjectId,
+      clientEmail: firebaseClientEmail,
+      privateKey: firebasePrivateKey,
+    }),
+  });
 
-  if (serviceAccount) {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: serviceAccount.project_id || projectId,
-    });
-  } else {
-    // verifyIdToken works with projectId only (fetches Google public keys).
-    admin.initializeApp({ projectId });
-    console.warn(
-      '[Firebase Admin] No service account configured. Token verify uses projectId only.'
-    );
-  }
-
-  initialized = true;
-  return admin;
+  console.log("Firebase Admin initialized:", app.name);
+  return { app, auth: getAuth(app) };
 }
 
-module.exports = { initFirebaseAdmin, admin };
+module.exports = initFirebaseAdmin();
