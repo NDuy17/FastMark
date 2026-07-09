@@ -5,3 +5,4 @@ function asyncHandler(handler) {
 }
 
 module.exports = asyncHandler;
+module.exports.asyncHandler = asyncHandler;

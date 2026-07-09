@@ -1,23 +1,30 @@
 import { Platform } from 'react-native';
-import Constants from 'expo-constants';
 
 import {
+  getAndroidFirebaseConfigFromGoogleServices,
   getAndroidOAuthClientIdFromGoogleServices,
+  getAndroidOAuthClientIdsFromGoogleServices,
   getWebOAuthClientIdFromGoogleServices,
+  resolveAndroidOAuthClientId,
 } from './googleServicesConfig';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('Env');
 
 const env = process.env || {};
+const googleServicesFirebase = getAndroidFirebaseConfigFromGoogleServices();
 
 export const firebaseConfig = {
-  apiKey: env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  apiKey: env.EXPO_PUBLIC_FIREBASE_API_KEY || googleServicesFirebase.apiKey,
+  authDomain:
+    env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || googleServicesFirebase.authDomain,
+  projectId: env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || googleServicesFirebase.projectId,
+  storageBucket:
+    env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || googleServicesFirebase.storageBucket,
+  messagingSenderId:
+    env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ||
+    googleServicesFirebase.messagingSenderId,
+  appId: env.EXPO_PUBLIC_FIREBASE_APP_ID || googleServicesFirebase.appId,
 };
 
 export const nodeApiUrl = env.EXPO_PUBLIC_NODE_API_URL || '';
@@ -55,12 +62,12 @@ export function getSupabaseConfigError() {
 
 export const googleOAuthConfig = {
   webClientId:
-    env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
     getWebOAuthClientIdFromGoogleServices() ||
+    env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
     '',
   androidClientId:
+    resolveAndroidOAuthClientId(env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID) ||
     env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
-    getAndroidOAuthClientIdFromGoogleServices() ||
     '',
   iosClientId: env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '',
 };
@@ -78,6 +85,12 @@ export function getMissingFirebaseEnv() {
     .map(([envKey]) => envKey);
 }
 
+function resolveAndroidApiHost(configuredUrl) {
+  const portMatch = configuredUrl.match(/:(\d+)(?:\/|$)/);
+  const port = portMatch?.[1] || '5000';
+  return `http://10.0.2.2:${port}`;
+}
+
 export function getNodeApiUrl() {
   const configured = String(nodeApiUrl || '').trim().replace(/\/$/, '');
 
@@ -85,11 +98,12 @@ export function getNodeApiUrl() {
     return '';
   }
 
-  // Android emulator: localhost/LAN IP on host machine maps to 10.0.2.2
-  if (Platform.OS === 'android' && Constants.isDevice === false) {
-    const portMatch = configured.match(/:(\d+)(?:\/|$)/);
-    const port = portMatch?.[1] || '5000';
-    return `http://10.0.2.2:${port}`;
+  // Android: localhost/127.0.0.1 trên máy ảo không trỏ về máy host — dùng 10.0.2.2
+  if (
+    Platform.OS === 'android' &&
+    /:\/\/(localhost|127\.0\.0\.1)(?=[:/]|$)/i.test(configured)
+  ) {
+    return resolveAndroidApiHost(configured);
   }
 
   return configured;

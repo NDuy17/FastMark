@@ -1,10 +1,10 @@
-require("./config/env");
+require('./config/env');
 
-const app = require("./app");
-const connectDB = require("./config/database");
-const { port } = require("./config/env");
+const app = require('./app');
+const connectDB = require('./config/database');
+const { port } = require('./config/env');
 
-require("./config/firebaseAdmin");
+require('./config/firebaseAdmin');
 
 connectDB();
 

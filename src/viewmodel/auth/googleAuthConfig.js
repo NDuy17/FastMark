@@ -1,12 +1,14 @@
 import { makeRedirectUri, ResponseType } from 'expo-auth-session';
 
 import { googleOAuthConfig } from '../../core/config/env';
+import { getWebOAuthClientIdFromGoogleServices } from '../../core/config/googleServicesConfig';
 import { validateGoogleOAuthSetup } from '../../core/utils/authDiagnostics';
 import {
   hasGoogleSigninNativeBinary,
   isExpoGoRuntime,
   isNativeGoogleSignInAvailable,
 } from './googleSignInModule';
+
 export function isExpoGoClient() {
   return isExpoGoRuntime();
 }
@@ -18,8 +20,12 @@ export function getGoogleBrowserRedirectUri() {
   });
 }
 
+export function getGoogleNativeWebClientId() {
+  return getWebOAuthClientIdFromGoogleServices() || googleOAuthConfig.webClientId || '';
+}
+
 export function getGoogleBrowserAuthRequestConfig() {
-  const { webClientId } = googleOAuthConfig;
+  const webClientId = getGoogleNativeWebClientId();
 
   return {
     webClientId,
@@ -41,18 +47,18 @@ export function getGoogleAuthSetupError() {
   }
 
   if (isNativeGoogleSignInAvailable()) {
-    const { webClientId } = googleOAuthConfig;
-
-    if (!webClientId) {
-      return 'Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID trong .env (lấy từ Firebase → Authentication → Google).';
+    if (!getGoogleNativeWebClientId()) {
+      return 'Thiếu Web Client ID Google (client_type 3 trong google-services.json).';
     }
 
     const oauthIssues = validateGoogleOAuthSetup().filter(
-      (issue) => issue.includes('Client ID in .env does not match google-services.json')
+      (issue) =>
+        issue.includes('does not match google-services.json') ||
+        issue.includes('Client ID in .env does not match google-services.json')
     );
 
     if (oauthIssues.length > 0) {
-      return 'Client ID Google trong .env không khớp google-services.json. Web = client_type 3, Android = client_type 1.';
+      return 'Client ID Google trong .env không khớp google-services.json. Web = client_type 3, Android = client_type 1. Tải lại file từ Firebase rồi cập nhật .env.';
     }
 
     return null;
@@ -101,8 +107,23 @@ export function describeNativeGoogleError(error) {
   const message = error.message || '';
 
   if (message.includes('DEVELOPER_ERROR') || error.code === '10') {
+    const setupHint = getGoogleAuthSetupError();
+    if (setupHint) {
+      return setupHint;
+    }
+
     return (
-      'Cấu hình Google chưa khớp. Kiểm tra EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID (Web, client_type 3), SHA-1 trong Firebase và google-services.json.'
+      'Cấu hình Google chưa khớp (DEVELOPER_ERROR). Thêm SHA-1 debug vào Firebase → tải lại google-services.json → chạy: npx expo run:android. Xem SHA-1 bằng: npm run android:sha1'
+    );
+  }
+
+  if (
+    error.code === '12500' ||
+    String(error.code) === '12500' ||
+    message.includes('non-recoverable sign in failure')
+  ) {
+    return (
+      'Google Sign-In thất bại (12500). SHA-1 máy bạn chưa có trong Firebase. Vào Firebase → Project settings → Android app → Add fingerprint → dán SHA-1 từ lệnh npm run android:sha1 → tải lại google-services.json → npx expo run:android.'
     );
   }
 

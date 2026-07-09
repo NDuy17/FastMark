@@ -1,23 +1,81 @@
-const { initializeApp, getApps, cert } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
-const {firebaseProjectId,firebaseClientEmail,firebasePrivateKey,} = require("./env");
+const admin = require('firebase-admin');
+const path = require('path');
+const fs = require('fs');
 
-function initFirebaseAdmin() {
-  if (getApps().length > 0) {
-    const app = getApps()[0];
-    return { app, auth: getAuth(app) };
+let initialized = false;
+
+function loadServiceAccountFromFile() {
+  const jsonEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (jsonEnv) {
+    return JSON.parse(jsonEnv);
   }
 
-  const app = initializeApp({
-    credential: cert({
-      projectId: firebaseProjectId,
-      clientEmail: firebaseClientEmail,
-      privateKey: firebasePrivateKey,
-    }),
-  });
+  const accountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  if (accountPath) {
+    const resolved = path.isAbsolute(accountPath)
+      ? accountPath
+      : path.resolve(process.cwd(), accountPath);
+    return JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  }
 
-  console.log("Firebase Admin initialized:", app.name);
-  return { app, auth: getAuth(app) };
+  return null;
 }
 
-module.exports = initFirebaseAdmin();
+function loadServiceAccountFromEnv() {
+  try {
+    const {
+      firebaseProjectId,
+      firebaseClientEmail,
+      firebasePrivateKey,
+    } = require('./env');
+
+    if (firebaseProjectId && firebaseClientEmail && firebasePrivateKey) {
+      return {
+        project_id: firebaseProjectId,
+        client_email: firebaseClientEmail,
+        private_key: firebasePrivateKey,
+      };
+    }
+  } catch {
+    // env.js may throw if required vars are missing during partial setup.
+  }
+
+  return null;
+}
+
+function initFirebaseAdmin() {
+  if (initialized || admin.apps.length > 0) {
+    return admin;
+  }
+
+  const serviceAccount = loadServiceAccountFromFile() || loadServiceAccountFromEnv();
+  const projectId =
+    serviceAccount?.project_id ||
+    process.env.FIREBASE_PROJECT_ID ||
+    'fastmark-e881d';
+
+  if (serviceAccount) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId,
+    });
+  } else {
+    admin.initializeApp({ projectId });
+    console.warn(
+      '[Firebase Admin] No service account configured. Token verify uses projectId only.'
+    );
+  }
+
+  initialized = true;
+  console.log('Firebase Admin initialized:', admin.app().name);
+  return admin;
+}
+
+const firebaseAdmin = initFirebaseAdmin();
+
+module.exports = {
+  initFirebaseAdmin,
+  admin: firebaseAdmin,
+  auth: firebaseAdmin.auth(),
+  app: firebaseAdmin.apps[0] || null,
+};
