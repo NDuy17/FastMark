@@ -25,23 +25,6 @@ const TABS = [
   { key: 'profile', label: 'Tài khoản', Icon: PersonTabIcon },
 ];
 
-function renderTabContent(activeTab) {
-  switch (activeTab) {
-    case 'home':
-      return <MapScreen />;
-    case 'products':
-      return <ProductsScreen />;
-    case 'post':
-      return <PostScreen />;
-    case 'inbox':
-      return <InboxScreen />;
-    case 'profile':
-      return <ProfilePanel />;
-    default:
-      return <MapScreen />;
-  }
-}
-
 function getTabColor(tab, isActive) {
   if (tab.highlight) {
     return ACTIVE_COLOR;
@@ -64,10 +47,35 @@ function TabIcon({ tab, isActive, color }) {
 
 export default function AuthenticatedHome() {
   const [activeTab, setActiveTab] = useState('home');
+  const [mapFocusRequest, setMapFocusRequest] = useState(null);
+
+  function handleOpenStoreFromProfile(storeId) {
+    setMapFocusRequest({
+      storeId: String(storeId),
+      at: Date.now(),
+    });
+    setActiveTab('home');
+  }
 
   return (
     <View style={styles.root}>
-      <View style={styles.content}>{renderTabContent(activeTab)}</View>
+      <View style={styles.content}>
+        <View style={[styles.tabPane, activeTab !== 'home' && styles.tabHidden]}>
+          <MapScreen focusStoreRequest={mapFocusRequest} />
+        </View>
+        <View style={[styles.tabPane, activeTab !== 'products' && styles.tabHidden]}>
+          <ProductsScreen />
+        </View>
+        <View style={[styles.tabPane, activeTab !== 'post' && styles.tabHidden]}>
+          <PostScreen />
+        </View>
+        <View style={[styles.tabPane, activeTab !== 'inbox' && styles.tabHidden]}>
+          <InboxScreen />
+        </View>
+        <View style={[styles.tabPane, activeTab !== 'profile' && styles.tabHidden]}>
+          <ProfilePanel onOpenStore={handleOpenStoreFromProfile} />
+        </View>
+      </View>
 
       <View style={styles.tabBar}>
         {TABS.map((tab) => {
@@ -101,6 +109,12 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  tabPane: {
+    flex: 1,
+  },
+  tabHidden: {
+    display: 'none',
   },
   tabBar: {
     flexDirection: 'row',

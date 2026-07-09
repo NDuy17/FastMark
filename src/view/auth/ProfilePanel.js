@@ -1,61 +1,42 @@
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
-  selectAuthError,
   selectAuthProfile,
-  selectAuthProfileStatus,
-  selectAuthSuccessMessage,
   selectAuthUser,
 } from '../../viewmodel/auth/authSelectors';
-import {
-  applyProfileWithCache,
-  changePassword,
-  clearAuthFeedback,
-  loadUserProfile,
-  logoutUser,
-  updateUserProfile,
-  uploadUserAvatar,
-} from '../../viewmodel/auth/authSlice';
+import { loadUserProfile, logoutUser } from '../../viewmodel/auth/authSlice';
+import EditAccountScreen from '../profile/EditAccountScreen';
+import PurchasedProductsScreen from '../profile/PurchasedProductsScreen';
+import ReservationHistoryScreen from '../profile/ReservationHistoryScreen';
+import VisitedStoresScreen from '../profile/VisitedStoresScreen';
 
-export default function ProfilePanel() {
+const ACTIVITY_ITEMS = [
+  {
+    key: 'reservation-history',
+    label: 'Lịch sử giữ hàng',
+    icon: '🕐',
+  },
+  {
+    key: 'visited-stores',
+    label: 'Gian hàng đã ghé',
+    icon: '🏪',
+  },
+  {
+    key: 'purchased-products',
+    label: 'Sản phẩm đã từng mua',
+    icon: '📦',
+  },
+];
+
+export default function ProfilePanel({ onOpenStore }) {
   const dispatch = useDispatch();
-  const error = useSelector(selectAuthError);
   const profile = useSelector(selectAuthProfile);
-  const profileStatus = useSelector(selectAuthProfileStatus);
-  const successMessage = useSelector(selectAuthSuccessMessage);
   const user = useSelector(selectAuthUser);
-  const [section, setSection] = useState('profile');
-  const [profileForm, setProfileForm] = useState({
-    fullName: '',
-    phone: '',
-    photoUrl: '',
-  });
-  const [passwordForm, setPasswordForm] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: '',
-  });
-  const [localError, setLocalError] = useState('');
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [profileNav, setProfileNav] = useState(null);
 
-  const isProfileLoading = profileStatus === 'loading';
   const displayName = profile?.fullName || user?.displayName || 'Fastmark user';
-  const avatarUrl = profileForm.photoUrl || profile?.photoUrl || user?.photoURL || '';
 
   useEffect(() => {
     if (!user || profile) {
@@ -64,149 +45,45 @@ export default function ProfilePanel() {
     dispatch(loadUserProfile());
   }, [dispatch, user, profile]);
 
-  useEffect(() => {
-    setProfileForm({
-      fullName: profile?.fullName || user?.displayName || '',
-      phone: profile?.phone || '',
-      photoUrl: profile?.photoUrl || user?.photoURL || '',
-    });
-  }, [profile, user]);
-
-  useEffect(() => {
-    setLocalError('');
-    dispatch(clearAuthFeedback());
-  }, [dispatch, section]);
-
-  function updateProfileField(field, value) {
-    setProfileForm((current) => ({ ...current, [field]: value }));
-    setLocalError('');
+  if (profileNav === 'edit-account') {
+    return <EditAccountScreen onBack={() => setProfileNav(null)} />;
   }
 
-  function updatePasswordField(field, value) {
-    setPasswordForm((current) => ({ ...current, [field]: value }));
-    setLocalError('');
+  if (profileNav === 'reservation-history') {
+    return (
+      <ReservationHistoryScreen
+        onBack={() => setProfileNav(null)}
+        onOpenStore={onOpenStore}
+      />
+    );
   }
 
-  function handleSaveProfile() {
-    if (!user) {
-      setLocalError('Vui lòng đăng nhập lại trước khi cập nhật hồ sơ.');
-      return;
-    }
-
-    if (!profileForm.fullName.trim()) {
-      setLocalError('Vui lòng điền họ tên.');
-      return;
-    }
-
-    setLocalError('');
-    dispatch(applyProfileWithCache(profileForm));
-    dispatch(updateUserProfile(profileForm));
+  if (profileNav === 'visited-stores') {
+    return (
+      <VisitedStoresScreen
+        onBack={() => setProfileNav(null)}
+        onOpenStore={onOpenStore}
+      />
+    );
   }
 
-  async function handlePickAvatar() {
-    if (!user) {
-      setLocalError('Vui lòng đăng nhập lại trước khi đổi ảnh đại diện.');
-      return;
-    }
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setLocalError('Cần quyền truy cập thư viện ảnh để chọn avatar.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
-      base64: true,
-    });
-
-    if (result.canceled || !result.assets?.[0]) {
-      return;
-    }
-
-    const asset = result.assets[0];
-
-    if (!asset.base64) {
-      setLocalError('Không đọc được ảnh đã chọn. Vui lòng thử lại.');
-      return;
-    }
-
-    setLocalError('');
-    setIsUploadingAvatar(true);
-
-    dispatch(
-      uploadUserAvatar({
-        imageBase64: asset.base64,
-        mimeType: asset.mimeType || 'image/jpeg',
-      })
-    )
-      .unwrap()
-      .then((payload) => {
-        setProfileForm((current) => ({
-          ...current,
-          photoUrl: payload.profile?.photoUrl || current.photoUrl,
-        }));
-      })
-      .catch((message) => {
-        setLocalError(typeof message === 'string' ? message : 'Không upload được ảnh đại diện.');
-      })
-      .finally(() => {
-        setIsUploadingAvatar(false);
-      });
+  if (profileNav === 'purchased-products') {
+    return (
+      <PurchasedProductsScreen
+        onBack={() => setProfileNav(null)}
+        onOpenStore={onOpenStore}
+      />
+    );
   }
-
-  function handleChangePassword() {
-    if (
-      !passwordForm.currentPassword ||
-      !passwordForm.newPassword ||
-      !passwordForm.confirmPassword
-    ) {
-      setLocalError('Vui lòng nhập đủ thông tin đổi mật khẩu.');
-      return;
-    }
-
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setLocalError('Mật khẩu mới chưa khớp.');
-      return;
-    }
-
-    if (passwordForm.newPassword.length < 6) {
-      setLocalError('Mật khẩu mới cần tối thiểu 6 ký tự.');
-      return;
-    }
-
-    setLocalError('');
-    setIsChangingPassword(true);
-
-    dispatch(changePassword(passwordForm))
-      .unwrap()
-      .then(() => {
-        setPasswordForm({
-          currentPassword: '',
-          newPassword: '',
-          confirmPassword: '',
-        });
-      })
-      .catch((message) => {
-        setLocalError(typeof message === 'string' ? message : 'Không đổi được mật khẩu.');
-      })
-      .finally(() => {
-        setIsChangingPassword(false);
-      });
-  }
-
-  const feedbackError = localError || error;
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={styles.screen}>
       <View style={styles.header}>
-        <AvatarPreview name={displayName} photoUrl={avatarUrl} size={48} />
+        <View style={styles.avatarCircle}>
+          <Text style={styles.avatarText}>
+            {displayName.charAt(0).toUpperCase()}
+          </Text>
+        </View>
         <View style={styles.headerInfo}>
           <Text style={styles.headerName} numberOfLines={1}>{displayName}</Text>
           <Text style={styles.headerEmail} numberOfLines={1}>{user?.email}</Text>
@@ -219,194 +96,44 @@ export default function ProfilePanel() {
         </Pressable>
       </View>
 
-      <View style={styles.segmentedControl}>
-        <Pressable
-          style={[styles.segment, section === 'profile' && styles.segmentActive]}
-          onPress={() => setSection('profile')}
-        >
-          <Text style={[styles.segmentText, section === 'profile' && styles.segmentTextActive]}>
-            Hồ sơ
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.segment, section === 'security' && styles.segmentActive]}
-          pressRetentionOffset={8}
-          onPress={() => setSection('security')}
-        >
-          <Text style={[styles.segmentText, section === 'security' && styles.segmentTextActive]}>
-            Mật khẩu
-          </Text>
-        </Pressable>
-      </View>
-
       <ScrollView
         style={styles.body}
         contentContainerStyle={styles.bodyContent}
-        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {section === 'profile' ? (
-          <>
-            <View style={styles.avatarSection}>
-              <AvatarPreview name={displayName} photoUrl={avatarUrl} size={96} />
-              <Pressable
-                accessibilityRole="button"
-                disabled={isUploadingAvatar}
-                style={({ pressed }) => [
-                  styles.avatarButton,
-                  pressed && styles.avatarButtonPressed,
-                  isUploadingAvatar && styles.avatarButtonDisabled,
-                ]}
-                onPress={handlePickAvatar}
-              >
-                {isUploadingAvatar ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.avatarButtonText}>Chọn ảnh đại diện</Text>
-                )}
-              </Pressable>
-              <Text style={styles.avatarHint}>
-                Ảnh sẽ được lưu trên Supabase và đồng bộ vào tài khoản của bạn.
-              </Text>
-            </View>
+        <Pressable
+          style={({ pressed }) => [styles.menuCard, pressed && styles.menuCardPressed]}
+          onPress={() => setProfileNav('edit-account')}
+        >
+          <Text style={styles.menuIcon}>👤</Text>
+          <Text style={styles.menuLabel}>Sửa thông tin tài khoản</Text>
+          <Text style={styles.menuChevron}>›</Text>
+        </Pressable>
 
-            <LabeledInput
-              label="Họ tên"
-              value={profileForm.fullName}
-              onChangeText={(value) => updateProfileField('fullName', value)}
-              autoComplete="name"
-              placeholder="Nhập họ và tên"
-            />
-            <LabeledInput
-              label="Số điện thoại"
-              value={profileForm.phone}
-              onChangeText={(value) => updateProfileField('phone', value)}
-              keyboardType="phone-pad"
-              autoComplete="tel"
-              placeholder="Nhập số điện thoại"
-            />
-            <ActionButton
-              label="Lưu thay đổi"
-              onPress={handleSaveProfile}
-            />
-          </>
-        ) : (
-          <>
-            <LabeledInput
-              label="Mật khẩu hiện tại"
-              value={passwordForm.currentPassword}
-              onChangeText={(value) => updatePasswordField('currentPassword', value)}
-              secureTextEntry
-              autoCapitalize="none"
-              autoComplete="password"
-              placeholder="••••••••"
-              editable={!isChangingPassword}
-            />
-            <LabeledInput
-              label="Mật khẩu mới"
-              value={passwordForm.newPassword}
-              onChangeText={(value) => updatePasswordField('newPassword', value)}
-              secureTextEntry
-              autoCapitalize="none"
-              autoComplete="new-password"
-              placeholder="Tối thiểu 6 ký tự"
-              editable={!isChangingPassword}
-            />
-            <LabeledInput
-              label="Xác nhận mật khẩu mới"
-              value={passwordForm.confirmPassword}
-              onChangeText={(value) => updatePasswordField('confirmPassword', value)}
-              secureTextEntry
-              autoCapitalize="none"
-              autoComplete="new-password"
-              placeholder="Nhập lại mật khẩu mới"
-              editable={!isChangingPassword}
-            />
-            <ActionButton
-              disabled={isChangingPassword}
-              label={isChangingPassword ? 'Đang đổi...' : 'Đổi mật khẩu'}
-              onPress={handleChangePassword}
-            />
-          </>
-        )}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionIcon}>🛒</Text>
+          <Text style={styles.sectionTitle}>HOẠT ĐỘNG CỦA TÔI</Text>
+        </View>
 
-        {isProfileLoading && !profile ? (
-          <Text style={styles.infoText}>Đang tải dữ liệu hồ sơ...</Text>
-        ) : null}
-
-        {feedbackError ? (
-          <Text style={styles.errorText}>{feedbackError}</Text>
-        ) : null}
-
-        {successMessage ? (
-          <Text style={styles.successText}>{successMessage}</Text>
-        ) : null}
+        <View style={styles.activityCard}>
+          {ACTIVITY_ITEMS.map((item, index) => (
+            <Pressable
+              key={item.key}
+              style={({ pressed }) => [
+                styles.activityItem,
+                index < ACTIVITY_ITEMS.length - 1 && styles.activityItemBorder,
+                pressed && styles.menuCardPressed,
+              ]}
+              onPress={() => setProfileNav(item.key)}
+            >
+              <Text style={styles.menuIcon}>{item.icon}</Text>
+              <Text style={styles.menuLabel}>{item.label}</Text>
+              <Text style={styles.menuChevron}>›</Text>
+            </Pressable>
+          ))}
+        </View>
       </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-function AvatarPreview({ name, photoUrl, size }) {
-  const initial = (name || 'U').charAt(0).toUpperCase();
-
-  if (photoUrl) {
-    return (
-      <Image
-        source={{ uri: photoUrl }}
-        style={[
-          styles.avatarImage,
-          {
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-          },
-        ]}
-      />
-    );
-  }
-
-  return (
-    <View
-      style={[
-        styles.avatarCircle,
-        {
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-        },
-      ]}
-    >
-      <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>{initial}</Text>
     </View>
-  );
-}
-
-function LabeledInput({ label, ...props }) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        {...props}
-        placeholderTextColor="#94a3b8"
-        style={styles.input}
-      />
-    </View>
-  );
-}
-
-function ActionButton({ disabled = false, label, onPress }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.actionButton,
-        pressed && styles.actionButtonPressed,
-        disabled && styles.actionButtonDisabled,
-      ]}
-      onPress={onPress}
-    >
-      <Text style={styles.actionButtonText}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -414,6 +141,7 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f1f5f9',
+    minHeight: 0,
   },
   header: {
     flexDirection: 'row',
@@ -424,15 +152,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f766e',
   },
   avatarCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarImage: {
-    backgroundColor: 'rgba(255,255,255,0.25)',
-  },
   avatarText: {
     color: '#ffffff',
+    fontSize: 20,
     fontWeight: '900',
   },
   headerInfo: {
@@ -464,142 +193,74 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
-  segmentedControl: {
-    flexDirection: 'row',
-    margin: 16,
-    padding: 4,
-    borderRadius: 10,
-    backgroundColor: '#e2e8f0',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  segment: {
-    flex: 1,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  segmentActive: {
-    backgroundColor: '#ffffff',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  segmentText: {
-    color: '#64748b',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  segmentTextActive: {
-    color: '#0f766e',
-    fontWeight: '900',
-  },
   body: {
     flex: 1,
+    minHeight: 0,
   },
   bodyContent: {
-    paddingHorizontal: 16,
+    padding: 16,
     paddingBottom: 32,
   },
-  avatarSection: {
+  menuCard: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-    paddingVertical: 16,
-    borderRadius: 12,
     backgroundColor: '#ffffff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  avatarButton: {
-    minHeight: 44,
-    marginTop: 14,
-    paddingHorizontal: 18,
-    borderRadius: 10,
+  menuCardPressed: {
+    opacity: 0.75,
+  },
+  menuIcon: {
+    fontSize: 20,
+    width: 28,
+  },
+  menuLabel: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  menuChevron: {
+    color: '#94a3b8',
+    fontSize: 22,
+    fontWeight: '400',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#0f766e',
+    marginTop: 24,
+    marginBottom: 10,
+    paddingHorizontal: 4,
   },
-  avatarButtonPressed: {
-    opacity: 0.82,
-  },
-  avatarButtonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
-  avatarButtonText: {
-    color: '#ffffff',
+  sectionIcon: {
     fontSize: 14,
-    fontWeight: '800',
+    marginRight: 6,
   },
-  avatarHint: {
-    marginTop: 10,
-    paddingHorizontal: 20,
+  sectionTitle: {
     color: '#64748b',
     fontSize: 12,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
-  field: {
-    marginTop: 14,
-  },
-  label: {
-    marginBottom: 6,
-    color: '#334155',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  input: {
-    minHeight: 48,
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    color: '#0f172a',
+  activityCard: {
     backgroundColor: '#ffffff',
-    fontSize: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
   },
-  actionButton: {
-    minHeight: 50,
-    marginTop: 20,
-    borderRadius: 10,
+  activityItem: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#0f766e',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
   },
-  actionButtonPressed: {
-    opacity: 0.82,
-  },
-  actionButtonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
-  actionButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  infoText: {
-    marginTop: 14,
-    color: '#64748b',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  errorText: {
-    marginTop: 14,
-    color: '#b91c1c',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  successText: {
-    marginTop: 14,
-    color: '#047857',
-    fontSize: 13,
-    fontWeight: '700',
+  activityItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
 });

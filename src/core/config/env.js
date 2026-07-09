@@ -1,9 +1,9 @@
 import { Platform } from 'react-native';
-import Constants from 'expo-constants';
 
 import {
-  getAndroidOAuthClientIdFromGoogleServices,
+  getAndroidOAuthClientIdsFromGoogleServices,
   getWebOAuthClientIdFromGoogleServices,
+  resolveAndroidOAuthClientId,
 } from './googleServicesConfig';
 import { createLogger } from '../utils/logger';
 
@@ -55,12 +55,12 @@ export function getSupabaseConfigError() {
 
 export const googleOAuthConfig = {
   webClientId:
-    env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
     getWebOAuthClientIdFromGoogleServices() ||
+    env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
     '',
   androidClientId:
+    resolveAndroidOAuthClientId(env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID) ||
     env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
-    getAndroidOAuthClientIdFromGoogleServices() ||
     '',
   iosClientId: env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '',
 };
@@ -78,6 +78,12 @@ export function getMissingFirebaseEnv() {
     .map(([envKey]) => envKey);
 }
 
+function resolveAndroidApiHost(configuredUrl) {
+  const portMatch = configuredUrl.match(/:(\d+)(?:\/|$)/);
+  const port = portMatch?.[1] || '5000';
+  return `http://10.0.2.2:${port}`;
+}
+
 export function getNodeApiUrl() {
   const configured = String(nodeApiUrl || '').trim().replace(/\/$/, '');
 
@@ -85,11 +91,12 @@ export function getNodeApiUrl() {
     return '';
   }
 
-  // Android emulator: localhost/LAN IP on host machine maps to 10.0.2.2
-  if (Platform.OS === 'android' && Constants.isDevice === false) {
-    const portMatch = configured.match(/:(\d+)(?:\/|$)/);
-    const port = portMatch?.[1] || '5000';
-    return `http://10.0.2.2:${port}`;
+  // Android: localhost/127.0.0.1 trên máy ảo không trỏ về máy host — dùng 10.0.2.2
+  if (
+    Platform.OS === 'android' &&
+    /:\/\/(localhost|127\.0\.0\.1)(?=[:/]|$)/i.test(configured)
+  ) {
+    return resolveAndroidApiHost(configured);
   }
 
   return configured;

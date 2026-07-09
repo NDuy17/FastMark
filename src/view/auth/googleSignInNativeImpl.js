@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { googleOAuthConfig } from '../../core/config/env';
 import { googleLogger as log } from '../../core/utils/logger';
-import { describeNativeGoogleError, getGoogleAuthSetupError } from '../../viewmodel/auth/googleAuthConfig';
+import { describeNativeGoogleError, getGoogleAuthSetupError, getGoogleNativeWebClientId } from '../../viewmodel/auth/googleAuthConfig';
 import { getNativeGoogleSignInModule } from '../../viewmodel/auth/googleSignInModule';
 import { selectAuthActionStatus } from '../../viewmodel/auth/authSelectors';
 import { clearGoogleSignInSession } from '../../viewmodel/auth/clearGoogleSignInSession';
@@ -28,7 +27,7 @@ export default function GoogleSignInNativeImpl({ disabled, onError }) {
     }
 
     nativeModule.GoogleSignin.configure({
-      webClientId: googleOAuthConfig.webClientId,
+      webClientId: getGoogleNativeWebClientId(),
       offlineAccess: false,
     });
     log.info('configure:success');
