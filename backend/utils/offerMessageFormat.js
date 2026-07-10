@@ -1,0 +1,59 @@
+function formatPriceVnd(value) {
+  return `${Number(value || 0).toLocaleString("vi-VN")}đ`;
+}
+
+function formatOfferMessageContent({
+  productName = "",
+  originalPrice = 0,
+  offeredPrice = 0,
+  discountPercent = 0,
+  note = "",
+} = {}) {
+  const lines = [
+    "💰 Đề nghị deal giá",
+    productName ? `Sản phẩm: ${productName}` : "",
+    `Giá gốc: ${formatPriceVnd(originalPrice)}`,
+    `Giá đề nghị: ${formatPriceVnd(offeredPrice)}`,
+    `Giảm: ${discountPercent || 0}%`,
+  ].filter(Boolean);
+
+  if (note) {
+    lines.push(`Ghi chú: ${note}`);
+  }
+
+  return lines.join("\n");
+}
+
+function parseOfferMessageContent(content) {
+  const raw = String(content || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  if (!raw.startsWith("{")) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.type === "deal_offer" || parsed?.offeredPrice !== undefined) {
+      return formatOfferMessageContent({
+        productName: parsed.productName || "",
+        originalPrice: parsed.originalPrice,
+        offeredPrice: parsed.offeredPrice,
+        discountPercent: parsed.discountPercent,
+        note: parsed.note || "",
+      });
+    }
+  } catch {
+    return raw;
+  }
+
+  return raw;
+}
+
+module.exports = {
+  formatOfferMessageContent,
+  parseOfferMessageContent,
+  formatPriceVnd,
+};

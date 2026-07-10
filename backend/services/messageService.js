@@ -5,6 +5,7 @@ const Restaurant = require("../models/Restaurant");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
 const { MESSAGE_TYPE } = require("../constants/messageType");
+const { parseOfferMessageContent } = require("../utils/offerMessageFormat");
 const { MESSAGE_READ, MESSAGE_STATUS } = require("../constants/messageStatus");
 const { SENDER_TYPE } = require("../constants/messageSender");
 const { getShopForSeller } = require("./shopSettingsService");
@@ -270,7 +271,13 @@ async function loadMessageImages(messageIds) {
 function mapMessageToBroadcast(message, images = []) {
   const isDeleted = Boolean(message.DeletedAt);
   const isImage = Number(message.messageType) === MESSAGE_TYPE.IMAGE;
+  const isOffer = Number(message.messageType) === MESSAGE_TYPE.OFFER;
   const imageUri = isImage ? message.content || images[0]?.imageUrl || "" : undefined;
+  const textContent = isImage
+    ? ""
+    : isOffer
+      ? parseOfferMessageContent(message.content)
+      : message.content || "";
 
   if (isDeleted) {
     return {
@@ -297,7 +304,8 @@ function mapMessageToBroadcast(message, images = []) {
     senderType: Number(message.senderType ?? SENDER_TYPE.USER),
     thuTu: message.ThuTu || 0,
     messageType: message.messageType,
-    content: isImage ? "" : message.content || "",
+    content: textContent,
+    isOffer,
     imageUri,
     images,
     isDeleted: false,
@@ -312,7 +320,13 @@ function mapMessageToClient(message, viewer, images = []) {
   const isMine = isMessageFromViewer(message, viewer);
   const isDeleted = Boolean(message.DeletedAt);
   const isImage = Number(message.messageType) === MESSAGE_TYPE.IMAGE;
+  const isOffer = Number(message.messageType) === MESSAGE_TYPE.OFFER;
   const imageUri = isImage ? message.content || images[0]?.imageUrl || "" : undefined;
+  const textContent = isImage
+    ? ""
+    : isOffer
+      ? parseOfferMessageContent(message.content)
+      : message.content || "";
 
   if (isDeleted) {
     return {
@@ -342,7 +356,8 @@ function mapMessageToClient(message, viewer, images = []) {
     thuTu: message.ThuTu || 0,
     isMine,
     messageType: message.messageType,
-    content: isImage ? "" : message.content || "",
+    content: textContent,
+    isOffer,
     imageUri,
     images,
     isDeleted: false,
@@ -428,6 +443,26 @@ async function resolveImageContent(imageContent) {
 
 function resolveMessagePayload(payload = {}) {
   const messageType = Number(payload.messageType ?? MESSAGE_TYPE.TEXT);
+  if (messageType === MESSAGE_TYPE.OFFER) {
+    const content = pickString(payload.content || payload.message);
+    if (!content) {
+      throw createServiceError("Thiếu nội dung đề nghị giá.");
+    }
+    let preview = "Đề nghị deal giá";
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.offeredPrice) {
+        preview = `Deal: ${Number(parsed.offeredPrice).toLocaleString("vi-VN")}đ`;
+      }
+    } catch {
+      preview = content.slice(0, 80);
+    }
+    return {
+      messageType: MESSAGE_TYPE.OFFER,
+      content,
+      preview,
+    };
+  }
   if (messageType === MESSAGE_TYPE.IMAGE) {
     const imageContent = pickString(payload.imageContent || payload.content);
     if (!imageContent) {
@@ -857,6 +892,7 @@ module.exports = {
   getBuyerConversationPeer,
   startConversationWithShop,
   startConversationWithBuyer,
+  findOrCreateBuyerConversation,
   getShopPublicInfo,
   mapBuyerPublicInfo,
 };

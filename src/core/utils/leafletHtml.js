@@ -67,6 +67,19 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         margin-bottom: 154px;
       }
 
+      .destination-marker {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        border: 3px solid #ffffff;
+        background: #dc2626;
+        color: #ffffff;
+        font-size: 18px;
+        box-shadow: 0 6px 16px rgba(220, 38, 38, 0.35);
+      }
+
       .restaurant-marker {
         display: grid;
         place-items: center;
@@ -128,6 +141,9 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       let activeRadiusMeters = null;
       let userMovedMap = false;
       let restaurantMarkers = [];
+      let routeLayer = null;
+      let destinationMarker = null;
+      let activeRouteDestination = null;
 
       function hasLocation(value) {
         return (
@@ -295,6 +311,81 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         }
       }
 
+      function clearRoute() {
+        if (routeLayer) {
+          map.removeLayer(routeLayer);
+          routeLayer = null;
+        }
+        if (destinationMarker) {
+          map.removeLayer(destinationMarker);
+          destinationMarker = null;
+        }
+        activeRouteDestination = null;
+      }
+
+      async function showRoute(from, to) {
+        clearRoute();
+
+        if (!hasLocation(from) || !hasLocation(to)) {
+          postToApp({ type: 'routeError', message: 'Thiếu vị trí để chỉ đường.' });
+          return;
+        }
+
+        activeRouteDestination = to;
+
+        const destIcon = L.divIcon({
+          className: '',
+          html: '<div class="destination-marker">🏪</div>',
+          iconSize: [36, 36],
+          iconAnchor: [18, 18],
+        });
+
+        destinationMarker = L.marker(getLatLng(to), { icon: destIcon, interactive: false }).addTo(map);
+
+        try {
+          const url =
+            'https://router.project-osrm.org/route/v1/driving/' +
+            Number(from.longitude) + ',' + Number(from.latitude) + ';' +
+            Number(to.longitude) + ',' + Number(to.latitude) +
+            '?overview=full&geometries=geojson';
+
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (!data || !data.routes || !data.routes[0]) {
+            throw new Error('Không tìm được lộ trình.');
+          }
+
+          const route = data.routes[0];
+          const coords = route.geometry.coordinates.map(function(point) {
+            return [point[1], point[0]];
+          });
+
+          routeLayer = L.polyline(coords, {
+            color: '#0f766e',
+            weight: 6,
+            opacity: 0.9,
+            lineJoin: 'round',
+          }).addTo(map);
+
+          map.fitBounds(routeLayer.getBounds(), { padding: [100, 48], maxZoom: 17, animate: true });
+
+          postToApp({
+            type: 'routeReady',
+            distance: route.distance || 0,
+            duration: route.duration || 0,
+            destination: to,
+          });
+        } catch (error) {
+          clearRoute();
+          map.setView(getLatLng(to), 16, { animate: true });
+          postToApp({
+            type: 'routeError',
+            message: error && error.message ? error.message : 'Không vẽ được lộ trình.',
+          });
+        }
+      }
+
       function drawRestaurants(restaurantsList) {
         clearLayerList(restaurantMarkers);
         
@@ -395,6 +486,14 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
 
         if (command.type === 'radiusCircle') {
           drawRadiusCircle(command.center, command.radius);
+        }
+
+        if (command.type === 'showRoute') {
+          showRoute(command.from, command.to);
+        }
+
+        if (command.type === 'clearRoute') {
+          clearRoute();
         }
       }
 

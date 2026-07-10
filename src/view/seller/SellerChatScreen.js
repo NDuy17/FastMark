@@ -11,11 +11,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { getCurrentUserIdToken } from '../../repository/authRepository';
-import {
-  getSellerMessagesOnBackend,
-  sendSellerMessageOnBackend,
-} from '../../api/sellerOpsApi';
+import { getReadableMessageContent, isOfferMessage } from '../../core/utils/offerMessageFormat';
 
 const MESSAGE_STATUS_LABEL = {
   sent: 'Đã gửi',
@@ -91,19 +87,27 @@ function MessageStatus({ status }) {
 
 function ChatBubble({ item }) {
   const isMine = Boolean(item.isMine);
+  const messageText = getReadableMessageContent(item);
+  const isOffer = isOfferMessage(item);
 
   return (
     <View style={[styles.messageRow, isMine ? styles.messageRowMine : styles.messageRowOther]}>
-      <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
+      <View
+        style={[
+          styles.bubble,
+          isMine ? styles.bubbleMine : styles.bubbleOther,
+          isOffer && (isMine ? styles.bubbleOfferMine : styles.bubbleOfferOther),
+        ]}
+      >
         {item.imageUri ? (
           <View style={styles.imageBubble}>
             <Text style={styles.imageBubbleIcon}>🖼️</Text>
             <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]} numberOfLines={2}>
-              {item.content || 'Ảnh sản phẩm'}
+              {messageText || 'Ảnh sản phẩm'}
             </Text>
           </View>
         ) : (
-          <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]}>{item.content}</Text>
+          <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]}>{messageText}</Text>
         )}
       </View>
       {isMine ? <MessageStatus status={item.status} /> : null}
@@ -405,6 +409,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderBottomLeftRadius: 4,
+  },
+  bubbleOfferMine: {
+    backgroundColor: '#b45309',
+  },
+  bubbleOfferOther: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
   },
   bubbleText: { color: '#0f172a', fontSize: 14, lineHeight: 20, fontWeight: '500' },
   bubbleTextMine: { color: '#ffffff' },

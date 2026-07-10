@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
+
+import { completeBuyerReservationOnBackend } from '../../api/buyerOpsApi';
+import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { formatDistanceMeters, formatDurationSeconds } from '../../core/utils/pickupDateTime';
 
 import LeafletMap from '../shared/components/LeafletMap';
 import AddressSearchBar from './AddressSearchBar';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
+import DealOfferModal from '../buyer/DealOfferModal';
+import ReservationModal from '../buyer/ReservationModal';
 import { calculateDistanceMeters, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { loadRestaurants, loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
 import { loadStoreById } from '../../viewmodel/store/storeViewModel';
@@ -19,7 +25,13 @@ const TYPE_EMOJI = {
   shop: '🏪',
 };
 
-export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
+export default function MapScreen({
+  children,
+  focusStoreRequest,
+  onOpenChat,
+  onClearFocus,
+  onPickupCompleted,
+}) {
   const watcherRef = useRef(null);
   const mountedRef = useRef(false);
   const [currentLocation, setCurrentLocation] = useState(null);
@@ -31,6 +43,11 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
   const [restaurants, setRestaurants] = useState([]);
   const [registeredShops, setRegisteredShops] = useState([]);
   const [storeNav, setStoreNav] = useState(null);
+  const [dealModal, setDealModal] = useState(null);
+  const [reserveModal, setReserveModal] = useState(null);
+  const [directionsSession, setDirectionsSession] = useState(null);
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [isCompletingPickup, setIsCompletingPickup] = useState(false);
   const lastAcceptedRef = useRef(null);
 
   const openStore = useCallback((storeId) => {
@@ -215,6 +232,7 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
   useEffect(() => {
     const targetStoreId = focusStoreRequest?.storeId;
     const targetLocation = focusStoreRequest?.location;
+    const showDirections = Boolean(focusStoreRequest?.showDirections);
 
     if (targetLocation?.latitude && targetLocation?.longitude) {
       setMenuVisible(false);
@@ -237,6 +255,9 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
 
     function applyFocus(targetStore) {
       if (!isCurrent || !targetStore?.latitude || !targetStore?.longitude) {
+        if (showDirections) {
+          Alert.alert('Không chỉ đường được', 'Gian hàng chưa có tọa độ trên bản đồ.');
+        }
         return;
       }
 
@@ -244,6 +265,20 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
       setSelectedCategory('all');
       setSelectedRadius(null);
       setStoreNav(null);
+
+      if (showDirections) {
+        setDirectionsSession({
+          storeId: String(targetStoreId),
+          reservationId: focusStoreRequest?.reservationId || null,
+          storeName: focusStoreRequest?.storeName || targetStore.name || 'Gian hàng',
+          destination: {
+            latitude: targetStore.latitude,
+            longitude: targetStore.longitude,
+          },
+        });
+        setRouteInfo(null);
+      }
+
       setRecenterRequest({
         location: {
           latitude: targetStore.latitude,
@@ -251,7 +286,7 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
         },
         at: focusStoreRequest.at || Date.now(),
       });
-      log.info('focusStoreRequest', { storeId: targetStoreId });
+      log.info('focusStoreRequest', { storeId: targetStoreId, showDirections });
     }
 
     const cachedStore = [...restaurants, ...registeredShops].find(
@@ -372,8 +407,65 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
     log.debug('mapEvent', payload?.type, payload);
     if (payload?.type === 'restaurantTap' && payload.restaurant?.id != null) {
       openStore(payload.restaurant.id);
+      return;
+    }
+    if (payload?.type === 'routeReady') {
+      setRouteInfo({
+        distance: payload.distance,
+        duration: payload.duration,
+      });
+      return;
+    }
+    if (payload?.type === 'routeError') {
+      setRouteInfo(null);
+      Alert.alert('Chỉ đường', payload.message || 'Không vẽ được lộ trình.');
     }
   }, [openStore]);
+
+  const routeRequest = useMemo(() => {
+    if (!directionsSession?.destination || !hasValidLocation(currentLocation)) {
+      return null;
+    }
+    return {
+      from: currentLocation,
+      to: directionsSession.destination,
+      at: Date.now(),
+    };
+  }, [directionsSession, currentLocation]);
+
+  function handleStopDirections() {
+    setDirectionsSession(null);
+    setRouteInfo(null);
+    onClearFocus?.();
+  }
+
+  async function handleCompletePickup() {
+    if (!directionsSession?.reservationId) {
+      Alert.alert('Thông báo', 'Không tìm thấy mã đơn giữ hàng.');
+      return;
+    }
+
+    Alert.alert('Xác nhận', 'Bạn đã lấy hàng tại shop?', [
+      { text: 'Huỷ', style: 'cancel' },
+      {
+        text: 'Đã lấy hàng',
+        onPress: async () => {
+          setIsCompletingPickup(true);
+          try {
+            const idToken = await getCurrentUserIdToken();
+            await completeBuyerReservationOnBackend(idToken, directionsSession.reservationId);
+            Alert.alert('Thành công', 'Đã cập nhật trạng thái lấy hàng.');
+            handleStopDirections();
+            onPickupCompleted?.();
+          } catch (error) {
+            Alert.alert('Lỗi', error.message || 'Không cập nhật được trạng thái.');
+          } finally {
+            setIsCompletingPickup(false);
+          }
+        },
+      },
+    ]);
+  }
 
   function handleSearchSelect(result) {
     if (!result?.latitude || !result?.longitude) {
@@ -415,8 +507,10 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
   const showNearbyPanel =
     selectedCategory !== 'none' && visibleRestaurants.length > 0 && !storeNav;
 
+  let screenContent;
+
   if (storeNav?.screen === 'store') {
-    return (
+    screenContent = (
       <StoreDetailScreen
         storeId={storeNav.storeId}
         onBack={closeStoreNav}
@@ -424,26 +518,36 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
         onOpenChat={onOpenChat}
       />
     );
-  }
-
-  if (storeNav?.screen === 'product') {
-    return (
+  } else if (storeNav?.screen === 'product') {
+    screenContent = (
       <ProductDetailScreen
         productId={storeNav.productId}
         onBack={goBackStoreNav}
         onStorePress={openStore}
         onOpenChat={onOpenChat}
+        onDeal={(product, store) =>
+          setDealModal({
+            product: { ...product, id: product.id || storeNav.productId },
+            store,
+          })
+        }
+        onReserve={(product, store) =>
+          setReserveModal({
+            product: { ...product, id: product.id || storeNav.productId },
+            store,
+          })
+        }
       />
     );
-  }
-
-  return (
-    <View style={styles.container}>
+  } else {
+    screenContent = (
+      <View style={styles.container}>
       <View style={styles.mapArea} pointerEvents="box-none">
         <LeafletMap
           currentLocation={currentLocation}
-          radiusCircle={radiusCircleProp}
+          radiusCircle={directionsSession ? null : radiusCircleProp}
           recenterRequest={recenterRequest}
+          routeRequest={routeRequest}
           restaurants={visibleRestaurants}
           onEvent={handleMapEvent}
         />
@@ -537,53 +641,106 @@ export default function MapScreen({ children, focusStoreRequest, onOpenChat }) {
         {children}
       </View>
 
-      <View style={styles.nearbyPanel}>
-        <Text style={styles.nearbyTitle}>
-          {showNearbyPanel
-            ? `${visibleRestaurants.length} điểm trong ${selectedRadiusLabel} — chạm để xem`
-            : selectedCategory === 'none'
-              ? 'Chọn loại hiển thị để xem danh sách'
-              : !hasValidLocation(currentLocation)
-                ? 'Đang lấy vị trí để quét gian hàng gần bạn...'
-                : `Không có điểm nào trong bán kính ${selectedRadiusLabel}`}
-        </Text>
-        {showNearbyPanel ? (
-          <FlatList
-            data={visibleRestaurants}
-            keyExtractor={(item) => String(item.id)}
-            numColumns={2}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.nearbyList}
-            columnWrapperStyle={styles.nearbyRow}
-            renderItem={({ item: restaurant }) => (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.nearbyCard,
-                  pressed && styles.nearbyCardPressed,
-                ]}
-                onPress={() => openStore(restaurant.id)}
-              >
-                {restaurant.image_url ? (
-                  <Image
-                    source={{ uri: restaurant.image_url }}
-                    style={styles.nearbyThumb}
-                  />
-                ) : (
-                  <View style={styles.nearbyThumbPlaceholder}>
-                    <Text style={styles.nearbyThumbEmoji}>
-                      {TYPE_EMOJI[restaurant.type] || '🏪'}
-                    </Text>
-                  </View>
-                )}
-                <Text style={styles.nearbyName} numberOfLines={2}>
-                  {restaurant.name}
+      {directionsSession ? (
+        <View style={styles.directionsCard}>
+          <View style={styles.directionsCardHeader}>
+            <Text style={styles.directionsCardIcon}>🧭</Text>
+            <View style={styles.directionsCardTitles}>
+              <Text style={styles.directionsTitle}>Chỉ đường đến {directionsSession.storeName}</Text>
+              {routeInfo ? (
+                <Text style={styles.directionsMeta}>
+                  {formatDistanceMeters(routeInfo.distance)} • {formatDurationSeconds(routeInfo.duration)}
                 </Text>
-              </Pressable>
-            )}
-          />
-        ) : null}
-      </View>
+              ) : (
+                <Text style={styles.directionsMeta}>Đang tính lộ trình...</Text>
+              )}
+            </View>
+          </View>
+          <View style={styles.directionsActions}>
+            <Pressable style={styles.directionsSecondaryBtn} onPress={handleStopDirections}>
+              <Text style={styles.directionsSecondaryText}>Tắt chỉ đường</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.directionsPrimaryBtn, isCompletingPickup && styles.directionsPrimaryBtnDisabled]}
+              disabled={isCompletingPickup}
+              onPress={handleCompletePickup}
+            >
+              <Text style={styles.directionsPrimaryText}>
+                {isCompletingPickup ? 'Đang cập nhật...' : '✓ Đã lấy hàng'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.nearbyPanel}>
+          <Text style={styles.nearbyTitle}>
+            {showNearbyPanel
+              ? `${visibleRestaurants.length} điểm trong ${selectedRadiusLabel} — chạm để xem`
+              : selectedCategory === 'none'
+                ? 'Chọn loại hiển thị để xem danh sách'
+                : !hasValidLocation(currentLocation)
+                  ? 'Đang lấy vị trí để quét gian hàng gần bạn...'
+                  : `Không có điểm nào trong bán kính ${selectedRadiusLabel}`}
+          </Text>
+          {showNearbyPanel ? (
+            <FlatList
+              data={visibleRestaurants}
+              keyExtractor={(item) => String(item.id)}
+              numColumns={2}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.nearbyList}
+              columnWrapperStyle={styles.nearbyRow}
+              renderItem={({ item: restaurant }) => (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.nearbyCard,
+                    pressed && styles.nearbyCardPressed,
+                  ]}
+                  onPress={() => openStore(restaurant.id)}
+                >
+                  {restaurant.image_url ? (
+                    <Image
+                      source={{ uri: restaurant.image_url }}
+                      style={styles.nearbyThumb}
+                    />
+                  ) : (
+                    <View style={styles.nearbyThumbPlaceholder}>
+                      <Text style={styles.nearbyThumbEmoji}>
+                        {TYPE_EMOJI[restaurant.type] || '🏪'}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.nearbyName} numberOfLines={2}>
+                    {restaurant.name}
+                  </Text>
+                </Pressable>
+              )}
+            />
+          ) : null}
+        </View>
+      )}
     </View>
+    );
+  }
+
+  return (
+    <>
+      {screenContent}
+      <DealOfferModal
+        visible={Boolean(dealModal)}
+        product={dealModal?.product}
+        store={dealModal?.store}
+        onClose={() => setDealModal(null)}
+        onSuccess={() => setDealModal(null)}
+      />
+      <ReservationModal
+        visible={Boolean(reserveModal)}
+        product={reserveModal?.product}
+        store={reserveModal?.store}
+        onClose={() => setReserveModal(null)}
+        onSuccess={() => setReserveModal(null)}
+      />
+    </>
   );
 }
 
@@ -788,5 +945,78 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0f766e',
     fontWeight: 'bold',
+  },
+  directionsCard: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  directionsCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  directionsCardIcon: {
+    fontSize: 28,
+    marginTop: 2,
+  },
+  directionsCardTitles: {
+    flex: 1,
+  },
+  directionsTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  directionsMeta: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f766e',
+  },
+  directionsActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  directionsSecondaryBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  directionsSecondaryText: {
+    color: '#475569',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  directionsPrimaryBtn: {
+    flex: 1.2,
+    minHeight: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f766e',
+  },
+  directionsPrimaryBtnDisabled: {
+    opacity: 0.7,
+  },
+  directionsPrimaryText: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 13,
   },
 });

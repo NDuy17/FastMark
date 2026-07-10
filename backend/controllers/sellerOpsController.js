@@ -97,7 +97,7 @@ exports.listDeals = async (req, res) => {
 exports.acceptDeal = async (req, res) => {
   const result = await dealOfferService.acceptDealOffer(req.currentUser, req.params.id);
   return success(res, {
-    message: "Đã chấp nhận deal giá. Khách không thể hủy sau 15 phút.",
+    message: "Đã chấp nhận deal giá. Khách sẽ chọn giờ lấy hàng.",
     data: result,
   });
 };

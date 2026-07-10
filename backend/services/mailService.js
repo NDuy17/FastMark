@@ -67,8 +67,51 @@ async function sendVerificationEmail({ to, code, expiresInMinutes = 5 }) {
   return true;
 }
 
+async function sendPasswordResetEmail({ to, code, expiresInMinutes = 5 }) {
+  const transporter = getTransporter();
+
+  if (!transporter) {
+    throw new Error("SMTP chưa cấu hình. Không thể gửi email đặt lại mật khẩu.");
+  }
+
+  const from = smtpFrom || smtpUser;
+
+  await transporter.sendMail({
+    from: `FastMark <${from}>`,
+    to,
+    subject: "Mã OTP đặt lại mật khẩu FastMark",
+    text: [
+      "Xin chào,",
+      "",
+      `Mã OTP đặt lại mật khẩu của bạn là: ${code}`,
+      `Mã có hiệu lực trong ${expiresInMinutes} phút.`,
+      "",
+      "Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email.",
+    ].join("\n"),
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
+        <h2 style="color:#0f766e">Đặt lại mật khẩu FastMark</h2>
+        <p>Mã OTP của bạn:</p>
+        <p style="font-size:28px;font-weight:bold;letter-spacing:4px;color:#0f766e">${code}</p>
+        <p>Mã hết hạn sau <strong>${expiresInMinutes} phút</strong>.</p>
+        <p style="color:#64748b;font-size:13px">Nếu bạn không yêu cầu, hãy bỏ qua email.</p>
+      </div>
+    `,
+  }).catch((error) => {
+    if (error.code === "EAUTH") {
+      throw new Error(
+        "Gmail từ chối đăng nhập SMTP. Tạo lại App Password trong Google Account."
+      );
+    }
+    throw error;
+  });
+
+  return true;
+}
+
 module.exports = {
   isMailConfigured,
   getTransporter,
   sendVerificationEmail,
+  sendPasswordResetEmail,
 };

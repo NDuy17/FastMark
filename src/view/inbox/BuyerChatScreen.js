@@ -12,11 +12,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  getBuyerMessagesOnBackend,
-  sendBuyerMessageOnBackend,
-  startBuyerConversationOnBackend,
-} from '../../api/messageApi';
+import { getReadableMessageContent, isOfferMessage } from '../../core/utils/offerMessageFormat';
 
 const MESSAGE_STATUS_LABEL = {
   sent: 'Đã gửi',
@@ -66,15 +62,26 @@ function ImageMessageContent({ imageUri, isMine, caption }) {
 
 function ChatBubble({ item, shopInitial }) {
   const isMine = Boolean(item.isMine);
+  const messageText = getReadableMessageContent(item);
+  const isOffer = isOfferMessage(item);
 
   if (isMine) {
     return (
       <View style={[styles.messageRow, styles.messageRowMine]}>
-        <View style={[styles.bubble, styles.bubbleMine, item.imageUri && styles.bubbleImage]}>
+        <View
+          style={[
+            styles.bubble,
+            styles.bubbleMine,
+            item.imageUri && styles.bubbleImage,
+            isOffer && styles.bubbleOffer,
+          ]}
+        >
           {item.imageUri ? (
-            <ImageMessageContent imageUri={item.imageUri} isMine caption={item.content} />
+            <ImageMessageContent imageUri={item.imageUri} isMine caption={messageText} />
           ) : (
-            <Text style={[styles.bubbleText, styles.bubbleTextMine]}>{item.content}</Text>
+            <Text style={[styles.bubbleText, styles.bubbleTextMine, isOffer && styles.offerText]}>
+              {messageText}
+            </Text>
           )}
         </View>
         <MessageStatus status={item.status} />
@@ -88,11 +95,18 @@ function ChatBubble({ item, shopInitial }) {
         <Text style={styles.shopAvatarText}>{shopInitial || 'S'}</Text>
       </View>
       <View style={styles.messageRowOther}>
-        <View style={[styles.bubble, styles.bubbleOther, item.imageUri && styles.bubbleImage]}>
+        <View
+          style={[
+            styles.bubble,
+            styles.bubbleOther,
+            item.imageUri && styles.bubbleImage,
+            isOffer && styles.bubbleOfferOther,
+          ]}
+        >
           {item.imageUri ? (
-            <ImageMessageContent imageUri={item.imageUri} isMine={false} caption={item.content} />
+            <ImageMessageContent imageUri={item.imageUri} isMine={false} caption={messageText} />
           ) : (
-            <Text style={styles.bubbleText}>{item.content}</Text>
+            <Text style={[styles.bubbleText, isOffer && styles.offerTextOther]}>{messageText}</Text>
           )}
         </View>
       </View>
@@ -434,6 +448,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderBottomLeftRadius: 4,
+  },
+  bubbleOffer: {
+    backgroundColor: '#b45309',
+  },
+  bubbleOfferOther: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+  },
+  offerText: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  offerTextOther: {
+    color: '#92400e',
+    fontWeight: '700',
   },
   bubbleText: { color: '#0f172a', fontSize: 14, lineHeight: 20, fontWeight: '500' },
   bubbleTextMine: { color: '#ffffff' },

@@ -196,3 +196,52 @@ export async function uploadCoverOnBackend({ idToken, imageBase64, mimeType = 'i
   const payload = await parseApiResponse(response);
   return payload.data;
 }
+
+export async function requestPasswordResetOnBackend({ email }) {
+  ensureBackendApiConfigured();
+
+  const response = await apiRequest(
+    API_ENDPOINTS.authForgotPasswordRequest,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+
+  return parseApiResponse(response);
+}
+
+export async function verifyPasswordResetOtpOnBackend({ email, code }) {
+  ensureBackendApiConfigured();
+
+  const response = await apiRequest(
+    API_ENDPOINTS.authForgotPasswordVerify,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+
+  const payload = await parseApiResponse(response);
+  return payload.data;
+}
+
+export async function resetPasswordOnBackend({ email, resetToken, newPassword }) {
+  ensureBackendApiConfigured();
+
+  const response = await apiRequest(
+    API_ENDPOINTS.authForgotPasswordReset,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, resetToken, newPassword }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+
+  return parseApiResponse(response);
+}

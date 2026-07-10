@@ -412,3 +412,50 @@ exports.setShopPresenceOffline = async (req, res) => {
     data: { presence },
   });
 };
+
+exports.requestPasswordReset = async (req, res) => {
+  const email = pickBodyValue(req.body, ["email", "Email"]);
+  if (!email) {
+    return fail(res, { status: 400, message: "Thiếu email." });
+  }
+
+  const meta = await authService.requestPasswordReset({ email });
+  return success(res, {
+    message: "Đã gửi mã OTP đến email của bạn.",
+    data: { verification: meta },
+  });
+};
+
+exports.verifyPasswordResetOtp = async (req, res) => {
+  const email = pickBodyValue(req.body, ["email", "Email"]);
+  const code = pickBodyValue(req.body, ["code", "otp", "OTP"]);
+
+  if (!email || !code) {
+    return fail(res, { status: 400, message: "Thiếu email hoặc mã OTP." });
+  }
+
+  const result = await authService.verifyPasswordResetOtp({ email, code });
+  return success(res, {
+    message: "Xác thực OTP thành công.",
+    data: result,
+  });
+};
+
+exports.resetPassword = async (req, res) => {
+  const email = pickBodyValue(req.body, ["email", "Email"]);
+  const resetToken = pickBodyValue(req.body, ["resetToken", "reset_token"]);
+  const newPassword = pickBodyValue(req.body, ["newPassword", "password", "Password"]);
+
+  if (!email || !resetToken || !newPassword) {
+    return fail(res, { status: 400, message: "Thiếu email, mã xác thực hoặc mật khẩu mới." });
+  }
+
+  if (newPassword.length < 6) {
+    return fail(res, { status: 400, message: "Mật khẩu phải có ít nhất 6 ký tự." });
+  }
+
+  await authService.resetPasswordWithToken({ email, resetToken, newPassword });
+  return success(res, {
+    message: "Đã đặt lại mật khẩu thành công. Vui lòng đăng nhập lại.",
+  });
+};

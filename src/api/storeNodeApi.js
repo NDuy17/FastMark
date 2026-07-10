@@ -47,6 +47,51 @@ export async function fetchNearbyShopsFromNode({ latitude, longitude, radiusMete
   return payload.data?.shops || [];
 }
 
+export async function fetchSearchShopsFromNode({
+  latitude,
+  longitude,
+  radiusMeters = 2000,
+  shopQuery = '',
+  shopCategoryId = '',
+  productCategoryId = '',
+  productQuery = '',
+  limit = 50,
+}) {
+  if (!hasStoreNodeApi()) {
+    return { shops: [], count: 0 };
+  }
+
+  const params = new URLSearchParams({
+    lat: String(latitude),
+    lng: String(longitude),
+    radius: String(radiusMeters),
+    limit: String(limit),
+  });
+
+  const trimmedShopQuery = String(shopQuery || '').trim();
+  const trimmedProductQuery = String(productQuery || '').trim();
+  if (trimmedShopQuery) {
+    params.set('q', trimmedShopQuery);
+  }
+  if (shopCategoryId) {
+    params.set('shopCategoryId', String(shopCategoryId));
+  }
+  if (productCategoryId) {
+    params.set('productCategoryId', String(productCategoryId));
+  }
+  if (trimmedProductQuery) {
+    params.set('product', trimmedProductQuery);
+  }
+
+  const response = await apiRequest(`${API_ENDPOINTS.shopsSearch}?${params.toString()}`);
+  const payload = await parseJson(response, 'fetchSearchShopsFromNode');
+  return {
+    shops: payload.data?.shops || [],
+    count: payload.data?.count || 0,
+    radiusMeters: payload.data?.radius_meters ?? radiusMeters,
+  };
+}
+
 export async function fetchStoreFromNode(storeId) {
   if (!hasStoreNodeApi()) {
     return null;

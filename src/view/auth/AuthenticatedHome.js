@@ -114,6 +114,26 @@ export default function AuthenticatedHome() {
     setActiveTab('home');
   }
 
+  function handleNavigatePickup({ shopId, reservationId, storeName }) {
+    setMapFocusRequest({
+      storeId: String(shopId),
+      reservationId,
+      storeName,
+      showDirections: true,
+      at: Date.now(),
+    });
+    setAppMode(APP_MODE_BUYER);
+    setActiveTab('home');
+  }
+
+  function handleClearMapFocus() {
+    setMapFocusRequest(null);
+  }
+
+  function handlePickupCompleted() {
+    setActiveTab('orders');
+  }
+
   function handleSearchSelect(result) {
     if (!result?.latitude || !result?.longitude) {
       return;
@@ -175,11 +195,16 @@ export default function AuthenticatedHome() {
     if (isBuyerMode) {
       return {
         home: (
-          <MapScreen focusStoreRequest={mapFocusRequest} onOpenChat={handleOpenChat} />
+          <MapScreen
+            focusStoreRequest={mapFocusRequest}
+            onOpenChat={handleOpenChat}
+            onClearFocus={handleClearMapFocus}
+            onPickupCompleted={handlePickupCompleted}
+          />
         ),
-        search: <SearchScreen onSelectLocation={handleSearchSelect} />,
+        search: <SearchScreen onSelectLocation={handleSearchSelect} onOpenStore={handleOpenStoreFromProfile} />,
         products: <ProductsScreen />,
-        orders: <BuyerOrdersScreen onOpenStore={handleOpenStoreFromProfile} />,
+        orders: <BuyerOrdersScreen onNavigatePickup={handleNavigatePickup} />,
         inbox: (
           <InboxScreen
             buyerView

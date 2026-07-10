@@ -213,13 +213,17 @@ export default function ProductDetailScreen({
           style={({ pressed }) => [styles.actionBtn, styles.reserveBtn, pressed && styles.pressed]}
           onPress={() => onReserve?.(product, store)}
         >
+          <Text style={styles.actionBtnIcon}>📦</Text>
           <Text style={styles.reserveBtnText}>Giữ hàng</Text>
+          <Text style={styles.actionBtnHint}>Đặt trước</Text>
         </Pressable>
         <Pressable
           style={({ pressed }) => [styles.actionBtn, styles.dealBtn, pressed && styles.pressed]}
           onPress={() => onDeal?.(product, store)}
         >
+          <Text style={styles.actionBtnIcon}>💬</Text>
           <Text style={styles.dealBtnText}>Deal giá</Text>
+          <Text style={styles.actionBtnHintDeal}>Thương lượng</Text>
         </Pressable>
         <Pressable
           style={({ pressed }) => [styles.chatButton, pressed && styles.pressed]}
@@ -513,13 +517,27 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   actionBtn: {
+    flex: 1,
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 1,
+  },
+  actionBtnIcon: {
+    fontSize: 18,
+  },
+  actionBtnHint: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  actionBtnHintDeal: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#92400e',
   },
   reserveBtn: {
-    flex: 1,
     backgroundColor: '#e0f2f1',
   },
   reserveBtnText: {
@@ -528,7 +546,6 @@ const styles = StyleSheet.create({
     color: '#0f766e',
   },
   dealBtn: {
-    flex: 1,
     backgroundColor: '#fef3c7',
   },
   dealBtnText: {

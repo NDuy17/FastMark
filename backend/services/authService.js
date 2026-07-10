@@ -9,7 +9,7 @@ const {
   mapFirebaseAdminError,
   mapFirebaseRestError,
 } = require("../utils/firebaseErrors");
-const { sendVerificationEmail } = require("./mailService");
+const { sendVerificationEmail, sendPasswordResetEmail } = require("./mailService");
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
@@ -442,6 +442,206 @@ async function confirmEmailVerification({ firebaseUid, code }) {
   return user;
 }
 
+const PASSWORD_RESET_TTL_MS = 5 * 60 * 1000;
+const PASSWORD_RESET_RESEND_COOLDOWN_MS = 3 * 60 * 1000;
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_SESSION_TTL_MS = 10 * 60 * 1000;
+
+const passwordResetAttempts = new Map();
+const passwordResetSessions = new Map();
+
+function buildPasswordResetMeta(user) {
+  const expiresAt = user.EmailVerifyCodeExpiresAt;
+  const expiresInSeconds = expiresAt
+    ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000))
+    : 0;
+
+  let resendCooldownSeconds = 0;
+  if (user.EmailVerifyResendAt) {
+    const resendAvailableAt = user.EmailVerifyResendAt.getTime() + PASSWORD_RESET_RESEND_COOLDOWN_MS;
+    resendCooldownSeconds = Math.max(0, Math.floor((resendAvailableAt - Date.now()) / 1000));
+  }
+
+  return {
+    expiresInSeconds: expiresInSeconds || Math.floor(PASSWORD_RESET_TTL_MS / 1000),
+    resendCooldownSeconds,
+  };
+}
+
+function getResetAttemptState(email) {
+  const state = passwordResetAttempts.get(email);
+  if (!state) {
+    return { count: 0, lockedUntil: 0 };
+  }
+  if (state.lockedUntil && Date.now() < state.lockedUntil) {
+    return state;
+  }
+  if (state.lockedUntil && Date.now() >= state.lockedUntil) {
+    passwordResetAttempts.delete(email);
+    return { count: 0, lockedUntil: 0 };
+  }
+  return state;
+}
+
+function recordFailedResetAttempt(email) {
+  const state = getResetAttemptState(email);
+  const count = (state.count || 0) + 1;
+  if (count >= PASSWORD_RESET_MAX_ATTEMPTS) {
+    passwordResetAttempts.set(email, {
+      count,
+      lockedUntil: Date.now() + PASSWORD_RESET_TTL_MS,
+    });
+    return;
+  }
+  passwordResetAttempts.set(email, { count, lockedUntil: 0 });
+}
+
+async function requestPasswordReset({ email }) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    const error = new Error("Thiếu email.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { findUserByEmail } = require("./userService");
+  const user = await findUserByEmail(normalizedEmail);
+
+  if (!user) {
+    const error = new Error("Không tìm thấy tài khoản với email này.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (user.AuthProvider !== "email") {
+    const error = new Error("Tài khoản đăng nhập Google không thể đặt lại mật khẩu qua email.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  assertResendCooldown(user);
+
+  const code = generateEmailVerifyCode();
+  user.EmailVerifyCode = code;
+  user.EmailVerifyCodeExpiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+  user.EmailVerifyResendAt = new Date();
+  await user.save();
+
+  passwordResetAttempts.delete(normalizedEmail);
+  passwordResetSessions.delete(normalizedEmail);
+
+  await sendPasswordResetEmail({
+    to: normalizedEmail,
+    code,
+    expiresInMinutes: PASSWORD_RESET_TTL_MS / 60000,
+  });
+
+  return buildPasswordResetMeta(user);
+}
+
+async function verifyPasswordResetOtp({ email, code }) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedCode = String(code || "").trim();
+
+  if (!normalizedEmail || !normalizedCode) {
+    const error = new Error("Thiếu email hoặc mã OTP.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const attemptState = getResetAttemptState(normalizedEmail);
+  if (attemptState.lockedUntil && Date.now() < attemptState.lockedUntil) {
+    const waitSeconds = Math.ceil((attemptState.lockedUntil - Date.now()) / 1000);
+    const error = new Error(`Đã nhập sai quá nhiều lần. Thử lại sau ${waitSeconds} giây.`);
+    error.statusCode = 429;
+    throw error;
+  }
+
+  const { findUserByEmail } = require("./userService");
+  const user = await findUserByEmail(normalizedEmail);
+
+  if (!user) {
+    const error = new Error("Không tìm thấy tài khoản.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (!user.EmailVerifyCode || user.EmailVerifyCode !== normalizedCode) {
+    recordFailedResetAttempt(normalizedEmail);
+    const error = new Error("Mã OTP không đúng.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!user.EmailVerifyCodeExpiresAt || new Date() > user.EmailVerifyCodeExpiresAt) {
+    const error = new Error("Mã OTP đã hết hạn. Vui lòng gửi lại.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  passwordResetAttempts.delete(normalizedEmail);
+  const resetToken = `${user._id}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  passwordResetSessions.set(normalizedEmail, {
+    token: resetToken,
+    expiresAt: Date.now() + PASSWORD_RESET_SESSION_TTL_MS,
+  });
+
+  return {
+    resetToken,
+    expiresInSeconds: Math.floor(PASSWORD_RESET_SESSION_TTL_MS / 1000),
+  };
+}
+
+async function resetPasswordWithToken({ email, resetToken, newPassword }) {
+  const normalizedEmail = normalizeEmail(email);
+  const token = String(resetToken || "").trim();
+
+  if (!normalizedEmail || !token) {
+    const error = new Error("Thiếu thông tin đặt lại mật khẩu.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!newPassword || String(newPassword).length < 6) {
+    const error = new Error("Mật khẩu phải có ít nhất 6 ký tự.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const session = passwordResetSessions.get(normalizedEmail);
+  if (!session || session.token !== token || Date.now() > session.expiresAt) {
+    const error = new Error("Phiên đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { findUserByEmail } = require("./userService");
+  const user = await findUserByEmail(normalizedEmail);
+
+  if (!user?.FirebaseUID) {
+    const error = new Error("Không tìm thấy tài khoản.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  try {
+    await auth.updateUser(user.FirebaseUID, { password: newPassword });
+    await auth.revokeRefreshTokens(user.FirebaseUID);
+  } catch (error) {
+    throw mapFirebaseAdminError(error);
+  }
+
+  user.EmailVerifyCode = null;
+  user.EmailVerifyCodeExpiresAt = null;
+  user.UpdatedAt = new Date();
+  await user.save();
+
+  passwordResetSessions.delete(normalizedEmail);
+  passwordResetAttempts.delete(normalizedEmail);
+
+  return { success: true };
+}
+
 module.exports = {
   registerWithEmail,
   loginWithEmail,
@@ -449,4 +649,7 @@ module.exports = {
   getUserFromToken,
   requestEmailVerification,
   confirmEmailVerification,
+  requestPasswordReset,
+  verifyPasswordResetOtp,
+  resetPasswordWithToken,
 };

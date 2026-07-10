@@ -10,6 +10,7 @@ const { USER_ROLE } = require("../constants/sellerVerification");
 const { PRODUCT_STATUS } = require("../constants/productStatus");
 
 const EARTH_RADIUS_METERS = 6371000;
+const MAX_SEARCH_RADIUS_METERS = 10000;
 
 function toRadians(value) {
   return (Number(value) * Math.PI) / 180;
@@ -37,6 +38,37 @@ function activeProductFilter(extra = {}) {
       { Status: { $exists: false }, IsDeleted: { $ne: true } },
     ],
   };
+}
+
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function shopMatchesKeyword(shop, seller, keyword) {
+  if (!keyword) {
+    return true;
+  }
+
+  const haystack = [
+    shop.shopName,
+    shop.shopUsername,
+    shop.description,
+    shop.address,
+    seller?.FullName,
+    seller?.UserName,
+  ]
+    .map(normalizeSearchText)
+    .filter(Boolean);
+
+  return haystack.some((text) => text.includes(keyword));
+}
+
+function clampSearchRadius(radiusMeters, fallback = 2000) {
+  return Math.min(Math.max(Number(radiusMeters) || fallback, 100), MAX_SEARCH_RADIUS_METERS);
 }
 
 function pickShopText(shop, ...keys) {
@@ -116,7 +148,7 @@ function toPublicStore(
 async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit = 50 }) {
   const lat = Number(latitude);
   const lng = Number(longitude);
-  const radius = Math.min(Math.max(Number(radiusMeters) || 2000, 100), 20000);
+  const radius = clampSearchRadius(radiusMeters, 2000);
   const maxResults = Math.min(Math.max(Number(limit) || 50, 1), 100);
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
@@ -188,6 +220,155 @@ async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit
       categoryNameMap.get(String(shop.categoryId)) || ""
     )
   );
+}
+
+async function searchShops({
+  latitude,
+  longitude,
+  radiusMeters = 2000,
+  limit = 50,
+  q = "",
+  shopCategoryId = "",
+  productCategoryId = "",
+  productQuery = "",
+}) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  const radius = clampSearchRadius(radiusMeters, 2000);
+  const maxResults = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const shopKeyword = normalizeSearchText(q);
+  const productKeyword = normalizeSearchText(productQuery);
+  const normalizedShopCategoryId = String(shopCategoryId || "").trim();
+  const normalizedProductCategoryId = String(productCategoryId || "").trim();
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    const error = new Error("Thiếu tọa độ hợp lệ để tìm theo khoảng cách.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const shops = await ShopProfile.find({
+    latitude: { $ne: null },
+    longitude: { $ne: null },
+    status: { $ne: 0 },
+  }).lean();
+
+  const sellerIds = shops
+    .map((shop) => shop.userId)
+    .filter(Boolean)
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  const sellers = await User.find({
+    _id: { $in: sellerIds },
+    Role: USER_ROLE.SELLER,
+  }).lean();
+  const sellerMap = new Map(sellers.map((seller) => [String(seller._id), seller]));
+  const categoryNameMap = await getCategoryNameMap(shops.map((shop) => shop.categoryId));
+
+  let productMatchesByShopId = null;
+  if (productKeyword || normalizedProductCategoryId) {
+    const productFilter = activeProductFilter();
+    if (normalizedProductCategoryId) {
+      productFilter.CategoryId = normalizedProductCategoryId;
+    }
+    if (productKeyword) {
+      productFilter.ProductName = {
+        $regex: escapeRegex(productKeyword),
+        $options: "i",
+      };
+    }
+
+    const matchingProducts = await Product.find(productFilter)
+      .select("ShopId ProductName CategoryId")
+      .lean();
+
+    productMatchesByShopId = new Map();
+    for (const product of matchingProducts) {
+      const shopId = String(product.ShopId);
+      if (!productMatchesByShopId.has(shopId)) {
+        productMatchesByShopId.set(shopId, []);
+      }
+      const bucket = productMatchesByShopId.get(shopId);
+      if (bucket.length < 5) {
+        bucket.push(product.ProductName || "");
+      }
+    }
+  }
+
+  const results = [];
+
+  for (const shop of shops) {
+    if (!Number.isFinite(Number(shop.latitude)) || !Number.isFinite(Number(shop.longitude))) {
+      continue;
+    }
+
+    const seller = sellerMap.get(String(shop.userId));
+    if (!seller) {
+      continue;
+    }
+
+    const distanceMeters = calculateDistanceMeters(
+      lat,
+      lng,
+      Number(shop.latitude),
+      Number(shop.longitude)
+    );
+
+    if (distanceMeters > radius) {
+      continue;
+    }
+
+    if (normalizedShopCategoryId && String(shop.categoryId || "") !== normalizedShopCategoryId) {
+      continue;
+    }
+
+    if (!shopMatchesKeyword(shop, seller, shopKeyword)) {
+      continue;
+    }
+
+    let matchedProducts = [];
+    if (productMatchesByShopId) {
+      matchedProducts = productMatchesByShopId.get(String(shop._id)) || [];
+      if (matchedProducts.length === 0) {
+        continue;
+      }
+    }
+
+    results.push({
+      shop,
+      seller,
+      distanceMeters,
+      matchedProducts,
+    });
+  }
+
+  results.sort((left, right) => {
+    if (left.distanceMeters !== right.distanceMeters) {
+      return left.distanceMeters - right.distanceMeters;
+    }
+    return (left.shop.shopName || "").localeCompare(right.shop.shopName || "", "vi");
+  });
+
+  const sliced = results.slice(0, maxResults);
+  const productCounts = await Promise.all(
+    sliced.map(({ shop }) =>
+      Product.countDocuments(activeProductFilter({ ShopId: shop._id }))
+    )
+  );
+
+  return sliced.map(({ shop, seller, distanceMeters, matchedProducts }, index) => {
+    const store = toPublicStore(
+      shop,
+      seller,
+      productCounts[index],
+      distanceMeters,
+      categoryNameMap.get(String(shop.categoryId)) || ""
+    );
+    return {
+      ...store,
+      matched_products: matchedProducts,
+      match_score: Math.round(distanceMeters),
+    };
+  });
 }
 
 async function getPublicShopById(shopId) {
@@ -299,7 +480,9 @@ async function listPublicReviewsByShopId(shopId) {
 
 module.exports = {
   listNearbyShops,
+  searchShops,
   getPublicShopById,
+  MAX_SEARCH_RADIUS_METERS,
   listPublicProductsByShopId,
   listPublicReviewsByShopId,
 };

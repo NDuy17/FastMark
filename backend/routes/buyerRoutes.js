@@ -41,4 +41,17 @@ router.post("/reviews", verifyFirebaseToken, asyncHandler(buyerController.create
 router.put("/reviews/:id", verifyFirebaseToken, asyncHandler(buyerController.updateReview));
 router.delete("/reviews/:id", verifyFirebaseToken, asyncHandler(buyerController.deleteReview));
 
+const buyerOpsController = require("../controllers/buyerOpsController");
+
+router.get("/orders", verifyFirebaseToken, asyncHandler(buyerOpsController.listOrders));
+router.post("/deals", verifyFirebaseToken, asyncHandler(buyerOpsController.createDeal));
+router.get("/deals", verifyFirebaseToken, asyncHandler(buyerOpsController.listDeals));
+router.get("/deals/:id", verifyFirebaseToken, asyncHandler(buyerOpsController.getDeal));
+router.post("/deals/:id/resubmit", verifyFirebaseToken, asyncHandler(buyerOpsController.resubmitDeal));
+router.post("/deals/:id/accept-counter", verifyFirebaseToken, asyncHandler(buyerOpsController.acceptCounter));
+router.post("/reservations", verifyFirebaseToken, asyncHandler(buyerOpsController.createReservation));
+router.get("/reservations/:id", verifyFirebaseToken, asyncHandler(buyerOpsController.getReservation));
+router.post("/reservations/:id/cancel", verifyFirebaseToken, asyncHandler(buyerOpsController.cancelReservation));
+router.post("/reservations/:id/complete", verifyFirebaseToken, asyncHandler(buyerOpsController.completeReservation));
+
 module.exports = router;

@@ -25,7 +25,7 @@ import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
 import GoogleSignInButton from './GoogleSignInButton';
 
-export default function LoginScreen({ onGoRegister }) {
+export default function LoginScreen({ onGoRegister, onGoForgot }) {
   const dispatch = useDispatch();
   const actionStatus = useSelector(selectAuthActionStatus);
   const configError = useSelector(selectAuthConfigError);
@@ -89,7 +89,7 @@ export default function LoginScreen({ onGoRegister }) {
             label="Mật khẩu"
             icon="🔒"
             rightLabel="Quên mật khẩu?"
-            onRightLabelPress={() => setLocalError('Tính năng quên mật khẩu sẽ cập nhật sau.')}
+            onRightLabelPress={() => onGoForgot?.()}
             value={password}
             onChangeText={(value) => {
               setPassword(value);

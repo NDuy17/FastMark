@@ -21,6 +21,7 @@ export default function LeafletMap({
   currentLocation,
   radiusCircle,
   recenterRequest,
+  routeRequest,
   restaurants,
   onEvent,
 }) {
@@ -109,6 +110,23 @@ export default function LeafletMap({
       radius: radiusCircle?.radius ?? null,
     });
   }, [recenterRequest, radiusCircle?.radius, ready]);
+
+  useEffect(() => {
+    if (!routeRequest?.to || !hasValidLocation(routeRequest.to)) {
+      sendCommand({ type: 'clearRoute' });
+      return;
+    }
+
+    if (!hasValidLocation(routeRequest.from)) {
+      return;
+    }
+
+    sendCommand({
+      type: 'showRoute',
+      from: routeRequest.from,
+      to: routeRequest.to,
+    });
+  }, [routeRequest, ready]);
 
   return (
     <View style={styles.container}>

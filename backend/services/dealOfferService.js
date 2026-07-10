@@ -1,13 +1,9 @@
 const DealOffer = require("../models/DealOffer");
-const Reservation = require("../models/Reservation");
 const ProductVariant = require("../models/ProductVariant");
+const User = require("../models/User");
 const { DEAL_OFFER_STATUS } = require("../constants/dealOfferStatus");
-const {
-  RESERVATION_STATUS,
-  BUYER_CANCEL_LOCK_MINUTES,
-} = require("../constants/reservationStatus");
 const { getShopForSeller } = require("./shopSettingsService");
-const { toPublicReservation } = require("./reservationService");
+const { createNotification } = require("./notificationService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -56,7 +52,7 @@ async function listSellerDeals(user, { status } = {}) {
 }
 
 async function acceptDealOffer(user, dealId) {
-  const { shop, deal } = await getOwnedDeal(user, dealId);
+  const { deal } = await getOwnedDeal(user, dealId);
 
   if (deal.status !== DEAL_OFFER_STATUS.PENDING) {
     throw createServiceError("Deal này đã được xử lý.");
@@ -69,38 +65,28 @@ async function acceptDealOffer(user, dealId) {
 
   const finalPrice = deal.sellerCounterPrice || deal.offeredPrice;
   const now = new Date();
-  const cancelLockedAt = new Date(now.getTime() + BUYER_CANCEL_LOCK_MINUTES * 60 * 1000);
-
-  const reservation = await Reservation.create({
-    variantId: deal.variantId,
-    shopId: shop._id,
-    productId: deal.productId,
-    userId: deal.userId,
-    dealOfferId: deal._id,
-    quantity: 1,
-    reservedPrice: deal.originalPrice,
-    agreedPrice: finalPrice,
-    status: RESERVATION_STATUS.CONFIRMED,
-    confirmedAt: now,
-    buyerPriceAcceptedAt: now,
-    cancelLockedAt,
-    CreatedAt: now,
-    UpdatedAt: now,
-  });
 
   deal.status = DEAL_OFFER_STATUS.ACCEPTED;
   deal.respondedAt = now;
-  deal.reservationId = reservation._id;
+  deal.reservationId = null;
   deal.UpdatedAt = now;
   await deal.save();
+
+  const buyer = await User.findById(deal.userId);
+  if (buyer) {
+    await createNotification(buyer._id, {
+      title: "Shop chấp nhận deal giá",
+      content: `Shop đã chấp nhận mức giá ${Number(finalPrice).toLocaleString("vi-VN")}đ. Hãy chọn giờ lấy hàng trong mục Đơn hàng.`,
+    });
+  }
 
   return {
     deal: {
       id: deal._id,
       status: deal.status,
-      reservationId: reservation._id,
+      reservationId: null,
+      finalPrice,
     },
-    reservation: await toPublicReservation(reservation),
   };
 }
 
