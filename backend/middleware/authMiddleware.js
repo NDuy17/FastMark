@@ -1,4 +1,5 @@
 const { getUserFromToken } = require("../services/authService");
+const { assertUserIsActive } = require("../services/adminAccountService");
 const { mapFirebaseAdminError } = require("../utils/firebaseErrors");
 
 async function verifyFirebaseToken(req, res, next) {
@@ -15,6 +16,7 @@ async function verifyFirebaseToken(req, res, next) {
   try {
     req.firebaseToken = token;
     req.currentUser = await getUserFromToken(token);
+    assertUserIsActive(req.currentUser);
     next();
   } catch (error) {
     const mapped = error.statusCode ? error : mapFirebaseAdminError(error);

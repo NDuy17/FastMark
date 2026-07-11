@@ -7,6 +7,8 @@ import { configError } from './firebase';
 import LoginPage from './pages/LoginPage';
 import CategoriesPage from './pages/CategoriesPage';
 import SellerVerificationsPage from './pages/SellerVerificationsPage';
+import AccountsPage from './pages/AccountsPage';
+import AccountDetailPage from './pages/AccountDetailPage';
 
 function ProtectedRoutes() {
   const { user, isAdmin, loading } = useAuth();
@@ -31,6 +33,8 @@ function ProtectedRoutes() {
     <Routes>
       <Route element={<AdminLayout />}>
         <Route index element={<SellerVerificationsPage />} />
+        <Route path="accounts" element={<AccountsPage />} />
+        <Route path="accounts/:accountId" element={<AccountDetailPage />} />
         <Route path="categories" element={<CategoriesPage />} />
       </Route>
     </Routes>

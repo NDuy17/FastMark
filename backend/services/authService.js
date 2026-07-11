@@ -222,6 +222,9 @@ async function loginWithEmail({ login, email, password }) {
     );
   }
 
+  const { assertUserIsActive } = require("./adminAccountService");
+  assertUserIsActive(user);
+
   await updateUserActivity(user);
 
   const customToken = await auth.createCustomToken(payload.localId);
@@ -328,6 +331,9 @@ async function registerOrLoginWithGoogle({ idToken, fullName, userName }) {
     );
     isNew = true;
   } else {
+    const { assertUserIsActive } = require("./adminAccountService");
+    assertUserIsActive(user);
+
     if (fullName) user.FullName = fullName;
     if (userName) user.UserName = normalizeUserName(userName);
     if (identity.picture) user.Avatar = identity.picture;

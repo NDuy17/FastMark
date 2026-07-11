@@ -13,6 +13,9 @@ export default function AdminLayout() {
           <NavLink to="/" end>
             Duyệt người bán
           </NavLink>
+          <NavLink to="/accounts">
+            Quản lý người dùng
+          </NavLink>
           <NavLink to="/categories">
             Quản lý danh mục
           </NavLink>
