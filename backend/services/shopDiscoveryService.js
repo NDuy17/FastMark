@@ -67,6 +67,68 @@ function shopMatchesKeyword(shop, seller, keyword) {
   return haystack.some((text) => text.includes(keyword));
 }
 
+async function findProductMatchesByShopId(keyword, categoryId = "") {
+  const productKeyword = normalizeSearchText(keyword);
+  const normalizedCategoryId = String(categoryId || "").trim();
+
+  if (!productKeyword && !normalizedCategoryId) {
+    return null;
+  }
+
+  const productFilter = activeProductFilter();
+  if (normalizedCategoryId) {
+    productFilter.CategoryId = normalizedCategoryId;
+  }
+  if (productKeyword) {
+    productFilter.ProductName = {
+      $regex: escapeRegex(productKeyword),
+      $options: "i",
+    };
+  }
+
+  const matchingProducts = await Product.find(productFilter)
+    .select("ShopId ProductName CategoryId")
+    .lean();
+
+  const productMatchesByShopId = new Map();
+  for (const product of matchingProducts) {
+    const shopId = String(product.ShopId);
+    if (!productMatchesByShopId.has(shopId)) {
+      productMatchesByShopId.set(shopId, []);
+    }
+    const bucket = productMatchesByShopId.get(shopId);
+    if (bucket.length < 5) {
+      bucket.push(product.ProductName || "");
+    }
+  }
+
+  return productMatchesByShopId;
+}
+
+function mergeProductMatches(...maps) {
+  const merged = new Map();
+
+  maps.forEach((map) => {
+    if (!map) {
+      return;
+    }
+
+    map.forEach((products, shopId) => {
+      if (!merged.has(shopId)) {
+        merged.set(shopId, []);
+      }
+      const bucket = merged.get(shopId);
+      products.forEach((name) => {
+        if (name && bucket.length < 5 && !bucket.includes(name)) {
+          bucket.push(name);
+        }
+      });
+    });
+  });
+
+  return merged.size > 0 ? merged : null;
+}
+
 function clampSearchRadius(radiusMeters, fallback = 2000) {
   return Math.min(Math.max(Number(radiusMeters) || fallback, 100), MAX_SEARCH_RADIUS_METERS);
 }
@@ -264,35 +326,17 @@ async function searchShops({
   const sellerMap = new Map(sellers.map((seller) => [String(seller._id), seller]));
   const categoryNameMap = await getCategoryNameMap(shops.map((shop) => shop.categoryId));
 
-  let productMatchesByShopId = null;
-  if (productKeyword || normalizedProductCategoryId) {
-    const productFilter = activeProductFilter();
-    if (normalizedProductCategoryId) {
-      productFilter.CategoryId = normalizedProductCategoryId;
-    }
-    if (productKeyword) {
-      productFilter.ProductName = {
-        $regex: escapeRegex(productKeyword),
-        $options: "i",
-      };
-    }
+  const [productMatchesFromProductQuery, productMatchesFromShopQuery] = await Promise.all([
+    findProductMatchesByShopId(productKeyword, normalizedProductCategoryId),
+    shopKeyword && !productKeyword
+      ? findProductMatchesByShopId(shopKeyword, "")
+      : Promise.resolve(null),
+  ]);
 
-    const matchingProducts = await Product.find(productFilter)
-      .select("ShopId ProductName CategoryId")
-      .lean();
-
-    productMatchesByShopId = new Map();
-    for (const product of matchingProducts) {
-      const shopId = String(product.ShopId);
-      if (!productMatchesByShopId.has(shopId)) {
-        productMatchesByShopId.set(shopId, []);
-      }
-      const bucket = productMatchesByShopId.get(shopId);
-      if (bucket.length < 5) {
-        bucket.push(product.ProductName || "");
-      }
-    }
-  }
+  const productMatchesByShopId = mergeProductMatches(
+    productMatchesFromProductQuery,
+    productMatchesFromShopQuery
+  );
 
   const results = [];
 
@@ -321,16 +365,25 @@ async function searchShops({
       continue;
     }
 
-    if (!shopMatchesKeyword(shop, seller, shopKeyword)) {
-      continue;
-    }
+    const matchedProducts = productMatchesByShopId?.get(String(shop._id)) || [];
+    const matchesShopName = shopMatchesKeyword(shop, seller, shopKeyword);
+    const matchesProductName = matchedProducts.length > 0;
 
-    let matchedProducts = [];
-    if (productMatchesByShopId) {
-      matchedProducts = productMatchesByShopId.get(String(shop._id)) || [];
-      if (matchedProducts.length === 0) {
+    if (shopKeyword) {
+      if (productKeyword) {
+        if (!matchesShopName) {
+          continue;
+        }
+        if (!matchesProductName) {
+          continue;
+        }
+      } else if (!matchesShopName && !matchesProductName) {
         continue;
       }
+    } else if (productKeyword && !matchesProductName) {
+      continue;
+    } else if (normalizedProductCategoryId && !matchesProductName) {
+      continue;
     }
 
     results.push({
