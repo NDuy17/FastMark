@@ -194,7 +194,7 @@ export default function SearchScreen({ onSelectLocation, onOpenStore }) {
         <View style={styles.header}>
           <Text style={styles.title}>Tìm kiếm</Text>
           <Text style={styles.subtitle}>
-            Tìm quán theo tên, loại quán, món muốn mua và khoảng cách (tối đa 10 km)
+            Tìm quán theo tên quán, tên sản phẩm, loại quán và khoảng cách (tối đa 10 km)
           </Text>
         </View>
 
@@ -226,21 +226,24 @@ export default function SearchScreen({ onSelectLocation, onOpenStore }) {
           <TextInput
             value={shopQuery}
             onChangeText={setShopQuery}
-            placeholder="VD: Cà phê Góc Phúc Diễn, @tenquán..."
+            placeholder="VD: Cà phê Góc Phúc Diễn, @tenquán... (cũng tìm theo tên sản phẩm)"
             placeholderTextColor="#94a3b8"
             style={styles.textInput}
             returnKeyType="search"
           />
 
-          <Text style={styles.inputLabel}>Loại đồ muốn mua</Text>
+          <Text style={styles.inputLabel}>Tên sản phẩm</Text>
           <TextInput
             value={productQuery}
             onChangeText={setProductQuery}
-            placeholder="VD: phở, trà sữa, cà phê sữa đá..."
+            placeholder="VD: phở bò, trà sữa trân châu, cà phê sữa đá..."
             placeholderTextColor="#94a3b8"
             style={styles.textInput}
             returnKeyType="search"
           />
+          <Text style={styles.inputHint}>
+            Chỉ nhập tên quán: tìm theo tên quán hoặc sản phẩm. Nhập cả hai: lọc quán và sản phẩm cùng lúc.
+          </Text>
         </View>
 
         <Text style={styles.sectionTitle}>Khoảng cách</Text>
@@ -356,7 +359,7 @@ export default function SearchScreen({ onSelectLocation, onOpenStore }) {
 
           {item.matched_products?.length ? (
             <Text style={styles.resultMatch} numberOfLines={2}>
-              Có: {item.matched_products.join(', ')}
+              Sản phẩm: {item.matched_products.join(', ')}
             </Text>
           ) : null}
 
@@ -487,6 +490,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#475569',
     marginTop: 4,
+  },
+  inputHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 16,
+    marginTop: 2,
   },
   textInput: {
     borderWidth: 1,
