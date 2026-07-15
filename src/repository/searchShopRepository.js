@@ -12,6 +12,7 @@ export async function searchRegisteredShops({
   shopCategoryId = '',
   productCategoryId = '',
   productQuery = '',
+  identityOnly = false,
   limit = 50,
 }) {
   if (!hasStoreNodeApi()) {
@@ -27,12 +28,14 @@ export async function searchRegisteredShops({
       shopCategoryId,
       productCategoryId,
       productQuery,
+      identityOnly,
       limit,
     });
 
     log.ok('searchRegisteredShops', {
       count: result.count,
       radiusMeters: result.radiusMeters,
+      identityOnly: Boolean(identityOnly),
     });
 
     return {

@@ -43,6 +43,7 @@ export async function fetchSearchShopsFromNode({
   shopCategoryId = '',
   productCategoryId = '',
   productQuery = '',
+  identityOnly = false,
   limit = 50,
 }) {
   if (!hasStoreNodeApi()) {
@@ -69,6 +70,9 @@ export async function fetchSearchShopsFromNode({
   }
   if (trimmedProductQuery) {
     params.set('product', trimmedProductQuery);
+  }
+  if (identityOnly) {
+    params.set('identityOnly', '1');
   }
 
   const response = await apiRequest(`${API_ENDPOINTS.shopsSearch}?${params.toString()}`);

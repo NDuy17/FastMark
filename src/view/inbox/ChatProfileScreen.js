@@ -71,13 +71,15 @@ export default function ChatProfileScreen({ peer, peerType = 'shop', onBack, onV
           </View>
 
           <View style={styles.followRow}>
-            <Text style={styles.followText}>
-              <Text style={styles.followValue}>{formatCount(followingCount)}</Text> đang theo dõi
-            </Text>
-            <Text style={styles.followDivider}>•</Text>
-            <Text style={styles.followText}>
-              <Text style={styles.followValue}>{formatCount(followersCount)}</Text> người theo dõi
-            </Text>
+            {peerType === 'shop' ? (
+              <Text style={styles.followText}>
+                <Text style={styles.followValue}>{formatCount(followersCount)}</Text> người theo dõi
+              </Text>
+            ) : (
+              <Text style={styles.followText}>
+                <Text style={styles.followValue}>{formatCount(followingCount)}</Text> đang theo dõi
+              </Text>
+            )}
           </View>
 
           {peerType === 'shop' && onViewShop ? (

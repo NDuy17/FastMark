@@ -100,7 +100,6 @@ export default function SellerStatsScreen({ onBack, embedded = false }) {
         <StatCard label="Người theo dõi" value={String(stats.followersCount || 0)} />
         <StatCard label="Đang theo dõi" value={String(stats.followingCount || 0)} />
         <StatCard label="Lượt thích SP" value={String(stats.productLikes || 0)} />
-        <StatCard label="Yêu thích gian hàng" value={String(stats.shopLikes || 0)} />
         <StatCard label="Đã bán" value={String(stats.soldCount || 0)} />
         <StatCard label="Sản phẩm" value={String(stats.totalProducts || 0)} />
       </View>

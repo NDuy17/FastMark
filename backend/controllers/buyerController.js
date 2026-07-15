@@ -1,7 +1,6 @@
 const messageService = require("../services/messageService");
 const buyerReviewService = require("../services/buyerReviewService");
 const favoriteProductService = require("../services/favoriteProductService");
-const favoriteShopService = require("../services/favoriteShopService");
 const userFollowService = require("../services/userFollowService");
 const reportService = require("../services/reportService");
 const { success, fail } = require("../utils/apiResponse");
@@ -181,76 +180,39 @@ exports.removeFavorite = async (req, res) => {
   });
 };
 
-exports.listFavoriteShops = async (req, res) => {
-  const result = await favoriteShopService.listFavoriteShops(req.currentUser, req.query);
-  return success(res, { data: result });
-};
-
-exports.listFavoriteShopIds = async (req, res) => {
-  const shopIds = await favoriteShopService.listFavoriteShopIds(req.currentUser);
-  return success(res, { data: { shopIds } });
-};
-
-exports.getFavoriteShopStatus = async (req, res) => {
-  const shopId =
-    pickBodyValue(req.query, ["shopId", "shop_id"]) || pickBodyValue(req.params, ["shopId"]);
-  if (!shopId) {
-    return fail(res, { status: 400, message: "Thiếu shopId." });
-  }
-  const status = await favoriteShopService.getFavoriteShopStatus(req.currentUser, shopId);
-  return success(res, { data: status });
-};
-
-exports.addFavoriteShop = async (req, res) => {
-  const shopId = pickBodyValue(req.body, ["shopId", "shop_id"]);
-  if (!shopId) {
-    return fail(res, { status: 400, message: "Thiếu shopId." });
-  }
-  const favorite = await favoriteShopService.addFavoriteShop(req.currentUser, shopId);
-  return success(res, {
-    status: 201,
-    message: "Đã thêm gian hàng vào yêu thích.",
-    data: { favorite },
-  });
-};
-
-exports.removeFavoriteShop = async (req, res) => {
-  const result = await favoriteShopService.removeFavoriteShop(req.currentUser, req.params.shopId);
-  return success(res, {
-    message: "Đã bỏ yêu thích gian hàng.",
-    data: result,
-  });
-};
-
 exports.followUser = async (req, res) => {
-  const result = await userFollowService.followUser(req.currentUser, {
-    sellerUserId: pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]),
+  const result = await userFollowService.followShop(req.currentUser, {
     shopId: pickBodyValue(req.body, ["shopId", "shop_id"]),
+    sellerUserId: pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]),
   });
   return success(res, {
     status: 201,
-    message: "Đã theo dõi người bán.",
+    message: "Đã theo dõi gian hàng.",
     data: result,
   });
 };
 
 exports.unfollowUser = async (req, res) => {
-  const result = await userFollowService.unfollowUser(req.currentUser, {
+  const result = await userFollowService.unfollowShop(req.currentUser, {
+    shopId:
+      pickBodyValue(req.params, ["targetId", "shopId"]) ||
+      pickBodyValue(req.body, ["shopId", "shop_id"]) ||
+      pickBodyValue(req.query, ["shopId", "shop_id"]),
     sellerUserId:
-      pickBodyValue(req.params, ["targetId"]) ||
-      pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]),
-    shopId: pickBodyValue(req.body, ["shopId", "shop_id"]) || pickBodyValue(req.query, ["shopId"]),
+      pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]) ||
+      pickBodyValue(req.query, ["sellerUserId", "userId", "followedUserId"]),
+    targetId: pickBodyValue(req.params, ["targetId"]),
   });
   return success(res, {
-    message: "Đã bỏ theo dõi.",
+    message: "Đã bỏ theo dõi gian hàng.",
     data: result,
   });
 };
 
 exports.getFollowStatus = async (req, res) => {
   const result = await userFollowService.getFollowStatus(req.currentUser, {
-    sellerUserId: pickBodyValue(req.query, ["sellerUserId", "userId", "followedUserId"]),
     shopId: pickBodyValue(req.query, ["shopId", "shop_id"]),
+    sellerUserId: pickBodyValue(req.query, ["sellerUserId", "userId", "followedUserId"]),
   });
   return success(res, { data: result });
 };

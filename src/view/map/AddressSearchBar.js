@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { searchMapAddresses } from '../../viewmodel/map/mapViewModel';
 
@@ -85,12 +86,12 @@ export default function AddressSearchBar({ onSelectResult, placeholder }) {
   return (
     <View style={styles.wrapper}>
       <View style={styles.inputRow}>
-        <Text style={styles.searchIcon}>🔍</Text>
+        <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder={placeholder || 'Tìm địa chỉ, quận, thành phố...'}
-          placeholderTextColor="#94a3b8"
+          placeholder={placeholder || 'Tìm đường, địa điểm...'}
+          placeholderTextColor="#9ca3af"
           style={styles.input}
           returnKeyType="search"
           onFocus={() => setIsFocused(true)}
@@ -98,10 +99,10 @@ export default function AddressSearchBar({ onSelectResult, placeholder }) {
             setTimeout(() => setIsFocused(false), 150);
           }}
         />
-        {isSearching ? <ActivityIndicator size="small" color="#0f766e" /> : null}
+        {isSearching ? <ActivityIndicator size="small" color="#0d7377" /> : null}
         {query.length > 0 && !isSearching ? (
           <Pressable accessibilityRole="button" onPress={handleClear} style={styles.clearButton}>
-            <Text style={styles.clearButtonText}>✕</Text>
+            <Ionicons name="close-circle" size={20} color="#94a3b8" />
           </Pressable>
         ) : null}
       </View>
@@ -130,48 +131,29 @@ export default function AddressSearchBar({ onSelectResult, placeholder }) {
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginHorizontal: 16,
-    marginBottom: 10,
     zIndex: 20,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48,
-    borderRadius: 14,
-    paddingHorizontal: 12,
     backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: 12,
   },
   searchIcon: {
-    fontSize: 16,
     marginRight: 8,
   },
   input: {
     flex: 1,
-    fontSize: 14,
-    color: '#0f172a',
-    paddingVertical: 10,
+    fontSize: 15,
+    color: '#1f2937',
+    paddingVertical: 12,
   },
   clearButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f1f5f9',
-    marginLeft: 8,
-  },
-  clearButtonText: {
-    color: '#64748b',
-    fontSize: 12,
-    fontWeight: '800',
+    marginLeft: 4,
+    padding: 2,
   },
   dropdown: {
     marginTop: 8,
@@ -179,13 +161,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#e5e7eb',
     overflow: 'hidden',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 6,
   },
   resultItem: {
     paddingHorizontal: 14,

@@ -8,7 +8,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -21,28 +20,29 @@ import {
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
 import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
-import { formatPriceRange } from '../../core/utils/productFormat';
-import { getProductImageOverlayLabel } from '../../core/utils/productAvailability';
+import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { searchRegisteredShops } from '../../repository/searchShopRepository';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { normalizeProduct } from '../../model/productModel';
 import ProductDetailScreen from '../store/ProductDetailScreen';
+import StoreDetailScreen from '../store/StoreDetailScreen';
 import ProductCategoriesScreen from './ProductCategoriesScreen';
+import ProductCard from '../shared/components/ProductCard';
+import AvatarBadge from '../shared/components/AvatarBadge';
+import ClearableSearchField from '../shared/components/ClearableSearchField';
 
 const SEARCH_DEBOUNCE_MS = 400;
 const NEARBY_RADIUS_METERS = 5000;
+const SEARCH_SHOP_RADIUS_METERS = 10000;
 const NEARBY_STRIP_LIMIT = 12;
+const SEARCH_TABS = [
+  { key: 'products', label: 'Sản phẩm' },
+  { key: 'shops', label: 'Gian hàng' },
+];
 
 function isRemoteIcon(value) {
   return /^https?:\/\//i.test(String(value || '').trim());
-}
-
-function formatProductDistance(product) {
-  const meters = Number(product.distanceMeters);
-  if (Number.isFinite(meters) && meters >= 0) {
-    return formatDistance(meters);
-  }
-  return '—';
 }
 
 function CategoryIconChip({ icon, label, active, onPress }) {
@@ -67,68 +67,6 @@ function CategoryIconChip({ icon, label, active, onPress }) {
   );
 }
 
-function ProductCard({ product, isLiked, onToggleLike, onPress, compact = false }) {
-  const overlayLabel = getProductImageOverlayLabel(product);
-  const likeCount = Number(product.likeCount) || 0;
-
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        compact ? styles.nearbyCard : styles.gridCard,
-        pressed && styles.productCardPressed,
-      ]}
-      onPress={() => onPress?.(product.id)}
-    >
-      <View style={styles.productImageWrap}>
-        <View style={[styles.productImage, compact && styles.productImageCompact]}>
-          {product.thumbnail ? (
-            <Image source={{ uri: product.thumbnail }} style={styles.productThumb} />
-          ) : (
-            <View style={styles.productEmojiWrap}>
-              <Text style={styles.productEmoji}>{product.image_emoji || '📦'}</Text>
-            </View>
-          )}
-          {overlayLabel ? (
-            <View style={styles.soldOutMask} pointerEvents="none">
-              <Text style={[styles.soldOutText, compact && styles.soldOutTextCompact]}>
-                {overlayLabel}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-        <Pressable
-          onPress={() => onToggleLike?.(product.id)}
-          hitSlop={8}
-          style={[styles.likeBadge, compact && styles.likeBadgeCompact]}
-        >
-          <Ionicons
-            name={isLiked ? 'heart' : 'heart-outline'}
-            size={compact ? 13 : 14}
-            color={isLiked ? '#ef4444' : '#64748b'}
-          />
-          <Text style={[styles.likeCountText, compact && styles.likeCountTextCompact]}>{likeCount}</Text>
-        </Pressable>
-      </View>
-      <View style={[styles.productInfo, compact && styles.productInfoCompact]}>
-        <Text style={[styles.productName, compact && styles.productNameCompact]} numberOfLines={2}>
-          {product.name}
-        </Text>
-        <Text style={[styles.productPrice, compact && styles.productPriceCompact]} numberOfLines={1}>
-          {formatPriceRange(product.minPrice ?? product.price, product.maxPrice ?? product.price)}
-        </Text>
-        <View style={styles.productFooter}>
-          <Text style={[styles.productSold, compact && styles.productSoldCompact]} numberOfLines={1}>
-            Đã bán: {Number(product.soldCount) || 0}
-          </Text>
-          <Text style={[styles.productMeta, compact && styles.productMetaCompact]} numberOfLines={1}>
-            {formatProductDistance(product)}
-          </Text>
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
 export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrders }) {
   const insets = useScreenInsets();
   const scrollRef = useRef(null);
@@ -146,14 +84,20 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [selectedProductId, setSelectedProductId] = useState(null);
+  const [selectedStoreId, setSelectedStoreId] = useState(null);
   const [showCategoriesScreen, setShowCategoriesScreen] = useState(false);
   const [likedProducts, setLikedProducts] = useState({});
+  const [searchTab, setSearchTab] = useState('products');
+  const [shops, setShops] = useState([]);
+  const [isLoadingShops, setIsLoadingShops] = useState(false);
+  const [shopsError, setShopsError] = useState('');
 
+  const isSearching = Boolean(debouncedSearch);
   const nearbyProducts = useMemo(() => products.slice(0, NEARBY_STRIP_LIMIT), [products]);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(selectedProductId || showCategoriesScreen));
-  }, [onNavigationStateChange, selectedProductId, showCategoriesScreen]);
+    onNavigationStateChange?.(Boolean(selectedProductId || selectedStoreId || showCategoriesScreen));
+  }, [onNavigationStateChange, selectedProductId, selectedStoreId, showCategoriesScreen]);
 
   useEffect(() => {
     if (searchTimerRef.current) {
@@ -168,6 +112,14 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
       }
     };
   }, [search]);
+
+  useEffect(() => {
+    if (!debouncedSearch) {
+      setSearchTab('products');
+      setShops([]);
+      setShopsError('');
+    }
+  }, [debouncedSearch]);
 
   const loadLocation = useCallback(async () => {
     setIsLocating(true);
@@ -289,7 +241,7 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
         const rows = await discoverProductsOnBackend({
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude,
-          radiusMeters: NEARBY_RADIUS_METERS,
+          radiusMeters: debouncedSearch ? SEARCH_SHOP_RADIUS_METERS : NEARBY_RADIUS_METERS,
           categoryId: selectedCategoryId,
           search: debouncedSearch,
           limit: 80,
@@ -312,6 +264,39 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
     [currentLocation, debouncedSearch, selectedCategoryId]
   );
 
+  const loadShops = useCallback(
+    async ({ refresh = false } = {}) => {
+      if (!debouncedSearch || !hasValidLocation(currentLocation)) {
+        setShops([]);
+        setIsLoadingShops(false);
+        return;
+      }
+
+      if (!refresh) {
+        setIsLoadingShops(true);
+      }
+      setShopsError('');
+
+      try {
+        const result = await searchRegisteredShops({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          radiusMeters: SEARCH_SHOP_RADIUS_METERS,
+          shopQuery: debouncedSearch,
+          identityOnly: true,
+          limit: 50,
+        });
+        setShops(Array.isArray(result?.shops) ? result.shops : []);
+      } catch (error) {
+        setShops([]);
+        setShopsError(error.message || 'Không tìm được gian hàng.');
+      } finally {
+        setIsLoadingShops(false);
+      }
+    },
+    [currentLocation, debouncedSearch]
+  );
+
   useEffect(() => {
     loadLocation();
     loadCategories();
@@ -321,6 +306,10 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
   useEffect(() => {
     loadProducts();
   }, [loadProducts]);
+
+  useEffect(() => {
+    loadShops();
+  }, [loadShops]);
 
   function handleSelectCategory(categoryId) {
     setSelectedCategoryId((current) => (current === categoryId ? '' : categoryId));
@@ -332,7 +321,21 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
   }
 
   function handleOpenProduct(productId) {
+    setSelectedStoreId(null);
     setSelectedProductId(productId);
+  }
+
+  if (selectedStoreId) {
+    return (
+      <StoreDetailScreen
+        storeId={selectedStoreId}
+        onBack={() => setSelectedStoreId(null)}
+        onProductPress={(productId) => {
+          setSelectedStoreId(null);
+          setSelectedProductId(productId);
+        }}
+      />
+    );
   }
 
   if (selectedProductId) {
@@ -340,6 +343,7 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
       <ProductDetailScreen
         productId={selectedProductId}
         onBack={() => setSelectedProductId(null)}
+        onStorePress={(storeId) => setSelectedStoreId(storeId)}
         onOrderSuccess={(tab) => {
           setSelectedProductId(null);
           onOpenBuyerOrders?.(tab);
@@ -360,6 +364,8 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
   }
 
   const showEmptyState = !isLoading && !isLocating && products.length === 0;
+  const showShopsEmpty =
+    isSearching && searchTab === 'shops' && !isLoadingShops && !isLocating && shops.length === 0;
 
   return (
     <ScrollView
@@ -367,6 +373,7 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
       style={styles.screen}
       contentContainerStyle={[styles.content, { paddingTop: insets.headerPaddingTop }]}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
           refreshing={isRefreshing}
@@ -374,6 +381,9 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
             loadLocation();
             loadFavoriteIds();
             loadProducts({ refresh: true });
+            if (debouncedSearch) {
+              loadShops({ refresh: true });
+            }
           }}
           tintColor="#0d7377"
         />
@@ -381,98 +391,215 @@ export default function ProductsScreen({ onNavigationStateChange, onOpenBuyerOrd
     >
       <Text style={styles.pageTitle}>Sản phẩm</Text>
 
-      <View style={styles.searchWrap}>
-        <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Tìm kiếm sản phẩm..."
-          placeholderTextColor="#9ca3af"
-          style={styles.searchInput}
-          returnKeyType="search"
-        />
-      </View>
+      <ClearableSearchField
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Tìm theo tên sản phẩm hoặc gian hàng..."
+        style={styles.searchField}
+      />
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.categoryRow}
-      >
-        {categories.map((category) => (
-          <CategoryIconChip
-            key={category.id}
-            label={category.categoryName}
-            icon={category.icon || ''}
-            active={selectedCategoryId === category.id}
-            onPress={() => handleSelectCategory(category.id)}
-          />
-        ))}
-        <Pressable
-          style={styles.allCategoriesChip}
-          onPress={() => setShowCategoriesScreen(true)}
-          accessibilityRole="button"
-          accessibilityLabel="Tất cả danh mục"
-        >
-          <Ionicons name="grid-outline" size={20} color="#0d7377" />
-        </Pressable>
-      </ScrollView>
+      {isSearching ? (
+        <>
+          <View style={styles.searchTabRow}>
+            {SEARCH_TABS.map((tab) => {
+              const isActive = searchTab === tab.key;
+              const count = tab.key === 'products' ? products.length : shops.length;
+              return (
+                <Pressable
+                  key={tab.key}
+                  onPress={() => setSearchTab(tab.key)}
+                  style={[styles.searchTabItem, isActive && styles.searchTabItemActive]}
+                >
+                  <Text style={[styles.searchTabText, isActive && styles.searchTabTextActive]}>
+                    {tab.label}
+                    {isActive || count > 0 ? ` (${count})` : ''}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
-      {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
-      {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
+          {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
+          {searchTab === 'products' && loadError ? (
+            <Text style={styles.errorText}>{loadError}</Text>
+          ) : null}
+          {searchTab === 'shops' && shopsError ? (
+            <Text style={styles.errorText}>{shopsError}</Text>
+          ) : null}
 
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Sản phẩm gần bạn</Text>
-      </View>
+          {searchTab === 'products' ? (
+            isLoading || isLocating ? (
+              <View style={styles.loaderBox}>
+                <ActivityIndicator color="#0d7377" />
+                <Text style={styles.loaderText}>Đang tìm sản phẩm...</Text>
+              </View>
+            ) : products.length > 0 ? (
+              <View style={[styles.gridSection, styles.searchResultsSection]}>
+                <View style={styles.productGrid}>
+                  {products.map((product) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      isLiked={Boolean(likedProducts[product.id])}
+                      onToggleLike={toggleLikeProduct}
+                      onPress={handleOpenProduct}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.emptyInline}>
+                <Text style={styles.emptyText}>Không tìm thấy sản phẩm phù hợp.</Text>
+              </View>
+            )
+          ) : isLoadingShops || isLocating ? (
+            <View style={styles.loaderBox}>
+              <ActivityIndicator color="#0d7377" />
+              <Text style={styles.loaderText}>Đang tìm gian hàng...</Text>
+            </View>
+          ) : shops.length > 0 ? (
+            <View style={styles.shopList}>
+              {shops.map((shop) => {
+                const username = String(shop.shop_username || '').trim();
+                const category = String(shop.category_name || '').trim();
+                const address =
+                  String(shop.system_address || shop.address || '').trim();
+                const productCount = Number(shop.product_count) || 0;
+                const reviewCount = Number(shop.review_count) || 0;
+                const identityLine = [username ? `@${username}` : '', category]
+                  .filter(Boolean)
+                  .join(' · ');
 
-      {isLoading || isLocating ? (
-        <View style={styles.loaderBox}>
-          <ActivityIndicator color="#0d7377" />
-          <Text style={styles.loaderText}>Đang tải sản phẩm gần bạn...</Text>
-        </View>
-      ) : nearbyProducts.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.nearbyRow}
-        >
-          {nearbyProducts.map((product) => (
-            <ProductCard
-              key={`nearby-${product.id}`}
-              product={product}
-              isLiked={Boolean(likedProducts[product.id])}
-              onToggleLike={toggleLikeProduct}
-              compact
-              onPress={handleOpenProduct}
-            />
-          ))}
-        </ScrollView>
-      ) : showEmptyState ? (
-        <View style={styles.emptyInline}>
-          <Text style={styles.emptyText}>Chưa có sản phẩm phù hợp trong khu vực.</Text>
-        </View>
-      ) : null}
-
-      <View style={styles.gridSection}>
-        <Text style={styles.sectionTitle}>Tất cả sản phẩm</Text>
-
-        {isLoading || isLocating ? null : products.length > 0 ? (
-          <View style={styles.productGrid}>
-            {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                isLiked={Boolean(likedProducts[product.id])}
-                onToggleLike={toggleLikeProduct}
-                onPress={handleOpenProduct}
+                return (
+                  <Pressable
+                    key={shop.id}
+                    style={({ pressed }) => [styles.shopCard, pressed && styles.shopCardPressed]}
+                    onPress={() => setSelectedStoreId(String(shop.id))}
+                  >
+                    <AvatarBadge
+                      name={shop.shop_name || shop.name || 'Gian hàng'}
+                      uri={isRemoteAvatarUrl(shop.image_url) ? shop.image_url : ''}
+                      size={56}
+                    />
+                    <View style={styles.shopCardBody}>
+                      <View style={styles.shopCardTopRow}>
+                        <Text style={styles.shopCardName} numberOfLines={1}>
+                          {shop.shop_name || shop.name}
+                        </Text>
+                        {Number.isFinite(Number(shop.distance_meters)) ? (
+                          <Text style={styles.shopCardDistance}>
+                            {formatDistance(shop.distance_meters)}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {identityLine ? (
+                        <Text style={styles.shopCardIdentity} numberOfLines={1}>
+                          {identityLine}
+                        </Text>
+                      ) : null}
+                      {address ? (
+                        <Text style={styles.shopCardAddress} numberOfLines={1}>
+                          {address}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.shopCardStats} numberOfLines={1}>
+                        {productCount} sản phẩm · {reviewCount} đánh giá
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : showShopsEmpty ? (
+            <View style={styles.emptyInline}>
+              <Text style={styles.emptyText}>Không tìm thấy gian hàng phù hợp.</Text>
+            </View>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryRow}
+          >
+            {categories.map((category) => (
+              <CategoryIconChip
+                key={category.id}
+                label={category.categoryName}
+                icon={category.icon || ''}
+                active={selectedCategoryId === category.id}
+                onPress={() => handleSelectCategory(category.id)}
               />
             ))}
+            <Pressable
+              style={styles.allCategoriesChip}
+              onPress={() => setShowCategoriesScreen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Tất cả danh mục"
+            >
+              <Ionicons name="grid-outline" size={20} color="#0d7377" />
+            </Pressable>
+          </ScrollView>
+
+          {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
+          {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
+
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Sản phẩm gần bạn</Text>
           </View>
-        ) : showEmptyState ? (
-          <View style={styles.emptyInline}>
-            <Text style={styles.emptyText}>Chưa có sản phẩm phù hợp.</Text>
+
+          {isLoading || isLocating ? (
+            <View style={styles.loaderBox}>
+              <ActivityIndicator color="#0d7377" />
+              <Text style={styles.loaderText}>Đang tải sản phẩm gần bạn...</Text>
+            </View>
+          ) : nearbyProducts.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.nearbyRow}
+            >
+              {nearbyProducts.map((product) => (
+                <ProductCard
+                  key={`nearby-${product.id}`}
+                  product={product}
+                  isLiked={Boolean(likedProducts[product.id])}
+                  onToggleLike={toggleLikeProduct}
+                  compact
+                  onPress={handleOpenProduct}
+                />
+              ))}
+            </ScrollView>
+          ) : showEmptyState ? (
+            <View style={styles.emptyInline}>
+              <Text style={styles.emptyText}>Chưa có sản phẩm phù hợp trong khu vực.</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.gridSection}>
+            <Text style={styles.sectionTitle}>Tất cả sản phẩm</Text>
+
+            {isLoading || isLocating ? null : products.length > 0 ? (
+              <View style={styles.productGrid}>
+                {products.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    isLiked={Boolean(likedProducts[product.id])}
+                    onToggleLike={toggleLikeProduct}
+                    onPress={handleOpenProduct}
+                  />
+                ))}
+              </View>
+            ) : showEmptyState ? (
+              <View style={styles.emptyInline}>
+                <Text style={styles.emptyText}>Chưa có sản phẩm phù hợp.</Text>
+              </View>
+            ) : null}
           </View>
-        ) : null}
-      </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -492,25 +619,91 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 14,
   },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  searchField: {
     marginHorizontal: 20,
     marginBottom: 14,
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    paddingHorizontal: 12,
   },
-  searchIcon: {
-    marginRight: 8,
+  searchTabRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 12,
   },
-  searchInput: {
+  searchTabItem: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  searchTabItemActive: {
+    backgroundColor: '#e8f3f1',
+  },
+  searchTabText: {
+    fontWeight: '700',
+    color: '#64748b',
+    fontSize: 14,
+  },
+  searchTabTextActive: {
+    color: '#0d7377',
+  },
+  searchResultsSection: {
+    paddingTop: 4,
+  },
+  shopList: {
+    paddingHorizontal: 20,
+    gap: 10,
+    paddingBottom: 8,
+  },
+  shopCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 16,
+    borderWidth: 0,
+    padding: 14,
+  },
+  shopCardPressed: {
+    opacity: 0.88,
+  },
+  shopCardBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  shopCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  shopCardName: {
     flex: 1,
     fontSize: 15,
-    color: '#1f2937',
-    paddingVertical: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  shopCardDistance: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0d7377',
+  },
+  shopCardIdentity: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0d7377',
+  },
+  shopCardAddress: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#64748b',
+  },
+  shopCardStats: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
   },
   categoryRow: {
     paddingHorizontal: 16,

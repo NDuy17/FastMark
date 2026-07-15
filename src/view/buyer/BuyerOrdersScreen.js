@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import CircularBackButton from '../shared/components/CircularBackButton';
+import ClearableSearchField from '../shared/components/ClearableSearchField';
 import {
   acceptBuyerCounterOnBackend,
   cancelBuyerReservationOnBackend,
@@ -539,14 +540,12 @@ function BuyerOrdersContent({
   return (
     <View style={styles.contentWrap}>
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.searchInput}
+        <ClearableSearchField
           value={search}
           onChangeText={setSearch}
           placeholder="Tìm sản phẩm, cửa hàng..."
-          placeholderTextColor="#94a3b8"
+          style={styles.searchField}
           onSubmitEditing={() => loadOrders(true)}
-          returnKeyType="search"
         />
         <Pressable style={styles.searchBtn} onPress={() => loadOrders(true)}>
           <Text style={styles.searchBtnText}>Tìm</Text>
@@ -907,18 +906,10 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 12,
+    alignItems: 'center',
   },
-  searchInput: {
+  searchField: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0f172a',
   },
   searchBtn: {
     minWidth: 56,

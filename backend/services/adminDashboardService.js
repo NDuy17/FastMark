@@ -3,8 +3,7 @@ const ShopProfile = require("../models/ShopProfile");
 const Product = require("../models/Product");
 const Reservation = require("../models/Reservation");
 const FavoriteProduct = require("../models/FavoriteProduct");
-const FavoriteShop = require("../models/FavoriteShop");
-const UserFollow = require("../models/UserFollow");
+const ShopFollow = require("../models/ShopFollow");
 const { USER_ROLE } = require("../constants/sellerVerification");
 const { USER_STATUS } = require("../constants/userStatus");
 const { SHOP_STATUS } = require("../constants/shopStatus");
@@ -158,7 +157,6 @@ async function getAdminDashboard(query = {}) {
     topShops,
     followInRange,
     favoriteProductsInRange,
-    favoriteShopsInRange,
   ] = await Promise.all([
     User.countDocuments({ Role: { $ne: USER_ROLE.ADMIN } }),
     User.countDocuments({ Role: USER_ROLE.BUYER }),
@@ -231,15 +229,14 @@ async function getAdminDashboard(query = {}) {
       },
     ]),
     ShopProfile.find({ status: SHOP_STATUS.ACTIVE })
-      .sort({ averageRating: -1, totalLikes: -1, soldCount: -1, totalProducts: -1 })
+      .sort({ averageRating: -1, followersCount: -1, soldCount: -1, totalProducts: -1 })
       .limit(10)
       .select(
-        "shopName avatar averageRating totalLikes totalProducts soldCount totalReviews DiaChiHeThong address isOpen userId"
+        "shopName avatar averageRating followersCount totalProducts soldCount totalReviews DiaChiHeThong address isOpen userId"
       )
       .lean(),
-    aggregateDailyCount(UserFollow, createdInRange),
+    aggregateDailyCount(ShopFollow, createdInRange),
     aggregateDailyCount(FavoriteProduct, createdInRange),
-    aggregateDailyCount(FavoriteShop, createdInRange),
   ]);
 
   const revenueByShopMap = new Map();
@@ -303,7 +300,7 @@ async function getAdminDashboard(query = {}) {
     name: shop.shopName || "Gian hàng",
     logo: shop.avatar || "",
     rating: Number(shop.averageRating) || 0,
-    totalLikes: Number(shop.totalLikes) || 0,
+    followersCount: Number(shop.followersCount) || 0,
     totalProducts: Number(shop.totalProducts) || 0,
     soldCount: Number(shop.soldCount) || 0,
     totalReviews: Number(shop.totalReviews) || 0,
@@ -341,7 +338,6 @@ async function getAdminDashboard(query = {}) {
       reservationsOverTime: fillSeries(emptySeries, reservationsInRange),
       followsOverTime: fillSeries(emptySeries, followInRange),
       favoriteProductsOverTime: fillSeries(emptySeries, favoriteProductsInRange),
-      favoriteShopsOverTime: fillSeries(emptySeries, favoriteShopsInRange),
       reservationStatusPie,
       rolePie,
       revenueByShop,

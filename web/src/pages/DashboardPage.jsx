@@ -274,7 +274,7 @@ export default function DashboardPage() {
                   <tr>
                     <th>Gian hàng</th>
                     <th>Đánh giá</th>
-                    <th>Yêu thích</th>
+                    <th>Người theo dõi</th>
                     <th>Sản phẩm</th>
                     <th>Đã bán</th>
                     <th>Trạng thái</th>
@@ -296,7 +296,7 @@ export default function DashboardPage() {
                         </div>
                       </td>
                       <td>{Number(shop.rating || 0).toFixed(1)}</td>
-                      <td>{formatCompact(shop.totalLikes)}</td>
+                      <td>{formatCompact(shop.followersCount)}</td>
                       <td>{formatCompact(shop.totalProducts)}</td>
                       <td>{formatCompact(shop.soldCount)}</td>
                       <td>

@@ -69,7 +69,7 @@ function toAdminUserBase(user) {
     createdAt: user.CreatedAt || null,
     updatedAt: user.UpdatedAt || null,
     lastActiveAt: user.LanHoatDongCuoi || null,
-    followersCount: user.FollowersCount || 0,
+    followersCount: 0,
     followingCount: user.FollowingCount || 0,
     verifyAccount: Boolean(user.VerifyAccount),
     sellerPhoneVerified: Boolean(user.SellerPhoneVerified),
@@ -90,7 +90,7 @@ function toAdminShopSummary(shop) {
     averageRating: Number(shop.averageRating) || 0,
     totalProducts: Number(shop.totalProducts) || 0,
     totalReviews: Number(shop.totalReviews) || 0,
-    totalLikes: Number(shop.totalLikes) || 0,
+    followersCount: Number(shop.followersCount) || 0,
     soldCount: Number(shop.soldCount) || 0,
     address: shop.address || "",
     phone: shop.phone || "",
@@ -317,7 +317,7 @@ async function getAccountStats(user, shop) {
     totalReservations: reservationCount,
     totalReportsReceived: reportCount,
     totalReviews: reviewCount,
-    totalFollowers: user.FollowersCount || 0,
+    totalFollowers: shop?.followersCount || 0,
   };
 }
 

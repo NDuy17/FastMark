@@ -2,7 +2,6 @@ const mongoose = require("mongoose");
 const ShopProfile = require("../models/ShopProfile");
 const { getShopCategoryNameMap } = require("./shopCategoryService");
 const User = require("../models/User");
-const UserFollow = require("../models/UserFollow");
 const Product = require("../models/Product");
 const ProductVariant = require("../models/ProductVariant");
 const Review = require("../models/Review");
@@ -91,6 +90,24 @@ function shopMatchesKeyword(shop, seller, keyword) {
     .filter(Boolean);
 
   return haystack.some((text) => text.includes(keyword));
+}
+
+/** Match shop by display name or @username only. */
+function shopMatchesNameOrUsername(shop, keyword) {
+  if (!keyword) {
+    return true;
+  }
+
+  const normalizedKeyword = normalizeSearchText(String(keyword || "").replace(/^@+/, ""));
+  if (!normalizedKeyword) {
+    return true;
+  }
+
+  const haystack = [shop.shopName, shop.shopUsername]
+    .map(normalizeSearchText)
+    .filter(Boolean);
+
+  return haystack.some((text) => text.includes(normalizedKeyword));
 }
 
 async function findProductMatchesByShopId(keyword, categoryId = "") {
@@ -188,7 +205,8 @@ function toPublicStore(
   productCount,
   distanceMeters,
   categoryName = "",
-  followCount = 0
+  followCount = 0,
+  totalLikes = 0
 ) {
   const shopDisplayName =
     shop.shopName ||
@@ -234,11 +252,13 @@ function toPublicStore(
     isOpen: Number(shop.isOpen) === 1 ? 1 : 0,
     rating_avg: Number(shop.averageRating) || 0,
     review_count: Number(shop.totalReviews) || 0,
-    follow_count: Number(followCount) || Number(user?.FollowersCount) || 0,
+    follow_count: Number(followCount) || Number(shop.followersCount) || 0,
     product_count: Number(shop.totalProducts) || Number(productCount) || 0,
     total_products: Number(shop.totalProducts) || Number(productCount) || 0,
     sold_count: Number(shop.soldCount) || 0,
-    total_likes: Number(shop.totalLikes) || 0,
+    total_likes: Number(totalLikes) || 0,
+    owner_user_id: shop.userId ? String(shop.userId) : "",
+    ownerUserId: shop.userId ? String(shop.userId) : "",
     // Shop branding only — never borrow the seller's personal User.Avatar.
     image_url: shop?.avatar || "",
     cover_image_url: shop?.avatar || "",
@@ -335,15 +355,18 @@ async function searchShops({
   shopCategoryId = "",
   productCategoryId = "",
   productQuery = "",
+  identityOnly = false,
 }) {
   const lat = Number(latitude);
   const lng = Number(longitude);
   const radius = clampSearchRadius(radiusMeters, 2000);
   const maxResults = Math.min(Math.max(Number(limit) || 50, 1), 100);
-  const shopKeyword = normalizeSearchText(q);
-  const productKeyword = normalizeSearchText(productQuery);
+  const shopKeyword = normalizeSearchText(String(q || "").replace(/^@+/, ""));
+  const productKeyword = identityOnly ? "" : normalizeSearchText(productQuery);
   const normalizedShopCategoryId = String(shopCategoryId || "").trim();
-  const normalizedProductCategoryId = String(productCategoryId || "").trim();
+  const normalizedProductCategoryId = identityOnly
+    ? ""
+    : String(productCategoryId || "").trim();
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     const error = new Error("Thiếu tọa độ hợp lệ để tìm theo khoảng cách.");
@@ -368,17 +391,20 @@ async function searchShops({
   const sellerMap = new Map(sellers.map((seller) => [String(seller._id), seller]));
   const categoryNameMap = await getShopCategoryNameMap(shops.map((shop) => shop.categoryId));
 
-  const [productMatchesFromProductQuery, productMatchesFromShopQuery] = await Promise.all([
-    findProductMatchesByShopId(productKeyword, normalizedProductCategoryId),
-    shopKeyword && !productKeyword
-      ? findProductMatchesByShopId(shopKeyword, "")
-      : Promise.resolve(null),
-  ]);
+  let productMatchesByShopId = null;
+  if (!identityOnly) {
+    const [productMatchesFromProductQuery, productMatchesFromShopQuery] = await Promise.all([
+      findProductMatchesByShopId(productKeyword, normalizedProductCategoryId),
+      shopKeyword && !productKeyword
+        ? findProductMatchesByShopId(shopKeyword, "")
+        : Promise.resolve(null),
+    ]);
 
-  const productMatchesByShopId = mergeProductMatches(
-    productMatchesFromProductQuery,
-    productMatchesFromShopQuery
-  );
+    productMatchesByShopId = mergeProductMatches(
+      productMatchesFromProductQuery,
+      productMatchesFromShopQuery
+    );
+  }
 
   const results = [];
 
@@ -404,6 +430,19 @@ async function searchShops({
     }
 
     if (normalizedShopCategoryId && String(shop.categoryId || "") !== normalizedShopCategoryId) {
+      continue;
+    }
+
+    if (identityOnly) {
+      if (shopKeyword && !shopMatchesNameOrUsername(shop, shopKeyword)) {
+        continue;
+      }
+      results.push({
+        shop,
+        seller,
+        distanceMeters,
+        matchedProducts: [],
+      });
       continue;
     }
 
@@ -489,7 +528,12 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
 
   const productCount = await Product.countDocuments(activeProductFilter({ ShopId: shop._id }));
   const categoryNameMap = await getShopCategoryNameMap([shop.categoryId]);
-  const followCount = await UserFollow.countDocuments({ followedUserId: seller._id });
+  const followCount = Number(shop.followersCount) || 0;
+  const likeAgg = await Product.aggregate([
+    { $match: activeProductFilter({ ShopId: shop._id }) },
+    { $group: { _id: null, total: { $sum: { $ifNull: ["$LikeCount", 0] } } } },
+  ]);
+  const totalLikes = Number(likeAgg?.[0]?.total) || 0;
 
   let distanceMeters = 0;
   const lat = Number(latitude);
@@ -515,7 +559,8 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
     productCount,
     distanceMeters,
     category.name,
-    followCount
+    followCount,
+    totalLikes
   );
 }
 

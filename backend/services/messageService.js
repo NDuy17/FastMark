@@ -3,7 +3,7 @@ const Message = require("../models/Message");
 const MessageImage = require("../models/MessageImage");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
-const UserFollow = require("../models/UserFollow");
+const ShopFollow = require("../models/ShopFollow");
 const { MESSAGE_TYPE } = require("../constants/messageType");
 const { parseOfferMessageContent } = require("../utils/offerMessageFormat");
 const { MESSAGE_READ, MESSAGE_STATUS } = require("../constants/messageStatus");
@@ -340,7 +340,6 @@ function mapBuyerPublicInfo(buyer) {
     name: buyer.FullName || "",
     userName: buyer.UserName || "",
     avatar: buyer.Avatar || "",
-    followersCount: Number(buyer.FollowersCount) || 0,
     followingCount: Number(buyer.FollowingCount) || 0,
     ...mapPresenceFields(buyer),
   };
@@ -375,7 +374,7 @@ async function getShopPublicInfo(shop) {
     // Seller personal account fields (used by chat "Tài khoản" view).
     fullName: seller?.FullName || "",
     userName: seller?.UserName || "",
-    followersCount: Number(seller?.FollowersCount) || 0,
+    followersCount: Number(shop?.followersCount) || 0,
     followingCount: Number(seller?.FollowingCount) || 0,
     accountIsOnline: sellerPresence.isOnline,
     accountLastActiveAt: sellerPresence.lastActiveAt,
@@ -793,16 +792,14 @@ async function listBuyerConversations(user) {
 }
 
 async function listShopsForBuyer(user) {
-  const follows = await UserFollow.find({ userId: user._id }).select("followedUserId").lean();
-  const followedUserIds = follows
-    .map((row) => row.followedUserId)
-    .filter(Boolean);
+  const follows = await ShopFollow.find({ userId: user._id }).select("shopId").lean();
+  const shopIds = follows.map((row) => row.shopId).filter(Boolean);
 
-  if (followedUserIds.length === 0) {
+  if (shopIds.length === 0) {
     return [];
   }
 
-  const shops = await ShopProfile.find({ userId: { $in: followedUserIds } })
+  const shops = await ShopProfile.find({ _id: { $in: shopIds } })
     .sort({ UpdatedAt: -1 })
     .limit(30);
   const result = [];

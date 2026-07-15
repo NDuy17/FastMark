@@ -29,6 +29,7 @@ import ReservationModal from '../buyer/ReservationModal';
 import ReportSheet from '../shared/components/ReportSheet';
 import OutOfStockOverlay from '../shared/components/OutOfStockOverlay';
 import CircularBackButton from '../shared/components/CircularBackButton';
+import AvatarBadge from '../shared/components/AvatarBadge';
 import { storeLogger as log } from '../../core/utils/logger';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
 
@@ -423,16 +424,36 @@ export default function ProductDetailScreen({
 
           <Text style={styles.productPrice}>{priceLabel}</Text>
 
-          {store?.system_address ? (
+          {store ? (
             <Pressable
-              style={styles.locationChip}
+              style={({ pressed }) => [styles.shopCard, pressed && styles.shopCardPressed]}
               onPress={() => onStorePress?.(store.id)}
               disabled={!onStorePress}
             >
-              <Ionicons name="location" size={14} color="#ea580c" />
-              <Text style={styles.locationChipText} numberOfLines={2}>
-                {store.system_address}
-              </Text>
+              <AvatarBadge
+                name={store.shop_name || store.name}
+                uri={store.image_url || store.cover_image_url}
+                size={44}
+              />
+              <View style={styles.shopCardBody}>
+                <Text style={styles.shopCardName} numberOfLines={1}>
+                  {store.shop_name || store.name}
+                </Text>
+                {store.shop_username ? (
+                  <Text style={styles.shopCardUsername} numberOfLines={1}>
+                    @{store.shop_username}
+                  </Text>
+                ) : null}
+                {store.system_address ? (
+                  <View style={styles.shopCardAddressRow}>
+                    <Ionicons name="location" size={13} color="#ea580c" />
+                    <Text style={styles.shopCardAddress} numberOfLines={2}>
+                      {store.system_address}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </Pressable>
           ) : null}
 
@@ -735,24 +756,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748b',
   },
-  locationChip: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fff7ed',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginBottom: 12,
-    maxWidth: '100%',
-  },
-  locationChipText: {
-    flexShrink: 1,
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#ea580c',
-  },
   sectionLabel: {
     fontSize: 14,
     fontWeight: '800',
@@ -771,6 +774,47 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0f766e',
     marginBottom: 10,
+  },
+  shopCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  shopCardPressed: {
+    opacity: 0.85,
+  },
+  shopCardBody: {
+    flex: 1,
+    gap: 2,
+  },
+  shopCardName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  shopCardUsername: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  shopCardAddressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    marginTop: 2,
+  },
+  shopCardAddress: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ea580c',
+    lineHeight: 16,
   },
   categoryChip: {
     alignSelf: 'flex-start',

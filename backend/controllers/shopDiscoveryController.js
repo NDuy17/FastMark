@@ -32,6 +32,11 @@ exports.searchShops = async (req, res) => {
   const productCategoryId =
     req.query.productCategoryId ?? req.query.product_category_id ?? req.query.categoryId ?? "";
   const productQuery = req.query.product ?? req.query.productQuery ?? req.query.productName ?? "";
+  const identityOnlyRaw =
+    req.query.identityOnly ?? req.query.identity_only ?? req.query.matchShop ?? "";
+  const identityOnly = ["1", "true", "yes", "shop"].includes(
+    String(identityOnlyRaw || "").trim().toLowerCase()
+  );
 
   const shops = await shopDiscoveryService.searchShops({
     latitude,
@@ -42,6 +47,7 @@ exports.searchShops = async (req, res) => {
     shopCategoryId,
     productCategoryId,
     productQuery,
+    identityOnly,
   });
 
   return success(res, {
