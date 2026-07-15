@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -7,30 +7,34 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 
-import { getFollowersOnBackend, getFollowingOnBackend, unfollowUserOnBackend } from '../../api/followApi';
+import {
+  getFollowersOnBackend,
+  getFollowingOnBackend,
+  unfollowShopOnBackend,
+} from '../../api/followApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import CircularBackButton from '../shared/components/CircularBackButton';
+import ClearableSearchField from '../shared/components/ClearableSearchField';
 
-const TABS = [
-  { key: 'following', label: 'Đang theo dõi' },
-  { key: 'followers', label: 'Người theo dõi' },
-];
-
-function UserRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
+function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
+  const isShop = Boolean(item.shopId || item.shopName);
   const avatar = item.shopAvatar || item.avatar;
-  const title = item.shopName || item.fullName || item.userName || 'Người dùng';
-  const subtitle = item.userName ? `@${item.userName}` : '';
+  const title = item.shopName || item.fullName || item.userName || (isShop ? 'Gian hàng' : 'Người dùng');
+  const subtitle = item.shopUsername
+    ? `@${item.shopUsername}`
+    : item.userName
+      ? `@${item.userName}`
+      : '';
 
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       onPress={() => {
-        if (item.shopId) {
-          onOpenShop?.(item.shopId);
+        if (isShop && (item.shopId || item.id)) {
+          onOpenShop?.(item.shopId || item.id);
         }
       }}
     >
@@ -63,14 +67,20 @@ function UserRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
   );
 }
 
+/**
+ * mode:
+ * - following: gian hàng user đang follow (buyer / seller)
+ * - followers: người đang follow một gian hàng (cần shopId hoặc shop của seller)
+ */
 export default function FollowConnectionsScreen({
   onBack,
   onOpenStore,
   initialTab = 'following',
+  mode,
+  shopId = '',
 }) {
-  const [activeTab, setActiveTab] = useState(
-    initialTab === 'followers' ? 'followers' : 'following'
-  );
+  const resolvedMode = mode || (initialTab === 'followers' ? 'followers' : 'following');
+  const [activeTab, setActiveTab] = useState(resolvedMode);
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -81,6 +91,23 @@ export default function FollowConnectionsScreen({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [snackbar, setSnackbar] = useState('');
+
+  const tabs = useMemo(() => {
+    if (shopId) {
+      return [{ key: 'followers', label: 'Người theo dõi' }];
+    }
+    if (resolvedMode === 'followers') {
+      return [
+        { key: 'followers', label: 'Người theo dõi shop' },
+        { key: 'following', label: 'Đang theo dõi' },
+      ];
+    }
+    return [{ key: 'following', label: 'Đang theo dõi' }];
+  }, [shopId, resolvedMode]);
+
+  useEffect(() => {
+    setActiveTab(shopId ? 'followers' : resolvedMode);
+  }, [shopId, resolvedMode]);
 
   const loadData = useCallback(
     async ({ refresh = false, nextPage = 1 } = {}) => {
@@ -102,6 +129,10 @@ export default function FollowConnectionsScreen({
         }
 
         const params = { page: nextPage, limit: 20, search: appliedSearch };
+        if (activeTab === 'followers' && shopId) {
+          params.shopId = shopId;
+        }
+
         const result =
           activeTab === 'following'
             ? await getFollowingOnBackend(idToken, params)
@@ -124,7 +155,7 @@ export default function FollowConnectionsScreen({
         setIsLoadingMore(false);
       }
     },
-    [activeTab, appliedSearch]
+    [activeTab, appliedSearch, shopId]
   );
 
   useEffect(() => {
@@ -145,52 +176,61 @@ export default function FollowConnectionsScreen({
       if (!idToken) {
         return;
       }
-      await unfollowUserOnBackend({
+      const targetShopId = item.shopId || item.id;
+      await unfollowShopOnBackend({
         idToken,
-        sellerUserId: item.id,
-        shopId: item.shopId || undefined,
+        shopId: targetShopId,
       });
-      setItems((current) => current.filter((row) => String(row.id) !== String(item.id)));
-      setSnackbar('Đã bỏ theo dõi.');
+      setItems((current) =>
+        current.filter((row) => String(row.shopId || row.id) !== String(targetShopId))
+      );
+      setSnackbar('Đã bỏ theo dõi gian hàng.');
     } catch (unfollowError) {
       setSnackbar(unfollowError.message || 'Không thể bỏ theo dõi.');
     }
   }
 
+  const title =
+    activeTab === 'followers'
+      ? shopId
+        ? 'Người theo dõi gian hàng'
+        : 'Người theo dõi shop'
+      : 'Gian hàng đang theo dõi';
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
         <CircularBackButton onPress={onBack} variant="surface" />
-        <Text style={styles.title}>Kết nối</Text>
+        <Text style={styles.title}>{title}</Text>
         <View style={styles.headerSpacer} />
       </View>
 
-      <View style={styles.tabRow}>
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.key;
-          return (
-            <Pressable
-              key={tab.key}
-              onPress={() => {
-                setActiveTab(tab.key);
-                setPage(1);
-              }}
-              style={[styles.tabItem, isActive && styles.tabItemActive]}
-            >
-              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{tab.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {tabs.length > 1 ? (
+        <View style={styles.tabRow}>
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.key;
+            return (
+              <Pressable
+                key={tab.key}
+                onPress={() => {
+                  setActiveTab(tab.key);
+                  setPage(1);
+                }}
+                style={[styles.tabItem, isActive && styles.tabItemActive]}
+              >
+                <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{tab.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
 
       <View style={styles.searchRow}>
-        <TextInput
+        <ClearableSearchField
           value={search}
           onChangeText={setSearch}
-          placeholder="Tìm theo tên..."
-          placeholderTextColor="#94a3b8"
-          style={styles.searchInput}
-          returnKeyType="search"
+          placeholder={activeTab === 'following' ? 'Tìm gian hàng...' : 'Tìm người theo dõi...'}
+          style={styles.searchField}
           onSubmitEditing={() => setAppliedSearch(search.trim())}
         />
         <Pressable
@@ -220,7 +260,7 @@ export default function FollowConnectionsScreen({
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(item) => String(item.id)}
+          keyExtractor={(item) => String(item.shopId || item.id)}
           contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
           refreshControl={
             <RefreshControl refreshing={isRefreshing} onRefresh={() => loadData({ refresh: true })} />
@@ -233,14 +273,13 @@ export default function FollowConnectionsScreen({
           onEndReachedThreshold={0.3}
           ListEmptyComponent={
             <View style={styles.emptyBox}>
-              <Text style={styles.emptyIcon}>{activeTab === 'following' ? '👥' : '❤️'}</Text>
               <Text style={styles.emptyTitle}>
-                {activeTab === 'following' ? 'Chưa theo dõi ai' : 'Chưa có người theo dõi'}
+                {activeTab === 'following' ? 'Chưa theo dõi gian hàng nào' : 'Chưa có người theo dõi'}
               </Text>
               <Text style={styles.emptySubtitle}>
                 {activeTab === 'following'
-                  ? 'Theo dõi người bán từ trang gian hàng để xem tại đây.'
-                  : 'Khi có người theo dõi bạn, danh sách sẽ hiển thị tại đây.'}
+                  ? 'Theo dõi gian hàng từ trang cửa hàng để xem tại đây.'
+                  : 'Khi có người theo dõi gian hàng, danh sách sẽ hiển thị tại đây.'}
               </Text>
             </View>
           }
@@ -250,7 +289,7 @@ export default function FollowConnectionsScreen({
             ) : null
           }
           renderItem={({ item }) => (
-            <UserRow
+            <ConnectionRow
               item={item}
               showUnfollow={activeTab === 'following'}
               onUnfollow={handleUnfollow}
@@ -326,17 +365,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginTop: 12,
     marginBottom: 8,
+    alignItems: 'center',
   },
-  searchInput: {
+  searchField: {
     flex: 1,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#dbe4ee',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
-    color: '#0f172a',
-    fontWeight: '600',
   },
   searchBtn: {
     height: 44,
@@ -437,10 +469,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
     paddingVertical: 64,
-  },
-  emptyIcon: {
-    fontSize: 42,
-    marginBottom: 12,
   },
   emptyTitle: {
     fontSize: 18,

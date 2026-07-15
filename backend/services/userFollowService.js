@@ -1,10 +1,26 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
-const UserFollow = require("../models/UserFollow");
+const ShopFollow = require("../models/ShopFollow");
 const ShopProfile = require("../models/ShopProfile");
-const { USER_ROLE } = require("../constants/sellerVerification");
 const { USER_STATUS } = require("../constants/userStatus");
+const { SHOP_STATUS } = require("../constants/shopStatus");
 const { createNotification } = require("./notificationService");
+
+/** Collection cũ: user → seller (UserFollow). */
+const LegacyUserFollow =
+  mongoose.models.LegacyUserFollow ||
+  mongoose.model(
+    "LegacyUserFollow",
+    new mongoose.Schema(
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        followedUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        CreatedAt: { type: Date, default: Date.now },
+        UpdatedAt: { type: Date, default: Date.now },
+      },
+      { collection: "userfollows" }
+    )
+  );
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -20,238 +36,331 @@ function isStrictMongoObjectId(value) {
   return /^[a-f\d]{24}$/i.test(pickString(value));
 }
 
+function toObjectId(value) {
+  const text = pickString(value);
+  if (!isStrictMongoObjectId(text)) {
+    return null;
+  }
+  return new mongoose.Types.ObjectId(text);
+}
+
 function parsePagination(query = {}) {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));
   return { page, limit, skip: (page - 1) * limit };
 }
 
-async function resolveSellerUserId({ sellerUserId, shopId, userId }) {
-  const directId = pickString(sellerUserId || userId);
-  if (directId) {
-    if (!isStrictMongoObjectId(directId)) {
-      throw createServiceError("Mã người bán không hợp lệ.", 400);
+async function resolveShopId(payload = {}) {
+  const candidates = [
+    payload.shopId,
+    payload.targetId,
+    payload.id,
+    payload.sellerUserId,
+    payload.followedUserId,
+    payload.userId,
+  ]
+    .map(pickString)
+    .filter(Boolean);
+
+  if (candidates.length === 0) {
+    throw createServiceError("Thiếu shopId.", 400);
+  }
+
+  for (const candidate of candidates) {
+    if (!isStrictMongoObjectId(candidate)) {
+      continue;
     }
-    return directId;
+
+    const asShop = await ShopProfile.findById(candidate).select("_id").lean();
+    if (asShop?._id) {
+      return String(asShop._id);
+    }
+
+    const asOwnerShop = await ShopProfile.findOne({ userId: candidate })
+      .sort({ CreatedAt: -1 })
+      .select("_id")
+      .lean();
+    if (asOwnerShop?._id) {
+      return String(asOwnerShop._id);
+    }
   }
 
-  const normalizedShopId = pickString(shopId);
-  if (!normalizedShopId) {
-    throw createServiceError("Thiếu sellerUserId hoặc shopId.", 400);
-  }
-  if (!isStrictMongoObjectId(normalizedShopId)) {
-    throw createServiceError("Mã gian hàng không hợp lệ.", 400);
-  }
-
-  const shop = await ShopProfile.findById(normalizedShopId).select("userId").lean();
-  if (!shop?.userId) {
-    throw createServiceError("Không tìm thấy gian hàng.", 404);
-  }
-  return String(shop.userId);
+  throw createServiceError("Không tìm thấy gian hàng tương ứng.", 404);
 }
 
-function toClientUserCard(user, shop = null, extra = {}) {
+async function getActiveShop(shopId) {
+  const shop = await ShopProfile.findById(shopId);
+  if (!shop || Number(shop.status) === SHOP_STATUS.BLOCKED) {
+    throw createServiceError("Không tìm thấy gian hàng.", 404);
+  }
+  return shop;
+}
+
+function toClientShopCard(shop, extra = {}) {
+  return {
+    id: String(shop._id),
+    shopId: String(shop._id),
+    shopName: shop.shopName || "",
+    shopUsername: shop.shopUsername || "",
+    shopAvatar: shop.avatar || "",
+    avatar: shop.avatar || "",
+    address: shop.address || shop.DiaChiHeThong || "",
+    followersCount: Number(shop.followersCount) || 0,
+    averageRating: Number(shop.averageRating) || 0,
+    totalProducts: Number(shop.totalProducts) || 0,
+    ...extra,
+  };
+}
+
+function toClientFollowerCard(user, extra = {}) {
   return {
     id: String(user._id),
     userName: user.UserName || "",
     fullName: user.FullName || "",
     avatar: user.Avatar || "",
-    role: Number(user.Role) || USER_ROLE.BUYER,
-    followersCount: Number(user.FollowersCount) || 0,
     followingCount: Number(user.FollowingCount) || 0,
-    shopId: shop?._id ? String(shop._id) : "",
-    shopName: shop?.shopName || "",
-    shopAvatar: shop?.avatar || "",
     ...extra,
   };
 }
 
-async function assertFollowableSeller(targetUserId, currentUserId) {
-  if (String(targetUserId) === String(currentUserId)) {
-    throw createServiceError("Không thể theo dõi chính mình.", 400);
+async function hasShopFollow(userId, shopId) {
+  const userObjectId = toObjectId(userId);
+  const shopObjectId = toObjectId(shopId);
+  if (!userObjectId || !shopObjectId) {
+    return false;
   }
-
-  const target = await User.findById(targetUserId);
-  if (!target || Number(target.Status) === USER_STATUS.BLOCKED) {
-    throw createServiceError("Không tìm thấy người bán.", 404);
-  }
-
-  if (Number(target.Role) !== USER_ROLE.SELLER) {
-    throw createServiceError("Chỉ được theo dõi tài khoản người bán.", 400);
-  }
-
-  return target;
+  return Boolean(
+    await ShopFollow.exists({
+      userId: userObjectId,
+      shopId: shopObjectId,
+    })
+  );
 }
 
-async function followUser(currentUser, payload = {}) {
-  const targetUserId = await resolveSellerUserId(payload);
-  const target = await assertFollowableSeller(targetUserId, currentUser._id);
+async function runInOptionalTransaction(work) {
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    let result;
+    await session.withTransaction(async () => {
+      result = await work(session);
+    });
+    return result;
+  } catch (error) {
+    const message = String(error?.message || "");
+    const needsFallback =
+      /transaction|replica set|not supported|IllegalOperation/i.test(message) ||
+      error?.code === 20 ||
+      error?.codeName === "IllegalOperation";
+    if (!needsFallback || !work) {
+      throw error;
+    }
+    return work(null);
+  } finally {
+    if (session) {
+      session.endSession();
+    }
+  }
+}
 
-  const existing = await UserFollow.findOne({
-    userId: currentUser._id,
-    followedUserId: target._id,
-  });
+async function followShop(currentUser, payload = {}) {
+  const shopId = await resolveShopId(payload);
+  const shop = await getActiveShop(shopId);
+  const userObjectId = toObjectId(currentUser._id);
+  const shopObjectId = toObjectId(shop._id);
 
-  if (existing) {
-    throw createServiceError("Bạn đã theo dõi người bán này.", 409);
+  if (await hasShopFollow(userObjectId, shopObjectId)) {
+    throw createServiceError("Bạn đã theo dõi gian hàng này.", 409);
   }
 
-  const session = await mongoose.startSession();
   let followDoc = null;
 
   try {
-    await session.withTransaction(async () => {
+    await runInOptionalTransaction(async (session) => {
       const now = new Date();
-      const [created] = await UserFollow.create(
+      const options = session ? { session } : undefined;
+      const [created] = await ShopFollow.create(
         [
           {
-            userId: currentUser._id,
-            followedUserId: target._id,
+            userId: userObjectId,
+            shopId: shopObjectId,
             CreatedAt: now,
             UpdatedAt: now,
           },
         ],
-        { session }
+        options || {}
       );
       followDoc = created;
 
       await User.updateOne(
-        { _id: currentUser._id },
+        { _id: userObjectId },
         { $inc: { FollowingCount: 1 }, $set: { UpdatedAt: now } },
-        { session }
+        options
       );
-      await User.updateOne(
-        { _id: target._id },
-        { $inc: { FollowersCount: 1 }, $set: { UpdatedAt: now } },
-        { session }
+      await ShopProfile.updateOne(
+        { _id: shopObjectId },
+        { $inc: { followersCount: 1 }, $set: { UpdatedAt: now } },
+        options
       );
     });
   } catch (error) {
-    if (error?.code === 11000) {
-      throw createServiceError("Bạn đã theo dõi người bán này.", 409);
+    if (error?.code === 11000 || error?.statusCode === 409) {
+      throw createServiceError("Bạn đã theo dõi gian hàng này.", 409);
     }
     throw error;
-  } finally {
-    session.endSession();
   }
 
-  const followerName = currentUser.FullName || currentUser.UserName || "Một người mua";
-  await createNotification(target._id, {
-    title: "Có người theo dõi bạn",
-    content: `${followerName} vừa theo dõi bạn trên FastMark.`,
-  });
+  // Dọn follow user↔user cũ nếu còn.
+  if (shop.userId) {
+    await LegacyUserFollow.deleteMany({
+      userId: userObjectId,
+      followedUserId: shop.userId,
+    }).catch(() => null);
+  }
 
-  const shop = await ShopProfile.findOne({ userId: target._id }).lean();
-  const freshTarget = await User.findById(target._id).lean();
+  if (shop.userId && String(shop.userId) !== String(currentUser._id)) {
+    const followerName = currentUser.FullName || currentUser.UserName || "Một người mua";
+    await createNotification(shop.userId, {
+      title: "Có người theo dõi gian hàng",
+      content: `${followerName} vừa theo dõi gian hàng ${shop.shopName || ""}`.trim() + ".",
+    });
+  }
+
+  const freshShop = await ShopProfile.findById(shop._id).lean();
   const freshCurrent = await User.findById(currentUser._id).lean();
 
   return {
     isFollowing: true,
-    followId: String(followDoc._id),
-    seller: toClientUserCard(freshTarget || target, shop),
-    followersCount: Number(freshTarget?.FollowersCount) || 0,
+    followId: followDoc?._id ? String(followDoc._id) : "",
+    shopId: String(shop._id),
+    shop: toClientShopCard(freshShop || shop),
+    followersCount: Number(freshShop?.followersCount) || 0,
     followingCount: Number(freshCurrent?.FollowingCount) || 0,
   };
 }
 
-async function unfollowUser(currentUser, payload = {}) {
-  const targetUserId = await resolveSellerUserId(payload);
+async function unfollowShop(currentUser, payload = {}) {
+  const shopId = await resolveShopId(payload);
+  const shop = await ShopProfile.findById(shopId).lean();
+  const userObjectId = toObjectId(currentUser._id);
+  const shopObjectId = toObjectId(shopId);
 
-  if (String(targetUserId) === String(currentUser._id)) {
-    throw createServiceError("Không thể bỏ theo dõi chính mình.", 400);
+  if (!userObjectId || !shopObjectId) {
+    throw createServiceError("Mã gian hàng không hợp lệ.", 400);
   }
 
-  const session = await mongoose.startSession();
   let removed = null;
+  let removedLegacy = null;
 
-  try {
-    await session.withTransaction(async () => {
-      removed = await UserFollow.findOneAndDelete(
+  await runInOptionalTransaction(async (session) => {
+    const options = session ? { session } : undefined;
+    removed = await ShopFollow.findOneAndDelete(
+      {
+        userId: userObjectId,
+        shopId: shopObjectId,
+      },
+      options
+    );
+
+    if (shop?.userId) {
+      removedLegacy = await LegacyUserFollow.findOneAndDelete(
         {
-          userId: currentUser._id,
-          followedUserId: targetUserId,
+          userId: userObjectId,
+          followedUserId: shop.userId,
         },
-        { session }
+        options
       );
+    }
 
-      if (!removed) {
-        throw createServiceError("Bạn chưa theo dõi người bán này.", 404);
-      }
+    if (!removed && !removedLegacy) {
+      // Idempotent: coi như đã hủy — đồng bộ đếm nếu cần.
+      return;
+    }
 
-      const now = new Date();
-      await User.updateOne(
-        { _id: currentUser._id, FollowingCount: { $gt: 0 } },
-        { $inc: { FollowingCount: -1 }, $set: { UpdatedAt: now } },
-        { session }
-      );
-      await User.updateOne(
-        { _id: targetUserId, FollowersCount: { $gt: 0 } },
-        { $inc: { FollowersCount: -1 }, $set: { UpdatedAt: now } },
-        { session }
-      );
-    });
-  } finally {
-    session.endSession();
-  }
+    const now = new Date();
+    await User.updateOne(
+      { _id: userObjectId, FollowingCount: { $gt: 0 } },
+      { $inc: { FollowingCount: -1 }, $set: { UpdatedAt: now } },
+      options
+    );
+    await ShopProfile.updateOne(
+      { _id: shopObjectId, followersCount: { $gt: 0 } },
+      { $inc: { followersCount: -1 }, $set: { UpdatedAt: now } },
+      options
+    );
+  });
 
-  const shop = await ShopProfile.findOne({ userId: targetUserId }).lean();
-  const freshTarget = await User.findById(targetUserId).lean();
+  const freshShop = await ShopProfile.findById(shopId).lean();
   const freshCurrent = await User.findById(currentUser._id).lean();
 
   return {
     isFollowing: false,
-    sellerUserId: String(targetUserId),
-    seller: freshTarget ? toClientUserCard(freshTarget, shop) : null,
-    followersCount: Number(freshTarget?.FollowersCount) || 0,
+    shopId: String(shopId),
+    shop: freshShop ? toClientShopCard(freshShop) : null,
+    followersCount: Number(freshShop?.followersCount) || 0,
     followingCount: Number(freshCurrent?.FollowingCount) || 0,
   };
 }
 
 async function getFollowStatus(currentUser, payload = {}) {
-  const targetUserId = await resolveSellerUserId(payload);
-  const isFollowing = Boolean(
-    await UserFollow.exists({
-      userId: currentUser._id,
-      followedUserId: targetUserId,
-    })
+  const shopId = await resolveShopId(payload);
+  const shop = await ShopProfile.findById(shopId).select("followersCount userId").lean();
+  const userObjectId = toObjectId(currentUser._id);
+  const shopObjectId = toObjectId(shopId);
+
+  let isFollowing = Boolean(
+    userObjectId &&
+      shopObjectId &&
+      (await ShopFollow.exists({
+        userId: userObjectId,
+        shopId: shopObjectId,
+      }))
   );
 
-  const target = await User.findById(targetUserId).select("FollowersCount Role").lean();
+  // Legacy userfollows: coi như đang follow shop của seller đó.
+  if (!isFollowing && shop?.userId && userObjectId) {
+    isFollowing = Boolean(
+      await LegacyUserFollow.exists({
+        userId: userObjectId,
+        followedUserId: shop.userId,
+      })
+    );
+  }
+
   return {
-    sellerUserId: String(targetUserId),
+    shopId: String(shopId),
     isFollowing,
-    followersCount: Number(target?.FollowersCount) || 0,
+    followersCount: Number(shop?.followersCount) || 0,
   };
 }
 
 async function listFollowing(currentUser, query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const search = pickString(query.search || query.q).toLowerCase();
+  const userObjectId = toObjectId(currentUser._id);
 
-  const filter = { userId: currentUser._id };
+  const filter = { userId: userObjectId || currentUser._id };
   const [rows, total] = await Promise.all([
-    UserFollow.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
-    UserFollow.countDocuments(filter),
+    ShopFollow.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ShopFollow.countDocuments(filter),
   ]);
 
-  const userIds = rows.map((row) => row.followedUserId).filter(Boolean);
-  const users = userIds.length
-    ? await User.find({ _id: { $in: userIds }, Status: { $ne: USER_STATUS.BLOCKED } }).lean()
+  const shopIds = rows.map((row) => row.shopId).filter(Boolean);
+  const shops = shopIds.length
+    ? await ShopProfile.find({
+        _id: { $in: shopIds },
+        status: { $ne: SHOP_STATUS.BLOCKED },
+      }).lean()
     : [];
-  const userById = new Map(users.map((user) => [String(user._id), user]));
-
-  const shops = userIds.length
-    ? await ShopProfile.find({ userId: { $in: userIds } }).lean()
-    : [];
-  const shopByUserId = new Map(shops.map((shop) => [String(shop.userId), shop]));
+  const shopById = new Map(shops.map((shop) => [String(shop._id), shop]));
 
   let items = rows
     .map((row) => {
-      const user = userById.get(String(row.followedUserId));
-      if (!user) {
+      const shop = shopById.get(String(row.shopId));
+      if (!shop) {
         return null;
       }
-      return toClientUserCard(user, shopByUserId.get(String(user._id)), {
+      return toClientShopCard(shop, {
         followedAt: row.CreatedAt,
         isFollowing: true,
       });
@@ -260,7 +369,7 @@ async function listFollowing(currentUser, query = {}) {
 
   if (search) {
     items = items.filter((item) => {
-      const haystack = `${item.fullName} ${item.userName} ${item.shopName}`.toLowerCase();
+      const haystack = `${item.shopName} ${item.shopUsername}`.toLowerCase();
       return haystack.includes(search);
     });
   }
@@ -279,16 +388,37 @@ async function listFollowing(currentUser, query = {}) {
 async function listFollowers(currentUser, query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const search = pickString(query.search || query.q).toLowerCase();
-  const targetUserId = pickString(query.userId || query.sellerUserId) || String(currentUser._id);
+  let shopId = pickString(query.shopId);
 
-  if (!isStrictMongoObjectId(targetUserId)) {
-    throw createServiceError("Mã người dùng không hợp lệ.", 400);
+  if (!shopId) {
+    const ownShop = await ShopProfile.findOne({ userId: currentUser._id })
+      .sort({ CreatedAt: -1 })
+      .select("_id")
+      .lean();
+    shopId = ownShop?._id ? String(ownShop._id) : "";
   }
 
-  const filter = { followedUserId: targetUserId };
+  if (!shopId) {
+    throw createServiceError("Thiếu shopId.", 400);
+  }
+  if (!isStrictMongoObjectId(shopId)) {
+    throw createServiceError("Mã gian hàng không hợp lệ.", 400);
+  }
+
+  const shop = await ShopProfile.findById(shopId).select("userId").lean();
+  if (!shop) {
+    throw createServiceError("Không tìm thấy gian hàng.", 404);
+  }
+
+  if (String(shop.userId) !== String(currentUser._id)) {
+    throw createServiceError("Chỉ chủ gian hàng mới xem được danh sách người theo dõi.", 403);
+  }
+
+  const shopObjectId = toObjectId(shopId);
+  const filter = { shopId: shopObjectId || shopId };
   const [rows, total] = await Promise.all([
-    UserFollow.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
-    UserFollow.countDocuments(filter),
+    ShopFollow.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ShopFollow.countDocuments(filter),
   ]);
 
   const userIds = rows.map((row) => row.userId).filter(Boolean);
@@ -297,25 +427,14 @@ async function listFollowers(currentUser, query = {}) {
     : [];
   const userById = new Map(users.map((user) => [String(user._id), user]));
 
-  const myFollows = userIds.length
-    ? await UserFollow.find({
-        userId: currentUser._id,
-        followedUserId: { $in: userIds },
-      })
-        .select("followedUserId")
-        .lean()
-    : [];
-  const followingSet = new Set(myFollows.map((row) => String(row.followedUserId)));
-
   let items = rows
     .map((row) => {
       const user = userById.get(String(row.userId));
       if (!user) {
         return null;
       }
-      return toClientUserCard(user, null, {
+      return toClientFollowerCard(user, {
         followedAt: row.CreatedAt,
-        isFollowing: followingSet.has(String(user._id)),
       });
     })
     .filter(Boolean);
@@ -328,6 +447,7 @@ async function listFollowers(currentUser, query = {}) {
   }
 
   return {
+    shopId: String(shopId),
     items,
     pagination: {
       page,
@@ -338,7 +458,12 @@ async function listFollowers(currentUser, query = {}) {
   };
 }
 
+const followUser = followShop;
+const unfollowUser = unfollowShop;
+
 module.exports = {
+  followShop,
+  unfollowShop,
   followUser,
   unfollowUser,
   getFollowStatus,

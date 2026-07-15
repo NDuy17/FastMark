@@ -835,7 +835,7 @@ export default function MapScreen({
           <View style={styles.searchRow}>
             <View style={styles.searchBarWrap}>
               <AddressSearchBar
-                placeholder="Tìm đường Phúc Diễn, địa điểm..."
+                placeholder="Tìm đường, địa điểm..."
                 onSelectResult={handleSearchSelect}
               />
             </View>

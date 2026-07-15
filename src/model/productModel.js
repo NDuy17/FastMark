@@ -3,7 +3,9 @@ export function normalizeProduct(row) {
   const maxPrice = Number(row.maxPrice ?? row.price ?? minPrice);
   const distanceMeters =
     row.distanceMeters == null || row.distanceMeters === ''
-      ? null
+      ? row.distance_meters == null || row.distance_meters === ''
+        ? null
+        : Number(row.distance_meters)
       : Number(row.distanceMeters);
 
   return {

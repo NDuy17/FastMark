@@ -5,7 +5,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSelector } from 'react-redux';
@@ -18,6 +17,7 @@ import { getSellerConversationsOnBackend } from '../../api/sellerOpsApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { selectIsSeller } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
+import ClearableSearchField from '../shared/components/ClearableSearchField';
 import ChatScreen from './ChatScreen';
 import NotificationDetailScreen from './NotificationDetailScreen';
 
@@ -249,17 +249,13 @@ export default function InboxScreen({
     );
   }
 
-  const subtitle = showSellerInbox
-    ? 'Tin nhắn khách hàng'
-    : 'Tin nhắn với gian hàng';
   const showInboxTabs = !buyerView && !messagesOnly;
   const listTab = messagesOnly ? 'messages' : activeTab;
 
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.title}>Inbox</Text>
-        <Text style={styles.subtitle}>{subtitle}</Text>
+        <Text style={styles.title}>Tin nhắn</Text>
       </View>
 
       {showInboxTabs ? (
@@ -280,19 +276,12 @@ export default function InboxScreen({
       ) : null}
 
       {(buyerView || listTab === 'messages') && !showSellerInbox ? (
-        <View style={styles.searchWrap}>
-          <Text style={styles.searchIcon}>🔍</Text>
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Tìm kiếm cuộc trò chuyện..."
-            placeholderTextColor="#94a3b8"
-            style={styles.searchInput}
-            autoCapitalize="none"
-            autoCorrect={false}
-            clearButtonMode="while-editing"
-          />
-        </View>
+        <ClearableSearchField
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Tìm kiếm cuộc trò chuyện..."
+          style={styles.searchField}
+        />
       ) : null}
 
       {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
@@ -414,9 +403,6 @@ export default function InboxScreen({
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>
               <Text style={styles.emptyTitle}>Chưa có thông báo</Text>
-              <Text style={styles.emptySubtitle}>
-                Thông báo hệ thống và cập nhật đơn hàng sẽ hiển thị tại đây.
-              </Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -448,7 +434,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f8fafc' },
   header: { paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: '#ffffff' },
   title: { fontSize: 24, fontWeight: '900', color: '#0f172a' },
-  subtitle: { color: '#64748b', marginTop: 4, fontWeight: '600' },
   tabRow: {
     flexDirection: 'row',
     gap: 8,
@@ -467,28 +452,9 @@ const styles = StyleSheet.create({
   tabItemActive: { backgroundColor: '#e8f3f1' },
   tabText: { fontWeight: '700', color: '#64748b' },
   tabTextActive: { color: '#0d7377' },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  searchField: {
     marginHorizontal: 16,
     marginBottom: 12,
-    paddingHorizontal: 12,
-    minHeight: 44,
-    borderRadius: 10,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  searchIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#0f172a',
-    fontWeight: '500',
   },
   listContent: { paddingHorizontal: 16, paddingBottom: 32 },
   listItem: {

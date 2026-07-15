@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -16,6 +15,7 @@ import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../c
 import { searchRegisteredShops } from '../../repository/searchShopRepository';
 import AddressSearchBar from '../map/AddressSearchBar';
 import AvatarBadge from '../shared/components/AvatarBadge';
+import ClearableSearchField from '../shared/components/ClearableSearchField';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 
 const DISTANCE_OPTIONS = [
@@ -224,23 +224,19 @@ export default function SearchScreen({ onSelectLocation, onOpenStore }) {
 
         <View style={styles.inputCard}>
           <Text style={styles.inputLabel}>Tên quán</Text>
-          <TextInput
+          <ClearableSearchField
             value={shopQuery}
             onChangeText={setShopQuery}
-            placeholder="VD: Cà phê Góc Phúc Diễn, @tenquán... (cũng tìm theo tên sản phẩm)"
-            placeholderTextColor="#94a3b8"
-            style={styles.textInput}
-            returnKeyType="search"
+            placeholder="VD: Cà phê Góc Phúc Diễn, @tenquán..."
+            style={styles.clearableInput}
           />
 
           <Text style={styles.inputLabel}>Tên sản phẩm</Text>
-          <TextInput
+          <ClearableSearchField
             value={productQuery}
             onChangeText={setProductQuery}
-            placeholder="VD: phở bò, trà sữa trân châu, cà phê sữa đá..."
-            placeholderTextColor="#94a3b8"
-            style={styles.textInput}
-            returnKeyType="search"
+            placeholder="VD: phở bò, trà sữa trân châu..."
+            style={styles.clearableInput}
           />
           <Text style={styles.inputHint}>
             Chỉ nhập tên quán: tìm theo tên quán hoặc sản phẩm. Nhập cả hai: lọc quán và sản phẩm cùng lúc.
@@ -507,6 +503,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
+    backgroundColor: '#f8fafc',
+  },
+  clearableInput: {
     backgroundColor: '#f8fafc',
   },
   sectionTitle: {

@@ -23,12 +23,12 @@ import NotificationSettingsScreen from '../profile/NotificationSettingsScreen';
 import PurchasedProductsScreen from '../profile/PurchasedProductsScreen';
 import ReservationHistoryScreen from '../profile/ReservationHistoryScreen';
 import VisitedStoresScreen from '../profile/VisitedStoresScreen';
-import FavoriteShopsScreen from '../buyer/FavoriteShopsScreen';
 import SellerPhoneSetupScreen from '../seller/SellerPhoneSetupScreen';
 import SellerPhoneVerifyScreen from '../seller/SellerPhoneVerifyScreen';
 import SellerRegistrationScreen from '../seller/SellerRegistrationScreen';
 import SellerVerificationStatusScreen from '../seller/SellerVerificationStatusScreen';
 import SellerProductDetailScreen from '../seller/SellerProductDetailScreen';
+import ProductDetailScreen from '../store/ProductDetailScreen';
 import SellerShopSettingsScreen from '../seller/SellerShopSettingsScreen';
 import SellerReviewsManageScreen from '../seller/SellerReviewsManageScreen';
 import SellerOrdersScreen from '../seller/SellerOrdersScreen';
@@ -75,6 +75,7 @@ export default function ProfilePanel({
   const [shopSettings, setShopSettings] = useState(null);
   const [buyerOrdersTab, setBuyerOrdersTab] = useState(RESERVATION_TAB.HOLDING);
   const [buyerOrdersTabKey, setBuyerOrdersTabKey] = useState(0);
+  const [productStoreId, setProductStoreId] = useState(null);
 
   const loadShopSettings = useCallback(async () => {
     if (!isProfileVisible || !isSeller) {
@@ -164,6 +165,12 @@ export default function ProfilePanel({
   useEffect(() => {
     onNavigationStateChange?.(Boolean(sellerStep || profileNav || productDetailId));
   }, [onNavigationStateChange, productDetailId, profileNav, sellerStep]);
+
+  useEffect(() => {
+    if (!productDetailId) {
+      setProductStoreId(null);
+    }
+  }, [productDetailId]);
 
   const openBuyerPreview = useCallback(async () => {
     let shop = shopSettings;
@@ -344,19 +351,15 @@ export default function ProfilePanel({
     return (
       <FollowConnectionsScreen
         initialTab={followConnectionsTab}
+        mode={
+          profileMode === 'seller' && followConnectionsTab === 'followers'
+            ? 'followers'
+            : 'following'
+        }
         onBack={() => {
           setProfileNav(null);
           dispatch(loadUserProfile());
         }}
-        onOpenStore={onOpenStore}
-      />
-    );
-  }
-
-  if (profileNav === 'favorite-shops') {
-    return (
-      <FavoriteShopsScreen
-        onBack={() => setProfileNav(null)}
         onOpenStore={onOpenStore}
       />
     );
@@ -451,6 +454,33 @@ export default function ProfilePanel({
   }
 
   if (productDetailId) {
+    if (profileMode === 'buyer') {
+      if (productStoreId) {
+        return (
+          <StoreDetailScreen
+            storeId={productStoreId}
+            onBack={() => setProductStoreId(null)}
+            onProductPress={(nextProductId) => {
+              setProductStoreId(null);
+              onOpenProductDetail?.(nextProductId);
+            }}
+            onNavigateDirections={onNavigateToStore}
+          />
+        );
+      }
+
+      return (
+        <ProductDetailScreen
+          productId={productDetailId}
+          onBack={() => {
+            setProductStoreId(null);
+            onOpenProductDetail?.(null);
+          }}
+          onStorePress={(storeId) => setProductStoreId(String(storeId))}
+        />
+      );
+    }
+
     return (
       <SellerProductDetailScreen
         productId={productDetailId}

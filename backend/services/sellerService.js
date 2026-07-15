@@ -5,6 +5,7 @@ const { SELLER_VERIFICATION_STATUS, USER_ROLE } = require("../constants/sellerVe
 const { assertCategoryExists } = require("./categoryService");
 const { normalizeCategoryId } = require("../utils/categoryId");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { ensureDefaultShopAvatar } = require("./defaultShopAvatarService");
 
 const PHONE_VERIFY_TTL_MS = 5 * 60 * 1000;
 const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
@@ -273,8 +274,9 @@ async function promoteUserToSeller(user, verification, approvedById = null) {
   const categoryId = verification.categoryId?._id || verification.categoryId || null;
 
   const existingShop = await ShopProfile.findOne({ userId: user._id });
+  let shop = existingShop;
   if (!existingShop) {
-    await ShopProfile.create({
+    shop = await ShopProfile.create({
       userId: user._id,
       shopUsername: verification.shopUsername || "",
       shopName: verification.shopName || user.FullName || user.UserName || "",
@@ -304,7 +306,10 @@ async function promoteUserToSeller(user, verification, approvedById = null) {
     existingShop.phone = user.Phone;
     existingShop.UpdatedAt = new Date();
     await existingShop.save();
+    shop = existingShop;
   }
+
+  await ensureDefaultShopAvatar(shop, user);
 
   return verification;
 }
@@ -319,6 +324,11 @@ async function syncSellerRoleFromVerification(user) {
   if (verification.status === SELLER_VERIFICATION_STATUS.APPROVED) {
     if (user.Role !== USER_ROLE.SELLER) {
       await promoteUserToSeller(user, verification);
+    } else {
+      const shop = await ShopProfile.findOne({ userId: user._id }).sort({ CreatedAt: -1 });
+      if (shop) {
+        await ensureDefaultShopAvatar(shop, user);
+      }
     }
     return verification;
   }

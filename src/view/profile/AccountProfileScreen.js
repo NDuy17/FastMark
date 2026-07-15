@@ -294,9 +294,11 @@ export default function AccountProfileScreen({
       reviews: profile?.totalReviews ?? 0,
       rating: profile?.averageRating ?? 0,
       following: profile?.followingCount ?? 0,
-      followers: profile?.followersCount ?? 0,
+      followers: showAsSeller
+        ? shopContact?.followersCount ?? profile?.followersCount ?? 0
+        : 0,
     }),
-    [catalogStats, showAsSeller, profile]
+    [catalogStats, showAsSeller, profile, shopContact]
   );
 
   async function handlePickAvatar() {
@@ -469,12 +471,17 @@ export default function AccountProfileScreen({
                 <Text style={styles.followValue}>{formatCount(stats.following)}</Text> đang theo dõi
               </Text>
             </Pressable>
-            <Text style={styles.followDivider}>•</Text>
-            <Pressable onPress={() => onOpenFollowConnections?.('followers')}>
-              <Text style={styles.followText}>
-                <Text style={styles.followValue}>{formatCount(stats.followers)}</Text> người theo dõi
-              </Text>
-            </Pressable>
+            {showAsSeller ? (
+              <>
+                <Text style={styles.followDivider}>•</Text>
+                <Pressable onPress={() => onOpenFollowConnections?.('followers')}>
+                  <Text style={styles.followText}>
+                    <Text style={styles.followValue}>{formatCount(stats.followers)}</Text> người theo
+                    dõi shop
+                  </Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
 
           {showAsBuyer ? (

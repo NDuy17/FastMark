@@ -53,32 +53,6 @@ router.delete(
   asyncHandler(buyerController.removeFavorite)
 );
 
-router.get(
-  "/favorite-shops",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.listFavoriteShops)
-);
-router.get(
-  "/favorite-shops/ids",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.listFavoriteShopIds)
-);
-router.get(
-  "/favorite-shops/status",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.getFavoriteShopStatus)
-);
-router.post(
-  "/favorite-shops",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.addFavoriteShop)
-);
-router.delete(
-  "/favorite-shops/:shopId",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.removeFavoriteShop)
-);
-
 router.get("/follows/status", verifyFirebaseToken, asyncHandler(buyerController.getFollowStatus));
 router.get("/follows/following", verifyFirebaseToken, asyncHandler(buyerController.listFollowing));
 router.get("/follows/followers", verifyFirebaseToken, asyncHandler(buyerController.listFollowers));

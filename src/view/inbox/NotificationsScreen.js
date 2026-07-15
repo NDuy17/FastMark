@@ -111,7 +111,6 @@ export default function NotificationsScreen({ onNavigationStateChange }) {
     <View style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title}>Thông báo</Text>
-        <Text style={styles.subtitle}>Cập nhật đơn hàng và hệ thống</Text>
       </View>
 
       {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
@@ -131,9 +130,6 @@ export default function NotificationsScreen({ onNavigationStateChange }) {
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>
               <Text style={styles.emptyTitle}>Chưa có thông báo</Text>
-              <Text style={styles.emptySubtitle}>
-                Thông báo hệ thống và cập nhật đơn hàng sẽ hiển thị tại đây.
-              </Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -170,7 +166,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   title: { fontSize: 24, fontWeight: '900', color: '#0f172a' },
-  subtitle: { color: '#64748b', marginTop: 4, fontWeight: '600' },
   errorText: {
     color: '#dc2626',
     marginHorizontal: 16,
@@ -229,12 +224,4 @@ const styles = StyleSheet.create({
   },
   emptyIcon: { fontSize: 40, marginBottom: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
-  emptySubtitle: {
-    marginTop: 8,
-    textAlign: 'center',
-    color: '#94a3b8',
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
 });

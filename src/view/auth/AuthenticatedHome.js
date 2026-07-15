@@ -87,6 +87,7 @@ export default function AuthenticatedHome() {
   const [inboxChatRequest, setInboxChatRequest] = useState(null);
   const [openBuyerOrdersRequest, setOpenBuyerOrdersRequest] = useState(null);
   const [nestedTabState, setNestedTabState] = useState({});
+  const [tabInstanceKeys, setTabInstanceKeys] = useState({});
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
 
@@ -101,6 +102,41 @@ export default function AuthenticatedHome() {
       return { ...current, [tabKey]: nextValue };
     });
   }, []);
+
+  const handleSelectTab = useCallback(
+    (nextTab) => {
+      if (!nextTab || nextTab === activeTab) {
+        return;
+      }
+
+      const leavingTab = activeTab;
+
+      setTabInstanceKeys((current) => ({
+        ...current,
+        [leavingTab]: (current[leavingTab] || 0) + 1,
+      }));
+
+      setNestedTabState((current) => {
+        if (!current[leavingTab]) {
+          return current;
+        }
+        return { ...current, [leavingTab]: false };
+      });
+
+      if (leavingTab === 'profile') {
+        setProductDetailId(null);
+      }
+      if (leavingTab === 'inbox') {
+        setInboxChatRequest(null);
+      }
+      if (leavingTab === 'home') {
+        setMapFocusRequest(null);
+      }
+
+      setActiveTab(nextTab);
+    },
+    [activeTab]
+  );
 
   const loadUnreadBadges = useCallback(async () => {
     try {
@@ -161,7 +197,10 @@ export default function AuthenticatedHome() {
     const defaultTab = isSellerMode ? SELLER_TABS[0].key : BUYER_TABS[0].key;
     setActiveTab(defaultTab);
     setProductDetailId(null);
+    setInboxChatRequest(null);
+    setMapFocusRequest(null);
     setNestedTabState({});
+    setTabInstanceKeys({});
   }, [appMode, isReady, isSellerMode]);
 
   useEffect(() => {
@@ -190,7 +229,7 @@ export default function AuthenticatedHome() {
       at: Date.now(),
     });
     setAppMode(APP_MODE_BUYER);
-    setActiveTab('home');
+    handleSelectTab('home');
   }
 
   function handleNavigateToStore({ shopId, storeName }) {
@@ -201,7 +240,7 @@ export default function AuthenticatedHome() {
       at: Date.now(),
     });
     setAppMode(APP_MODE_BUYER);
-    setActiveTab('home');
+    handleSelectTab('home');
   }
 
   function handleNavigatePickup({ shopId, reservationId, storeName }) {
@@ -213,7 +252,7 @@ export default function AuthenticatedHome() {
       at: Date.now(),
     });
     setAppMode(APP_MODE_BUYER);
-    setActiveTab('home');
+    handleSelectTab('home');
   }
 
   function handleClearMapFocus() {
@@ -223,7 +262,7 @@ export default function AuthenticatedHome() {
   function handleOpenBuyerOrders(tab = RESERVATION_TAB.HOLDING) {
     setOpenBuyerOrdersRequest({ at: Date.now(), tab });
     setAppMode(APP_MODE_BUYER);
-    setActiveTab('profile');
+    handleSelectTab('profile');
   }
 
   function handlePickupCompleted() {
@@ -237,14 +276,14 @@ export default function AuthenticatedHome() {
   function handleOpenProductDetail(productId) {
     setProductDetailId(productId || null);
     if (productId && isBuyerMode) {
-      setActiveTab('profile');
+      handleSelectTab('profile');
     }
   }
 
   function handleStartSellerRegister() {
     setSellerRegisterRequest(Date.now());
     setAppMode(APP_MODE_BUYER);
-    setActiveTab('profile');
+    handleSelectTab('profile');
   }
 
   function handleOpenChat({ shopId, shopName }) {
@@ -256,7 +295,7 @@ export default function AuthenticatedHome() {
       shopName: shopName || 'Gian hàng',
       at: Date.now(),
     });
-    setActiveTab('inbox');
+    handleSelectTab('inbox');
   }
 
   async function handleSwitchToSellerMode() {
@@ -273,7 +312,7 @@ export default function AuthenticatedHome() {
 
   function handleHomeEditAccount() {
     setProfileNavRequest({ screen: 'edit-account', at: Date.now() });
-    setActiveTab('profile');
+    handleSelectTab('profile');
   }
 
   function handleHomeSellerAction() {
@@ -312,10 +351,7 @@ export default function AuthenticatedHome() {
           />
         ),
         favorites: (
-          <FavoriteHubScreen
-            onOpenProduct={handleOpenProductDetail}
-            onOpenStore={handleOpenStoreFromProfile}
-          />
+          <FavoriteHubScreen onOpenProduct={handleOpenProductDetail} />
         ),
         notifications: <NotificationsScreen />,
         inbox: (
@@ -331,7 +367,7 @@ export default function AuthenticatedHome() {
             profileMode="buyer"
             onOpenStore={handleOpenStoreFromProfile}
             onNavigateToStore={handleNavigateToStore}
-            onOpenInbox={() => setActiveTab('inbox')}
+            onOpenInbox={() => handleSelectTab('inbox')}
             onNavigatePickup={handleNavigatePickup}
             openBuyerOrdersRequest={openBuyerOrdersRequest}
             sellerRegisterRequest={sellerRegisterRequest}
@@ -422,7 +458,7 @@ export default function AuthenticatedHome() {
       <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
         {tabs.map((tab) => (
           <View
-            key={tab.key}
+            key={`${tab.key}-${tabInstanceKeys[tab.key] || 0}`}
             style={[styles.tabPane, activeTab !== tab.key && styles.tabHidden]}
           >
             {tabPanes[tab.key]}
@@ -441,9 +477,7 @@ export default function AuthenticatedHome() {
                 <Pressable
                   key={tab.key}
                   style={({ pressed }) => [styles.tabItem, pressed && styles.tabItemPressed]}
-                  onPress={() => {
-                    setActiveTab(tab.key);
-                  }}
+                  onPress={() => handleSelectTab(tab.key)}
                   accessibilityRole="tab"
                   accessibilityLabel={tab.label}
                   accessibilityState={{ selected: isActive }}

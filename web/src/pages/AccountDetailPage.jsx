@@ -221,7 +221,7 @@ export default function AccountDetailPage() {
                   <div><dt>Giờ mở</dt><dd>{shop.openTime || '—'} - {shop.closeTime || '—'}</dd></div>
                   <div><dt>Trạng thái cửa hàng</dt><dd><span className={statusBadgeClass(shop.status)}>{shop.statusLabel}</span></dd></div>
                   <div><dt>Điểm đánh giá</dt><dd>{shop.averageRating?.toFixed?.(1) || '0.0'}</dd></div>
-                  <div><dt>Tổng thích</dt><dd>{shop.totalLikes || 0}</dd></div>
+                  <div><dt>Người theo dõi</dt><dd>{shop.followersCount || 0}</dd></div>
                   <div><dt>Tổng đánh giá</dt><dd>{shop.totalReviews || 0}</dd></div>
                   <div><dt>Tổng sản phẩm</dt><dd>{shop.totalProducts || 0}</dd></div>
                   <div><dt>Tổng lượt bán</dt><dd>{shop.soldCount || 0}</dd></div>

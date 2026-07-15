@@ -48,6 +48,7 @@ export function normalizeStore(row) {
     total_products: Number(row.total_products ?? row.product_count ?? row.totalProducts ?? 0),
     sold_count: Number(row.sold_count ?? row.soldCount ?? 0),
     total_likes: Number(row.total_likes ?? row.totalLikes ?? row.likesCount ?? 0),
+    owner_user_id: pickText(row.owner_user_id, row.ownerUserId),
     // Prefer shop-owned fields only — do not inherit buyer/user photoUrl.
     image_url: pickText(row.image_url, row.shopAvatar, row.avatar),
     cover_image_url: pickText(

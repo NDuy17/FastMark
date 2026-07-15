@@ -17,6 +17,8 @@ import { formatPrice } from '../../core/utils/productFormat';
 import { formatPickupInputs, parsePickupInputs } from '../../core/utils/pickupDateTime';
 import SelectedVariantCard from './SelectedVariantCard';
 import QuantityStepper from './QuantityStepper';
+import DatePickerField from '../shared/components/DatePickerField';
+import TimePickerField from '../shared/components/TimePickerField';
 
 function buildDefaultPickupDate() {
   const d = new Date();
@@ -259,26 +261,17 @@ export default function ReservationModal({
 
             <Text style={styles.label}>Giờ nhận hàng</Text>
             <View style={styles.datetimeRow}>
-              <View style={styles.datetimeField}>
-                <Text style={styles.datetimeHint}>Ngày (DD/MM/YYYY)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={dateInput}
-                  onChangeText={setDateInput}
-                  placeholder="16/07/2026"
-                  keyboardType="numbers-and-punctuation"
-                />
-              </View>
-              <View style={styles.datetimeField}>
-                <Text style={styles.datetimeHint}>Giờ (HH:mm)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={timeInput}
-                  onChangeText={setTimeInput}
-                  placeholder="14:30"
-                  keyboardType="numbers-and-punctuation"
-                />
-              </View>
+              <DatePickerField
+                label="Ngày"
+                value={dateInput}
+                onChange={setDateInput}
+                minimumDate={new Date()}
+              />
+              <TimePickerField
+                label="Giờ"
+                value={timeInput}
+                onChange={setTimeInput}
+              />
             </View>
 
             {pickupTime ? (

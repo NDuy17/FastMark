@@ -32,9 +32,9 @@ function toQuery(params = {}) {
   return text ? `?${text}` : '';
 }
 
-export async function getFollowStatusOnBackend(idToken, { shopId, sellerUserId } = {}) {
+export async function getFollowStatusOnBackend(idToken, { shopId } = {}) {
   const response = await apiRequest(
-    `${API_ENDPOINTS.buyerFollowStatus}${toQuery({ shopId, sellerUserId })}`,
+    `${API_ENDPOINTS.buyerFollowStatus}${toQuery({ shopId })}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
@@ -42,13 +42,13 @@ export async function getFollowStatusOnBackend(idToken, { shopId, sellerUserId }
   return payload.data || { isFollowing: false, followersCount: 0 };
 }
 
-export async function followUserOnBackend({ idToken, shopId, sellerUserId }) {
+export async function followShopOnBackend({ idToken, shopId }) {
   const response = await apiRequest(
     API_ENDPOINTS.buyerFollows,
     {
       method: 'POST',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({ shopId, sellerUserId }),
+      body: JSON.stringify({ shopId }),
     },
     AUTH_TIMEOUT_MS
   );
@@ -56,30 +56,29 @@ export async function followUserOnBackend({ idToken, shopId, sellerUserId }) {
   return payload.data;
 }
 
-export async function unfollowUserOnBackend({ idToken, shopId, sellerUserId }) {
-  const query = toQuery({
-    shopId: shopId || undefined,
-    sellerUserId: sellerUserId || undefined,
-  });
-  const path = sellerUserId
-    ? `${API_ENDPOINTS.buyerFollow(sellerUserId)}${query}`
-    : `${API_ENDPOINTS.buyerFollows}${query}`;
+/** @deprecated Dùng followShopOnBackend */
+export const followUserOnBackend = followShopOnBackend;
+
+export async function unfollowShopOnBackend({ idToken, shopId }) {
+  const path = shopId
+    ? API_ENDPOINTS.buyerFollow(shopId)
+    : API_ENDPOINTS.buyerFollows;
 
   const response = await apiRequest(
     path,
     {
       method: 'DELETE',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({
-        ...(shopId ? { shopId } : {}),
-        ...(sellerUserId ? { sellerUserId } : {}),
-      }),
+      body: JSON.stringify(shopId ? { shopId } : {}),
     },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
   return payload.data;
 }
+
+/** @deprecated Dùng unfollowShopOnBackend */
+export const unfollowUserOnBackend = unfollowShopOnBackend;
 
 export async function getFollowingOnBackend(idToken, params = {}) {
   const response = await apiRequest(

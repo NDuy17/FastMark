@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const FavoriteShopSchema = new mongoose.Schema({
+const ShopFollowSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   shopId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopProfile", required: true, index: true },
 
@@ -8,6 +8,6 @@ const FavoriteShopSchema = new mongoose.Schema({
   UpdatedAt: { type: Date, default: Date.now },
 });
 
-FavoriteShopSchema.index({ userId: 1, shopId: 1 }, { unique: true });
+ShopFollowSchema.index({ userId: 1, shopId: 1 }, { unique: true });
 
-module.exports = mongoose.model("FavoriteShop", FavoriteShopSchema);
+module.exports = mongoose.model("ShopFollow", ShopFollowSchema);

@@ -45,6 +45,38 @@ function pickShopLocation(shop) {
   );
 }
 
+const EARTH_RADIUS_METERS = 6371000;
+
+function toRadians(value) {
+  return (Number(value) * Math.PI) / 180;
+}
+
+function calculateDistanceMeters(lat1, lng1, lat2, lng2) {
+  const startLat = Number(lat1);
+  const startLng = Number(lng1);
+  const endLat = Number(lat2);
+  const endLng = Number(lng2);
+  if (
+    !Number.isFinite(startLat) ||
+    !Number.isFinite(startLng) ||
+    !Number.isFinite(endLat) ||
+    !Number.isFinite(endLng)
+  ) {
+    return null;
+  }
+
+  const deltaLat = toRadians(endLat - startLat);
+  const deltaLng = toRadians(endLng - startLng);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRadians(startLat)) *
+      Math.cos(toRadians(endLat)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return EARTH_RADIUS_METERS * c;
+}
+
 function toClientFavorite({
   favorite,
   product,
@@ -53,6 +85,7 @@ function toClientFavorite({
   category = null,
   isUnavailable = false,
   variants = [],
+  distanceMeters = null,
 }) {
   const prices = variants.map((variant) => Number(variant.Price ?? variant.price) || 0);
   const minPrice =
@@ -72,6 +105,10 @@ function toClientFavorite({
     0
   );
   const isOutOfStock = variants.length > 0 && remainingQuantity <= 0;
+  const roundedDistance =
+    Number.isFinite(Number(distanceMeters)) && Number(distanceMeters) >= 0
+      ? Math.round(Number(distanceMeters))
+      : null;
 
   return {
     id: String(favorite._id),
@@ -92,6 +129,8 @@ function toClientFavorite({
       "",
     rating: Number(shop?.averageRating) || 0,
     likeCount: Number(product?.LikeCount) || 0,
+    soldCount: Number(product?.soldCount ?? product?.SoldCount) || 0,
+    distanceMeters: roundedDistance,
     savedAt: favorite.CreatedAt,
     status,
     isUnavailable: Boolean(isUnavailable) || status === PRODUCT_STATUS.HIDDEN,
@@ -146,8 +185,11 @@ async function buildFavoriteMaps(rows) {
   return { productById, variantsByProduct, shopById, sellerById, categoryById };
 }
 
-function mapFavoriteRows(rows, maps) {
+function mapFavoriteRows(rows, maps, origin = {}) {
   const { productById, variantsByProduct, shopById, sellerById, categoryById } = maps;
+  const originLat = Number(origin.latitude ?? origin.lat);
+  const originLng = Number(origin.longitude ?? origin.lng);
+  const hasOrigin = Number.isFinite(originLat) && Number.isFinite(originLng);
 
   return rows
     .map((favorite) => {
@@ -171,6 +213,9 @@ function mapFavoriteRows(rows, maps) {
       const category = categoryById.get(String(product.CategoryId));
       const isUnavailable =
         Number(product.Status) === PRODUCT_STATUS.HIDDEN || Boolean(product.IsDeleted);
+      const distanceMeters = hasOrigin
+        ? calculateDistanceMeters(originLat, originLng, shop?.latitude, shop?.longitude)
+        : null;
       return toClientFavorite({
         favorite,
         product,
@@ -179,6 +224,7 @@ function mapFavoriteRows(rows, maps) {
         category,
         isUnavailable,
         variants: variantsByProduct.get(String(product._id)) || [],
+        distanceMeters,
       });
     })
     .filter(Boolean);
@@ -201,7 +247,16 @@ async function listFavorites(user, query = {}) {
     query.categoryId ||
     query.shopId ||
     query.minPrice ||
-    query.maxPrice;
+    query.maxPrice ||
+    query.lat ||
+    query.latitude ||
+    query.lng ||
+    query.longitude;
+
+  const origin = {
+    latitude: query.lat ?? query.latitude,
+    longitude: query.lng ?? query.longitude,
+  };
 
   const rows = await FavoriteProduct.find({ userId: user._id })
     .sort({ CreatedAt: -1 })
@@ -221,7 +276,7 @@ async function listFavorites(user, query = {}) {
   }
 
   const maps = await buildFavoriteMaps(rows);
-  let items = mapFavoriteRows(rows, maps);
+  let items = mapFavoriteRows(rows, maps, origin);
 
   const search = pickString(query.search || query.q).toLowerCase();
   if (search) {

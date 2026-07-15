@@ -29,6 +29,7 @@ const ShopProfileSchema = new mongoose.Schema({
   permanentlyClosedAt: { type: Date, default: null },
 
   averageRating: { type: Number, default: 0 },
+  followersCount: { type: Number, default: 0 },
   totalLikes: { type: Number, default: 0 },
   totalReviews: { type: Number, default: 0 },
   totalProducts: { type: Number, default: 0 },
