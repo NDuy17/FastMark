@@ -11,6 +11,13 @@ const {
   mapFirebaseRestError,
 } = require("../utils/firebaseErrors");
 const { sendVerificationEmail, sendPasswordResetEmail } = require("./mailService");
+const {
+  OTP_PURPOSE,
+  getOtpSession,
+  setOtpSession,
+  clearOtpSession,
+  bumpOtpFailCount,
+} = require("./otpSessionStore");
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
@@ -22,18 +29,19 @@ function generateEmailVerifyCode() {
 
 const EMAIL_VERIFY_TTL_MS = 5 * 60 * 1000;
 const EMAIL_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
+const EMAIL_VERIFY_MAX_ATTEMPTS = 5;
 
-function buildVerificationMeta(user) {
-  const expiresAt = user.EmailVerifyCodeExpiresAt;
+function buildVerificationMeta(session) {
+  const expiresAt = session?.expiresAt ? new Date(session.expiresAt) : null;
   const expiresInSeconds = expiresAt
     ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000))
-    : 0;
+    : Math.floor(EMAIL_VERIFY_TTL_MS / 1000);
 
   let resendAvailableAt = null;
   let resendCooldownSeconds = 0;
 
-  if (user.EmailVerifyResendAt) {
-    resendAvailableAt = new Date(user.EmailVerifyResendAt.getTime() + EMAIL_RESEND_COOLDOWN_MS);
+  if (session?.resendAt) {
+    resendAvailableAt = new Date(new Date(session.resendAt).getTime() + EMAIL_RESEND_COOLDOWN_MS);
     resendCooldownSeconds = Math.max(
       0,
       Math.floor((resendAvailableAt.getTime() - Date.now()) / 1000)
@@ -42,18 +50,18 @@ function buildVerificationMeta(user) {
 
   return {
     expiresAt,
-    expiresInSeconds: expiresInSeconds || Math.floor(EMAIL_VERIFY_TTL_MS / 1000),
+    expiresInSeconds,
     resendAvailableAt,
     resendCooldownSeconds,
   };
 }
 
-function assertResendCooldown(user) {
-  if (!user.EmailVerifyResendAt) {
+function assertResendCooldown(session, cooldownMs = EMAIL_RESEND_COOLDOWN_MS) {
+  if (!session?.resendAt) {
     return;
   }
 
-  const resendAvailableAt = user.EmailVerifyResendAt.getTime() + EMAIL_RESEND_COOLDOWN_MS;
+  const resendAvailableAt = new Date(session.resendAt).getTime() + cooldownMs;
   const waitMs = resendAvailableAt - Date.now();
 
   if (waitMs > 0) {
@@ -71,19 +79,21 @@ async function assignEmailVerificationCode(
   user,
   { enforceResendCooldown = false, trackResendCooldown = false } = {}
 ) {
+  const existing = getOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id);
   if (enforceResendCooldown) {
-    assertResendCooldown(user);
+    assertResendCooldown(existing);
   }
 
   const code = generateEmailVerifyCode();
-  user.EmailVerifyCode = code;
-  user.EmailVerifyCodeExpiresAt = new Date(Date.now() + EMAIL_VERIFY_TTL_MS);
-
-  if (trackResendCooldown) {
-    user.EmailVerifyResendAt = new Date();
-  }
-
-  await user.save();
+  const now = Date.now();
+  const session = setOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id, {
+    target: user.Email || "",
+    code,
+    expiresAt: new Date(now + EMAIL_VERIFY_TTL_MS),
+    // Gửi / gửi lại thủ công + auto sau sai 5 lần: khóa gửi lại 2 phút.
+    resendAt: trackResendCooldown ? new Date(now) : null,
+    failCount: 0,
+  });
 
   await sendVerificationEmail({
     to: user.Email,
@@ -91,7 +101,7 @@ async function assignEmailVerificationCode(
     expiresInMinutes: EMAIL_VERIFY_TTL_MS / 60000,
   });
 
-  return buildVerificationMeta(user);
+  return buildVerificationMeta(session);
 }
 
 function normalizeUserName(userName) {
@@ -156,7 +166,10 @@ async function registerWithEmail({
       })
     );
 
-    const verification = await assignEmailVerificationCode(user);
+    const verification = await assignEmailVerificationCode(user, {
+      enforceResendCooldown: false,
+      trackResendCooldown: true,
+    });
 
     return {
       user,
@@ -373,7 +386,11 @@ async function registerOrLoginWithGoogle({ idToken, fullName, userName }) {
     const { assertUserIsActive } = require("./adminAccountService");
     assertUserIsActive(user);
 
-    if (fullName) user.FullName = fullName;
+    // Không ghi đè tên người dùng đã có bằng tên mặc định từ Google mỗi lần đăng nhập.
+    // Chỉ backfill khi tài khoản chưa có FullName.
+    if (fullName && !String(user.FullName || "").trim()) {
+      user.FullName = fullName;
+    }
     if (userName) {
       user.UserName = await assertUserNameAvailable(userName, {
         excludeUserId: user._id,
@@ -439,8 +456,8 @@ async function requestEmailVerification(firebaseUid, { isResend = false } = {}) 
   }
 
   const verification = await assignEmailVerificationCode(user, {
-    enforceResendCooldown: isResend,
-    trackResendCooldown: isResend,
+    enforceResendCooldown: isResend || Boolean(getOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id)),
+    trackResendCooldown: true,
   });
 
   return {
@@ -472,78 +489,108 @@ async function confirmEmailVerification({ firebaseUid, code }) {
     throw error;
   }
 
-  if (!user.EmailVerifyCode || user.EmailVerifyCode !== normalizedCode) {
-    const error = new Error("Mã xác minh không đúng.");
+  const session = getOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id);
+  if (!session?.code) {
+    const error = new Error("Chưa có mã xác minh. Vui lòng gửi mã trước.");
     error.statusCode = 400;
     throw error;
   }
 
-  if (!user.EmailVerifyCodeExpiresAt || new Date() > user.EmailVerifyCodeExpiresAt) {
+  if (!session.expiresAt || new Date() > new Date(session.expiresAt)) {
+    clearOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id);
     const error = new Error("Mã xác minh đã hết hạn. Vui lòng gửi lại mã mới.");
     error.statusCode = 400;
     throw error;
   }
 
+  if (session.code !== normalizedCode) {
+    const updated = bumpOtpFailCount(OTP_PURPOSE.EMAIL_VERIFY, user._id) || session;
+    const failCount = Number(updated.failCount) || 0;
+    if (failCount >= EMAIL_VERIFY_MAX_ATTEMPTS) {
+      // Sai 5 lần → gửi mã mới + khóa gửi lại 2 phút.
+      const meta = await assignEmailVerificationCode(user, {
+        enforceResendCooldown: false,
+        trackResendCooldown: true,
+      });
+      const error = new Error(
+        "Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới. Có thể gửi lại sau 2 phút."
+      );
+      error.statusCode = 400;
+      error.data = { mustUseNewCode: true, email: user.Email, ...meta };
+      throw error;
+    }
+    const error = new Error(
+      `Mã xác minh không đúng. Còn ${EMAIL_VERIFY_MAX_ATTEMPTS - failCount} lần thử.`
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
   user.VerifyAccount = true;
-  user.EmailVerifyCode = null;
-  user.EmailVerifyCodeExpiresAt = null;
   await user.save();
+  clearOtpSession(OTP_PURPOSE.EMAIL_VERIFY, user._id);
 
   return user;
 }
 
 const PASSWORD_RESET_TTL_MS = 5 * 60 * 1000;
-const PASSWORD_RESET_RESEND_COOLDOWN_MS = 3 * 60 * 1000;
+const PASSWORD_RESET_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
 const PASSWORD_RESET_MAX_ATTEMPTS = 5;
 const PASSWORD_RESET_SESSION_TTL_MS = 10 * 60 * 1000;
 
-const passwordResetAttempts = new Map();
 const passwordResetSessions = new Map();
 
-function buildPasswordResetMeta(user) {
-  const expiresAt = user.EmailVerifyCodeExpiresAt;
+function buildPasswordResetMeta(session) {
+  const expiresAt = session?.expiresAt ? new Date(session.expiresAt) : null;
   const expiresInSeconds = expiresAt
     ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000))
-    : 0;
+    : Math.floor(PASSWORD_RESET_TTL_MS / 1000);
 
+  let resendAvailableAt = null;
   let resendCooldownSeconds = 0;
-  if (user.EmailVerifyResendAt) {
-    const resendAvailableAt = user.EmailVerifyResendAt.getTime() + PASSWORD_RESET_RESEND_COOLDOWN_MS;
-    resendCooldownSeconds = Math.max(0, Math.floor((resendAvailableAt - Date.now()) / 1000));
+  if (session?.resendAt) {
+    resendAvailableAt = new Date(
+      new Date(session.resendAt).getTime() + PASSWORD_RESET_RESEND_COOLDOWN_MS
+    );
+    resendCooldownSeconds = Math.max(
+      0,
+      Math.floor((resendAvailableAt.getTime() - Date.now()) / 1000)
+    );
   }
 
   return {
-    expiresInSeconds: expiresInSeconds || Math.floor(PASSWORD_RESET_TTL_MS / 1000),
+    expiresAt,
+    expiresInSeconds,
+    resendAvailableAt,
     resendCooldownSeconds,
   };
 }
 
-function getResetAttemptState(email) {
-  const state = passwordResetAttempts.get(email);
-  if (!state) {
-    return { count: 0, lockedUntil: 0 };
+async function issuePasswordResetCode(user, normalizedEmail, { enforceCooldown = true } = {}) {
+  if (enforceCooldown) {
+    assertResendCooldown(
+      getOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id),
+      PASSWORD_RESET_RESEND_COOLDOWN_MS
+    );
   }
-  if (state.lockedUntil && Date.now() < state.lockedUntil) {
-    return state;
-  }
-  if (state.lockedUntil && Date.now() >= state.lockedUntil) {
-    passwordResetAttempts.delete(email);
-    return { count: 0, lockedUntil: 0 };
-  }
-  return state;
-}
 
-function recordFailedResetAttempt(email) {
-  const state = getResetAttemptState(email);
-  const count = (state.count || 0) + 1;
-  if (count >= PASSWORD_RESET_MAX_ATTEMPTS) {
-    passwordResetAttempts.set(email, {
-      count,
-      lockedUntil: Date.now() + PASSWORD_RESET_TTL_MS,
-    });
-    return;
-  }
-  passwordResetAttempts.set(email, { count, lockedUntil: 0 });
+  const code = generateEmailVerifyCode();
+  const now = Date.now();
+  const session = setOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id, {
+    target: normalizedEmail,
+    code,
+    expiresAt: new Date(now + PASSWORD_RESET_TTL_MS),
+    resendAt: new Date(now),
+    failCount: 0,
+  });
+
+  await sendPasswordResetEmail({
+    to: normalizedEmail,
+    code,
+    expiresInMinutes: PASSWORD_RESET_TTL_MS / 60000,
+  });
+
+  return buildPasswordResetMeta(session);
 }
 
 async function requestPasswordReset({ email }) {
@@ -569,24 +616,8 @@ async function requestPasswordReset({ email }) {
     throw error;
   }
 
-  assertResendCooldown(user);
-
-  const code = generateEmailVerifyCode();
-  user.EmailVerifyCode = code;
-  user.EmailVerifyCodeExpiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
-  user.EmailVerifyResendAt = new Date();
-  await user.save();
-
-  passwordResetAttempts.delete(normalizedEmail);
   passwordResetSessions.delete(normalizedEmail);
-
-  await sendPasswordResetEmail({
-    to: normalizedEmail,
-    code,
-    expiresInMinutes: PASSWORD_RESET_TTL_MS / 60000,
-  });
-
-  return buildPasswordResetMeta(user);
+  return issuePasswordResetCode(user, normalizedEmail, { enforceCooldown: true });
 }
 
 async function verifyPasswordResetOtp({ email, code }) {
@@ -599,14 +630,6 @@ async function verifyPasswordResetOtp({ email, code }) {
     throw error;
   }
 
-  const attemptState = getResetAttemptState(normalizedEmail);
-  if (attemptState.lockedUntil && Date.now() < attemptState.lockedUntil) {
-    const waitSeconds = Math.ceil((attemptState.lockedUntil - Date.now()) / 1000);
-    const error = new Error(`Đã nhập sai quá nhiều lần. Thử lại sau ${waitSeconds} giây.`);
-    error.statusCode = 429;
-    throw error;
-  }
-
   const { findUserByEmail } = require("./userService");
   const user = await findUserByEmail(normalizedEmail);
 
@@ -616,20 +639,44 @@ async function verifyPasswordResetOtp({ email, code }) {
     throw error;
   }
 
-  if (!user.EmailVerifyCode || user.EmailVerifyCode !== normalizedCode) {
-    recordFailedResetAttempt(normalizedEmail);
-    const error = new Error("Mã OTP không đúng.");
+  const otpSession = getOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id);
+  if (!otpSession?.code) {
+    const error = new Error("Chưa có mã OTP. Vui lòng gửi mã trước.");
     error.statusCode = 400;
     throw error;
   }
 
-  if (!user.EmailVerifyCodeExpiresAt || new Date() > user.EmailVerifyCodeExpiresAt) {
+  if (!otpSession.expiresAt || new Date() > new Date(otpSession.expiresAt)) {
+    clearOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id);
     const error = new Error("Mã OTP đã hết hạn. Vui lòng gửi lại.");
     error.statusCode = 400;
     throw error;
   }
 
-  passwordResetAttempts.delete(normalizedEmail);
+  if (otpSession.code !== normalizedCode) {
+    const updated = bumpOtpFailCount(OTP_PURPOSE.PASSWORD_RESET, user._id) || otpSession;
+    const failCount = Number(updated.failCount) || 0;
+
+    if (failCount >= PASSWORD_RESET_MAX_ATTEMPTS) {
+      const meta = await issuePasswordResetCode(user, normalizedEmail, {
+        enforceCooldown: false,
+      });
+      const error = new Error(
+        "Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới. Có thể gửi lại sau 2 phút."
+      );
+      error.statusCode = 400;
+      error.data = { mustUseNewCode: true, email: normalizedEmail, ...meta };
+      throw error;
+    }
+
+    const error = new Error(
+      `Mã OTP không đúng. Còn ${PASSWORD_RESET_MAX_ATTEMPTS - failCount} lần thử.`
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  clearOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id);
   const resetToken = `${user._id}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   passwordResetSessions.set(normalizedEmail, {
     token: resetToken,
@@ -681,13 +728,8 @@ async function resetPasswordWithToken({ email, resetToken, newPassword }) {
     throw mapFirebaseAdminError(error);
   }
 
-  user.EmailVerifyCode = null;
-  user.EmailVerifyCodeExpiresAt = null;
-  user.UpdatedAt = new Date();
-  await user.save();
-
+  clearOtpSession(OTP_PURPOSE.PASSWORD_RESET, user._id);
   passwordResetSessions.delete(normalizedEmail);
-  passwordResetAttempts.delete(normalizedEmail);
 
   return { success: true };
 }

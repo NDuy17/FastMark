@@ -1,3 +1,4 @@
+require("../config/env");
 const { PayOS } = require("@payos/node");
 
 let payosClient = null;
@@ -14,7 +15,7 @@ function assertPayosConfigured() {
   const { clientId, apiKey, checksumKey } = getPayosConfig();
   if (!clientId || !apiKey || !checksumKey) {
     const error = new Error(
-      "PayOS chưa được cấu hình. Thêm PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY vào .env."
+      "PayOS chưa được cấu hình. Thêm PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY vào FastMark/.env rồi restart backend."
     );
     error.statusCode = 503;
     throw error;
@@ -31,8 +32,14 @@ function getPayosClient() {
   return payosClient;
 }
 
+function isPayosConfigured() {
+  const { clientId, apiKey, checksumKey } = getPayosConfig();
+  return Boolean(clientId && apiKey && checksumKey);
+}
+
 module.exports = {
   getPayosClient,
   assertPayosConfigured,
   getPayosConfig,
+  isPayosConfigured,
 };

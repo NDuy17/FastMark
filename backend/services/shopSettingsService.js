@@ -1,13 +1,9 @@
 const ShopProfile = require("../models/ShopProfile");
 const SellerVerification = require("../models/SellerVerification");
 const User = require("../models/User");
-const { SHOP_OPEN } = require("../constants/shopStatus");
-const { SELLER_VERIFICATION_STATUS } = require("../constants/sellerVerification");
-const { isSubscriptionActive } = require("../constants/sellerSubscription");
-const {
-  resolveFileExtension,
-  uploadImageToSupabase,
-} = require("./uploadService");
+const { SHOP_OPEN } = require("../constants");
+const { SELLER_VERIFICATION_STATUS } = require("../constants");
+const { isSubscriptionActive } = require("../constants");
 
 const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
 
@@ -83,38 +79,48 @@ function toPublicShopSettings(shop, user) {
 
   const ownerName = pickString(user?.FullName) || pickString(user?.UserName) || "";
   const ownerUsername = pickString(user?.UserName) || "";
+  const systemAddress = pickString(shop.addressHeThong || shop.DiaChiHeThong || shop.address);
+  const depositPercent = Math.max(
+    0,
+    Math.min(100, Number(shop.cocTien ?? shop.depositPercent) || 0)
+  );
 
   return {
     id: shop._id,
     shopId: shop._id,
-    // Identity from User — shop no longer has a separate public name/handle.
-    shopUsername: ownerUsername || shop.shopUsername || "",
-    shopName: ownerName || shop.shopName || "",
+    // Identity từ User — không lưu tên/handle riêng trên shop.
+    shopUsername: ownerUsername,
+    shopName: ownerName,
     fullName: ownerName,
     userName: ownerUsername,
     categoryId,
     categoryName: shop.categoryId?.categoryName || "",
     description: shop.description || "",
     shopDescription: shop.description || "",
-    avatar: shop.avatar || "",
-    shopAvatar: shop.avatar || "",
-    address: shop.address || "",
-    systemAddress: shop.DiaChiHeThong || "",
+    avatar: pickString(user?.Avatar) || "",
+    shopAvatar: pickString(user?.Avatar) || "",
+    systemAddress,
+    addressHeThong: systemAddress,
+    address: systemAddress,
     latitude: shop.latitude ?? null,
     longitude: shop.longitude ?? null,
-    shopPhone: shop.phone || "",
+    shopPhone: user?.Phone || "",
     userPhone: user?.Phone || "",
     openTime: shop.openTime || "",
     closeTime: shop.closeTime || "",
     isOpen: Number(shop.isOpen) === SHOP_OPEN.OPEN ? 1 : 0,
     status: shop.status ?? 1,
-    followersCount: Number(user?.FollowersCount) || Number(shop.followersCount) || 0,
-    allowReserve: shop.allowReserve !== false,
-    depositPercent: Math.max(0, Math.min(100, Number(shop.depositPercent) || 0)),
+    followersCount: Number(user?.FollowersCount) || 0,
+    depositPercent,
+    cocTien: depositPercent,
+    // QR cố định — payload JSON: {"shopId":"<qrCodeValue>"}
+    qrCodeValue: pickString(shop.qrCodeValue) || String(shop._id),
+    qrPayload: JSON.stringify({
+      shopId: pickString(shop.qrCodeValue) || String(shop._id),
+    }),
     pinHours: Boolean(shop.pinHours),
-    subscriptionPlan: shop.subscriptionPlan || null,
-    subscriptionExpiresAt: shop.subscriptionExpiresAt || null,
     subscriptionActive: isSubscriptionActive(shop),
+    isActive: Boolean(shop.isActive),
   };
 }
 
@@ -125,28 +131,49 @@ async function getShopForSeller(user) {
   if (!shop) {
     throw createServiceError("Chưa có gian hàng.", 404);
   }
+  // Đảm bảo mỗi shop có 1 QR cố định (mặc định = shopId).
+  if (!pickString(shop.qrCodeValue)) {
+    shop.qrCodeValue = String(shop._id);
+    shop.UpdatedAt = new Date();
+    await shop.save();
+  }
   return shop;
 }
 
 async function getShopSettings(user) {
   const shop = await getShopForSeller(user);
   const freshUser = await User.findById(user._id);
-  // Keep legacy shopName/shopUsername mirrored from User for older clients.
-  const ownerName = pickString(freshUser?.FullName) || pickString(freshUser?.UserName);
-  const ownerUsername = pickString(freshUser?.UserName);
-  let dirty = false;
-  if (ownerName && shop.shopName !== ownerName) {
-    shop.shopName = ownerName;
-    dirty = true;
+  const base = toPublicShopSettings(shop, freshUser);
+
+  const { findActiveSubscription } = require("./sellerPlanAccessService");
+  const { listShopPurchases } = require("./sellerSubscriptionService");
+  const active = await findActiveSubscription(shop._id);
+  const purchases = await listShopPurchases(shop._id);
+  let expiresAt = active?.endDate || null;
+  if (purchases.length) {
+    const maxEnd = purchases.reduce((max, row) => {
+      const end = row.endDate ? new Date(row.endDate).getTime() : 0;
+      return end > max ? end : max;
+    }, 0);
+    if (maxEnd > 0) expiresAt = new Date(maxEnd);
   }
-  if (ownerUsername && shop.shopUsername !== ownerUsername) {
-    shop.shopUsername = ownerUsername;
-    dirty = true;
-  }
-  if (dirty) {
-    await shop.save().catch(() => null);
-  }
-  return toPublicShopSettings(shop, freshUser);
+  const oldest = [...purchases].sort((a, b) => {
+    const left = new Date(a.ngayMua || a.createdAt || a.startDate || 0).getTime();
+    const right = new Date(b.ngayMua || b.createdAt || b.startDate || 0).getTime();
+    return left - right;
+  })[0];
+
+  return {
+    ...base,
+    subscriptionPlan: active?.planName || null,
+    goiDangki: active?.planName || null,
+    ngayMua: oldest?.ngayMua || oldest?.createdAt || oldest?.startDate || active?.ngayMua || active?.CreatedAt || active?.startDate || null,
+    subscriptionExpiresAt: expiresAt,
+    ngayHetHan: expiresAt,
+    subscriptionActive: Boolean(active) || purchases.length > 0,
+    purchases,
+    purchaseCount: purchases.length,
+  };
 }
 
 function normalizeTime(value) {
@@ -154,28 +181,36 @@ function normalizeTime(value) {
   if (!text) {
     return "";
   }
-  if (!/^\d{1,2}:\d{2}$/.test(text)) {
+
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) {
     throw createServiceError("Giờ mở/đóng cửa phải theo định dạng HH:mm.");
   }
-  return text;
+
+  const hours = Math.min(23, Math.max(0, Number(match[1])));
+  const minutes = Math.min(59, Math.max(0, Number(match[2])));
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 async function updateShopSettings(user, payload) {
   const shop = await getShopForSeller(user);
   const freshUser = await User.findById(user._id);
 
-  // Name / username always follow the buyer User identity.
-  shop.shopName = pickString(freshUser?.FullName) || pickString(freshUser?.UserName) || shop.shopName;
-  shop.shopUsername = pickString(freshUser?.UserName) || shop.shopUsername;
-
   if (payload.description !== undefined || payload.shopDescription !== undefined) {
     shop.description = pickString(payload.description ?? payload.shopDescription);
   }
-  if (payload.address !== undefined) {
-    shop.address = pickString(payload.address);
-  }
-  if (payload.systemAddress !== undefined || payload.DiaChiHeThong !== undefined) {
-    shop.DiaChiHeThong = pickString(payload.systemAddress ?? payload.DiaChiHeThong);
+  if (
+    payload.systemAddress !== undefined ||
+    payload.addressHeThong !== undefined ||
+    payload.DiaChiHeThong !== undefined ||
+    payload.address !== undefined
+  ) {
+    shop.addressHeThong = pickString(
+      payload.systemAddress ??
+        payload.addressHeThong ??
+        payload.DiaChiHeThong ??
+        payload.address
+    );
   }
   if (payload.latitude !== undefined || payload.lat !== undefined) {
     const latitude = Number(payload.latitude ?? payload.lat);
@@ -201,72 +236,23 @@ async function updateShopSettings(user, payload) {
     shop.isOpen = Number(payload.isOpen) === SHOP_OPEN.OPEN ? SHOP_OPEN.OPEN : SHOP_OPEN.CLOSED;
   }
 
-  if (payload.allowReserve !== undefined) {
-    shop.allowReserve = Boolean(payload.allowReserve);
-  }
-
-  if (payload.depositPercent !== undefined) {
-    const percent = Math.round(Number(payload.depositPercent));
+  if (payload.depositPercent !== undefined || payload.cocTien !== undefined) {
+    const percent = Math.round(Number(payload.cocTien ?? payload.depositPercent));
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
       throw createServiceError("Phần trăm đặt cọc phải từ 0 đến 100.");
     }
-    shop.depositPercent = percent;
+    shop.cocTien = percent;
   }
 
   if (payload.pinHours !== undefined) {
     shop.pinHours = Boolean(payload.pinHours);
   }
 
-  if (payload.avatar !== undefined || payload.shopAvatar !== undefined) {
-    shop.avatar = pickString(payload.avatar ?? payload.shopAvatar);
-  }
-
   shop.UpdatedAt = new Date();
   await shop.save();
 
-  return toPublicShopSettings(shop, freshUser);
-}
-
-async function uploadShopAvatar(user, { imageBase64, mimeType }) {
-  if (!imageBase64) {
-    throw createServiceError("Thiếu dữ liệu ảnh gian hàng.");
-  }
-
-  const normalizedBase64 = String(imageBase64).replace(
-    /^data:image\/[a-zA-Z0-9.+-]+;base64,/,
-    ""
-  );
-  const buffer = Buffer.from(normalizedBase64, "base64");
-
-  if (!buffer.length) {
-    throw createServiceError("Ảnh gian hàng không hợp lệ.");
-  }
-
-  const maxBytes = 5 * 1024 * 1024;
-  if (buffer.length > maxBytes) {
-    throw createServiceError("Ảnh không được lớn hơn 5MB.");
-  }
-
-  const shop = await getShopForSeller(user);
-  const extension = resolveFileExtension(mimeType || "image/jpeg");
-  const fileName = `${user.FirebaseUID}-shop-${Date.now()}.${extension}`;
-  const uploadResult = await uploadImageToSupabase({
-    buffer,
-    mimeType: mimeType || "image/jpeg",
-    folder: "shop-avatars",
-    fileName,
-  });
-
-  shop.avatar = uploadResult.publicUrl;
-  shop.UpdatedAt = new Date();
-  await shop.save();
-
-  const freshUser = await User.findById(user._id);
-  return {
-    shop: toPublicShopSettings(shop, freshUser),
-    avatarUrl: uploadResult.publicUrl,
-    storagePath: uploadResult.path,
-  };
+  const savedShop = await ShopProfile.findById(shop._id).populate("categoryId", "categoryName");
+  return toPublicShopSettings(savedShop || shop, freshUser);
 }
 
 async function checkShopUsernameAvailability(user, shopUsername) {
@@ -289,7 +275,6 @@ async function checkShopUsernameAvailability(user, shopUsername) {
 module.exports = {
   getShopSettings,
   updateShopSettings,
-  uploadShopAvatar,
   checkShopUsernameAvailability,
   getShopForSeller,
   toPublicShopSettings,

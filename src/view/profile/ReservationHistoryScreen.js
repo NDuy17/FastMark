@@ -35,10 +35,13 @@ function formatDateTime(iso) {
 }
 
 const STATUS_COLORS = {
-  [RESERVATION_STATUS.PENDING]: { bg: '#fef3c7', text: '#b45309' },
-  [RESERVATION_STATUS.CONFIRMED]: { bg: '#d1fae5', text: '#076F32' },
+  [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION]: { bg: '#fef3c7', text: '#b45309' },
+  [RESERVATION_STATUS.WAITING_PICKUP]: { bg: '#d1fae5', text: '#076F32' },
   [RESERVATION_STATUS.COMPLETED]: { bg: '#e0e7ff', text: '#4338ca' },
-  [RESERVATION_STATUS.CANCELLED]: { bg: '#fee2e2', text: '#b91c1c' },
+  [RESERVATION_STATUS.AUTO_COMPLETED]: { bg: '#e0e7ff', text: '#4338ca' },
+  [RESERVATION_STATUS.REJECTED]: { bg: '#fee2e2', text: '#b91c1c' },
+  [RESERVATION_STATUS.REFUNDED]: { bg: '#fee2e2', text: '#b91c1c' },
+  [RESERVATION_STATUS.DISPUTED]: { bg: '#ffedd5', text: '#c2410c' },
 };
 
 function ReservationList({ items, onOpenOrderDetail, onOpenStore, onReviewStore, reviewedOrderCodes }) {
@@ -47,8 +50,10 @@ function ReservationList({ items, onOpenOrderDetail, onOpenStore, onReviewStore,
   }
 
   return items.map((item) => {
-    const statusStyle = STATUS_COLORS[item.status] || STATUS_COLORS[RESERVATION_STATUS.PENDING];
-    const isActiveReservation = item.status === RESERVATION_STATUS.CONFIRMED;
+    const statusStyle =
+      STATUS_COLORS[item.status] ||
+      STATUS_COLORS[RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION];
+    const isActiveReservation = item.status === RESERVATION_STATUS.WAITING_PICKUP;
     const isPickedUp = canReviewReservationOrder(item);
     const showReviewButton = canShowReviewButton(
       { ...item, orderCode: item.id },
@@ -136,7 +141,11 @@ export default function ReservationHistoryScreen({
       });
       const rows = (data?.reservations || []).map((reservation) => ({
         id: String(reservation.id),
+        reservationId: String(reservation.id),
+        orderCode: String(reservation.id),
+        shopId: reservation.shopId || reservation.storeId || '',
         storeId: reservation.shopId || reservation.storeId || '',
+        productId: reservation.product?.id ? String(reservation.product.id) : '',
         productName:
           reservation.product?.productName ||
           reservation.variant?.variantName ||
@@ -159,18 +168,18 @@ export default function ReservationHistoryScreen({
     loadReservations();
   }, [loadReservations, localRefreshKey]);
 
-  async function handleSubmitReview({ rating, comment, imageUrl }) {
+  async function handleSubmitReview({ rating, comment, images, imageUrl }) {
     if (!reviewTarget) {
       return;
     }
     try {
       await submitShopReview({
-        storeId: reviewTarget.storeId,
-        storeName: reviewTarget.storeName,
-        productName: reviewTarget.productName,
-        orderCode: reviewTarget.id,
+        shopId: reviewTarget.shopId || reviewTarget.storeId,
+        productId: reviewTarget.productId,
+        reservationId: reviewTarget.reservationId || reviewTarget.id,
         rating,
         comment,
+        images,
         imageUrl,
       });
       markReviewed({ ...reviewTarget, orderCode: reviewTarget.id });

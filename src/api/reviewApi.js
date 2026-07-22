@@ -32,27 +32,30 @@ export async function getMyReviewsOnBackend(idToken) {
 
 export async function submitBuyerReviewOnBackend({
   idToken,
+  productId,
+  reservationId,
+  shopId,
   storeId,
-  storeName,
-  productName,
   orderCode,
   rating,
   comment,
+  images,
   imageUrl,
 }) {
-  const timeoutMs = imageUrl ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS;
+  const hasImages = (Array.isArray(images) && images.length > 0) || Boolean(imageUrl);
+  const timeoutMs = hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS;
   const response = await apiRequest(
     API_ENDPOINTS.buyerReviews,
     {
       method: 'POST',
       headers: await authHeaders(idToken),
       body: JSON.stringify({
-        storeId,
-        storeName,
-        productName,
-        orderCode,
+        productId,
+        reservationId: reservationId || orderCode,
+        shopId: shopId || storeId,
         rating,
         comment,
+        images,
         imageUrl,
       }),
     },
@@ -62,13 +65,20 @@ export async function submitBuyerReviewOnBackend({
   return payload.data?.review;
 }
 
-export async function updateBuyerReviewOnBackend({ idToken, reviewId, rating, comment }) {
+export async function updateBuyerReviewOnBackend({
+  idToken,
+  reviewId,
+  rating,
+  comment,
+  images,
+  imageUrl,
+}) {
   const response = await apiRequest(
     API_ENDPOINTS.buyerReview(reviewId),
     {
       method: 'PUT',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({ rating, comment }),
+      body: JSON.stringify({ rating, comment, images, imageUrl }),
     },
     AUTH_TIMEOUT_MS
   );

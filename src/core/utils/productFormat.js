@@ -34,3 +34,53 @@ export function formatPriceRangeCompact(minPrice, maxPrice) {
 
   return `${formatCompactAmount(min)}-${formatCompactAmount(max)}đ`;
 }
+
+function computeDiscountedAmount(basePrice, discountPercent) {
+  const base = Number(basePrice) || 0;
+  const percent = Math.max(0, Math.min(100, Number(discountPercent) || 0));
+  if (base <= 0 || percent <= 0) {
+    return null;
+  }
+  if (percent >= 100) {
+    return 0;
+  }
+  return Math.max(0, Math.round(base * (1 - percent / 100)));
+}
+
+/**
+ * Label giá KM cho card: khoảng giá gốc (gạch) + khoảng giá sau % giảm.
+ */
+export function getProductPromoPriceLabels(product) {
+  const min = Number(product?.minPrice ?? product?.originalPrice ?? product?.price) || 0;
+  const max = Number(product?.maxPrice ?? product?.originalMaxPrice ?? min) || min;
+  const percent = Number(product?.discountPercent) || 0;
+  const promoMin =
+    product?.promotionMinPrice != null
+      ? Number(product.promotionMinPrice)
+      : computeDiscountedAmount(min, percent);
+  const promoMax =
+    product?.promotionMaxPrice != null
+      ? Number(product.promotionMaxPrice)
+      : computeDiscountedAmount(max, percent);
+
+  return {
+    originalLabel: formatPriceRange(min, max),
+    saleLabel:
+      promoMin == null
+        ? formatPriceRange(min, max)
+        : formatPriceRange(promoMin, promoMax == null ? promoMin : promoMax),
+  };
+}
+
+/** Đơn giá sau khuyến mãi (áp % giảm lên giá biến thể). */
+export function getPromotionalUnitPrice(product, variantPrice) {
+  const base = Number(variantPrice) || 0;
+  if (!product?.isPromotion || base <= 0) {
+    return base;
+  }
+  const percent = Number(product.discountPercent) || 0;
+  if (percent > 0) {
+    return Math.max(0, Math.round(base * (1 - percent / 100)));
+  }
+  return base;
+}

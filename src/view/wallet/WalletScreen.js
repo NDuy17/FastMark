@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   ActivityIndicator,
   Pressable,
   RefreshControl,
@@ -13,9 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { formatPrice } from '../../core/utils/productFormat';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { WALLET_TX_STATUS } from '../../model/walletModel';
 import { loadWalletViewModel } from '../../viewmodel/wallet/walletViewModel';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import WalletTransactionDetailScreen from './WalletTransactionDetailScreen';
 
 function formatTxTime(value) {
   if (!value) {
@@ -34,17 +36,35 @@ function formatTxTime(value) {
   });
 }
 
-function TransactionRow({ item }) {
+function TransactionRow({ item, onPress }) {
   const isCredit = item.isCredit;
-  const pending = item.status === WALLET_TX_STATUS.PENDING;
+  const status = item.status;
+  const pending = status === WALLET_TX_STATUS.PENDING;
+  const success = status === WALLET_TX_STATUS.SUCCESS;
+  const cancelled = status === WALLET_TX_STATUS.CANCELLED;
+  const failed = status === WALLET_TX_STATUS.FAILED;
+  const statusText =
+    item.statusLabel ||
+    (pending
+      ? 'Đang chờ'
+      : success
+        ? 'Thành công'
+        : cancelled
+          ? 'Đã hủy'
+          : failed
+            ? 'Thất bại'
+            : '');
 
   return (
-    <View style={styles.txRow}>
+    <Pressable
+      onPress={() => onPress?.(item)}
+      style={({ pressed }) => [styles.txRow, pressed && styles.txRowPressed]}
+    >
       <View style={[styles.txIcon, isCredit ? styles.txIconCredit : styles.txIconDebit]}>
         <Ionicons
-          name={isCredit ? 'card-outline' : 'bag-handle-outline'}
-          size={18}
-          color={isCredit ? t.primaryDark : '#2563eb'}
+          name={isCredit ? 'add' : 'remove'}
+          size={20}
+          color={isCredit ? t.primaryDark : t.danger}
         />
       </View>
       <View style={styles.txBody}>
@@ -52,23 +72,37 @@ function TransactionRow({ item }) {
           {item.description || item.typeLabel}
         </Text>
         <Text style={styles.txMeta}>{formatTxTime(item.createdAt)}</Text>
-        {pending ? <Text style={styles.txPending}>Đang chờ thanh toán</Text> : null}
+        {statusText ? (
+          <Text
+            style={[
+              styles.txStatus,
+              pending && styles.txPending,
+              success && styles.txSuccess,
+              cancelled && styles.txCancelled,
+              failed && styles.txFailed,
+            ]}
+          >
+            {statusText}
+          </Text>
+        ) : null}
       </View>
       <Text style={[styles.txAmount, isCredit ? styles.txAmountPlus : styles.txAmountMinus]}>
         {isCredit ? '+' : '-'}
         {formatPrice(item.amount)}
       </Text>
-    </View>
+      <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+    </Pressable>
   );
 }
 
-export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) {
+export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTransactions }) {
   const insets = useScreenInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [wallet, setWallet] = useState({ balance: 0 });
   const [transactions, setTransactions] = useState([]);
   const [error, setError] = useState('');
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
 
   const load = useCallback(async () => {
     setError('');
@@ -88,13 +122,19 @@ export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) 
     load();
   }, [load]);
 
+  if (selectedTransaction) {
+    return (
+      <WalletTransactionDetailScreen
+        transactionId={selectedTransaction.id}
+        initialTransaction={selectedTransaction}
+        onBack={() => setSelectedTransaction(null)}
+      />
+    );
+  }
+
   return (
-    <View style={[styles.screen, { paddingTop: insets.floatingTop }]}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} />
-        <Text style={styles.headerTitle}>Ví FastMark</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+    <View style={styles.screen}>
+      <SubScreenHeader title="Ví FastMark" onBack={onBack} />
 
       {loading ? (
         <View style={styles.center}>
@@ -102,7 +142,10 @@ export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) 
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={styles.content}
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: insets.nestedScrollPaddingBottom },
+          ]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -126,18 +169,21 @@ export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) 
                 </View>
                 <Text style={styles.actionLabel}>Nạp tiền</Text>
               </Pressable>
-              <View style={[styles.actionItem, styles.actionDisabled]}>
+              <Pressable
+                style={styles.actionItem}
+                onPress={() => {
+                  if (onWithdraw) {
+                    onWithdraw();
+                    return;
+                  }
+                  Alert.alert('Thông báo', 'Không mở được màn rút tiền.');
+                }}
+              >
                 <View style={styles.actionBtn}>
-                  <Ionicons name="remove" size={22} color="#94a3b8" />
+                  <Ionicons name="remove" size={22} color={t.primaryDark} />
                 </View>
-                <Text style={[styles.actionLabel, styles.actionLabelMuted]}>Rút tiền</Text>
-              </View>
-              <View style={[styles.actionItem, styles.actionDisabled]}>
-                <View style={styles.actionBtn}>
-                  <Ionicons name="qr-code-outline" size={20} color="#94a3b8" />
-                </View>
-                <Text style={[styles.actionLabel, styles.actionLabelMuted]}>Quét mã</Text>
-              </View>
+                <Text style={styles.actionLabel}>Rút tiền</Text>
+              </Pressable>
             </View>
           </View>
 
@@ -152,7 +198,15 @@ export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) 
             {transactions.length === 0 ? (
               <Text style={styles.emptyText}>Chưa có giao dịch nào.</Text>
             ) : (
-              transactions.slice(0, 8).map((item) => <TransactionRow key={item.id} item={item} />)
+              transactions
+                .slice(0, 8)
+                .map((item) => (
+                  <TransactionRow
+                    key={item.id}
+                    item={item}
+                    onPress={setSelectedTransaction}
+                  />
+                ))
             )}
           </View>
         </ScrollView>
@@ -162,23 +216,9 @@ export default function WalletScreen({ onBack, onTopUp, onSeeAllTransactions }) 
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: t.background },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 18,
-    fontWeight: '800',
-    color: t.primaryDark,
-  },
-  headerSpacer: { width: 40 },
+  screen: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { padding: 20, paddingBottom: 40, gap: 16 },
+  content: { padding: 20, gap: 16 },
   errorText: { color: t.danger, fontWeight: '600' },
   balanceCard: {
     backgroundColor: t.primaryDark,
@@ -195,7 +235,6 @@ const styles = StyleSheet.create({
   },
   actionRow: { flexDirection: 'row', justifyContent: 'space-around' },
   actionItem: { alignItems: 'center', gap: 8 },
-  actionDisabled: { opacity: 0.7 },
   actionBtn: {
     width: 48,
     height: 48,
@@ -205,7 +244,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  actionLabelMuted: { color: 'rgba(255,255,255,0.7)' },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -235,6 +273,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: t.border,
   },
+  txRowPressed: { backgroundColor: '#f8fafc' },
   txIcon: {
     width: 40,
     height: 40,
@@ -243,11 +282,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   txIconCredit: { backgroundColor: t.primarySoft },
-  txIconDebit: { backgroundColor: '#dbeafe' },
+  txIconDebit: { backgroundColor: t.dangerSoft },
   txBody: { flex: 1, gap: 2 },
   txTitle: { fontSize: 14, fontWeight: '700', color: t.text },
   txMeta: { fontSize: 12, color: t.textMuted, fontWeight: '500' },
-  txPending: { fontSize: 11, color: '#d97706', fontWeight: '700' },
+  txStatus: { fontSize: 11, fontWeight: '700' },
+  txPending: { color: '#0284c7' },
+  txSuccess: { color: '#16a34a' },
+  txCancelled: { color: '#dc2626' },
+  txFailed: { color: '#dc2626' },
   txAmount: { fontSize: 14, fontWeight: '800' },
   txAmountPlus: { color: t.primary },
   txAmountMinus: { color: t.danger },

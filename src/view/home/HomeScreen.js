@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Dimensions,
   FlatList,
   Image,
@@ -16,16 +17,15 @@ import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { discoverProductsOnBackend, getProductCategoriesOnBackend } from '../../api/productApi';
+import { discoverProductsOnBackend, getProductCategoriesOnBackend, listPromotionProductsOnBackend } from '../../api/productApi';
 import {
   addFavoriteProductOnBackend,
   getFavoriteProductIdsOnBackend,
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
-import { listActiveBannersOnBackend } from '../../api/bannerApi';
-import { listNearbyVouchersOnBackend } from '../../api/voucherApi';
-import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
-import { formatPrice, formatPriceRange } from '../../core/utils/productFormat';
+import { listActiveBannersOnBackend, recordBannerClickOnBackend } from '../../api/bannerApi';
+import { formatDistance, hasValidLocation, normalizeExpoLocation, calculateDistanceMeters } from '../../core/utils/geo';
+import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
@@ -39,13 +39,13 @@ import { logoutUser } from '../../viewmodel/auth/authSlice';
 import { getSellerRegisterButtonLabel } from '../seller/sellerRegistrationFlow';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import ProductCategoriesScreen from './ProductCategoriesScreen';
-import ClearableSearchField from '../shared/components/ClearableSearchField';
+import SearchScreen from './SearchScreen';
+import InboxScreen from '../inbox/InboxScreen';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import BuyerQuickMenu from '../shared/components/BuyerQuickMenu';
 
-const NEARBY_RADIUS_METERS = 5000;
-const CATEGORY_PREVIEW_COUNT = 5;
+const NEARBY_RADIUS_METERS = 20000;
+const ALL_PRODUCTS_RADIUS_METERS = 0;
 
 function SectionHeader({ title, onSeeAll }) {
   return (
@@ -60,13 +60,20 @@ function SectionHeader({ title, onSeeAll }) {
   );
 }
 
-function HomeProductCard({ product, isLiked, onToggleLike, onPress }) {
+function HomeProductCard({ product, isLiked, likeCount = 0, onToggleLike, onPress, grid = false }) {
   const distance = formatDistance(product.distanceMeters);
   const storeName = product.storeName || 'Gian hàng';
+  const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
+  const unit = product.donVi ? `/${product.donVi}` : '';
+  const promoLabels = isPromotion ? getProductPromoPriceLabels(product) : null;
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.productCard,
+        grid && styles.productCardGrid,
+        pressed && styles.pressed,
+      ]}
       onPress={() => onPress?.(product.id)}
     >
       <View style={styles.productImageWrap}>
@@ -77,9 +84,9 @@ function HomeProductCard({ product, isLiked, onToggleLike, onPress }) {
             <Text style={styles.productEmoji}>{product.image_emoji || '📦'}</Text>
           </View>
         )}
-        {distance && distance !== '--' ? (
-          <View style={styles.distanceTag}>
-            <Text style={styles.distanceTagText}>{distance}</Text>
+        {isPromotion ? (
+          <View style={styles.promoBadge}>
+            <Text style={styles.promoBadgeText}>-{product.discountPercent}%</Text>
           </View>
         ) : null}
         <Pressable
@@ -89,16 +96,36 @@ function HomeProductCard({ product, isLiked, onToggleLike, onPress }) {
         >
           <Ionicons
             name={isLiked ? 'heart' : 'heart-outline'}
-            size={14}
+            size={18}
             color={isLiked ? '#ef4444' : '#64748b'}
           />
+          <Text style={styles.heartCountText}>{likeCount}</Text>
         </Pressable>
       </View>
       <Text style={styles.productName} numberOfLines={2}>
         {product.name}
       </Text>
+      <View style={styles.productFooter}>
+        {isPromotion && promoLabels ? (
+          <View style={styles.promoPriceWrap}>
+            <Text style={styles.productOriginalPrice} numberOfLines={1}>
+              {promoLabels.originalLabel}
+              {unit}
+            </Text>
+            <Text style={styles.productPrice} numberOfLines={1}>
+              {promoLabels.saleLabel}
+              {unit}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.productPrice} numberOfLines={1}>
+            {formatPriceRange(product.minPrice ?? product.price, product.maxPrice ?? product.price)}
+            {unit}
+          </Text>
+        )}
+      </View>
       <View style={styles.productMetaRow}>
-        <Ionicons name="storefront-outline" size={9} color="#64748b" />
+        <Ionicons name="storefront-outline" size={11} color="#64748b" />
         <Text style={styles.productStore} numberOfLines={1}>
           {storeName}
         </Text>
@@ -106,17 +133,14 @@ function HomeProductCard({ product, isLiked, onToggleLike, onPress }) {
       <View style={styles.productMetaRow}>
         <Ionicons name="star" size={9} color="#076F32" />
         <Text style={styles.productRating}>
-          {Number(product.soldCount) > 0 ? `${Number(product.soldCount)}+ bán` : 'Mới'}
+          Đã bán: {Number(product.soldCount) || 0}
         </Text>
-      </View>
-      <View style={styles.productFooter}>
-        <Text style={styles.productPrice} numberOfLines={1}>
-          {formatPriceRange(product.minPrice ?? product.price, product.maxPrice ?? product.price)}
-          {product.donVi ? `/${product.donVi}` : ''}
-        </Text>
-        <View style={styles.productCartBtn}>
-          <Ionicons name="cart" size={14} color="#ffffff" />
-        </View>
+        {distance && distance !== '--' ? (
+          <View style={styles.productDistanceRow}>
+            <Ionicons name="location" size={9} color="#64748b" />
+            <Text style={styles.productDistanceText}>{distance}</Text>
+          </View>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -153,120 +177,220 @@ function HomeShopCard({ shop, onPress }) {
             {rating > 0 ? rating.toFixed(1) : 'Mới'}
           </Text>
         </View>
-        <Text style={styles.shopDistance}>{distance}</Text>
+        <Text style={styles.shopCategory} numberOfLines={1}>
+          {categoryLabel}
+        </Text>
         <View style={styles.shopStatusRow}>
           <View style={[styles.shopStatusDot, !isOpen && styles.shopStatusDotClosed]} />
           <Text style={[styles.shopStatusText, !isOpen && styles.shopStatusTextClosed]}>
             {isOpen ? 'Đang mở cửa' : 'Đang đóng cửa'}
           </Text>
+          {distance && distance !== '--' ? (
+            <Text style={styles.shopDistance}>{distance}</Text>
+          ) : null}
         </View>
-        <Text style={styles.shopCategory} numberOfLines={1}>
-          {categoryLabel}
-        </Text>
       </View>
     </Pressable>
   );
 }
 
-function CategoryChip({ category, onPress, isMore = false }) {
-  const icon = String(category?.icon || '').trim();
-  const isRemote = /^https?:\/\//i.test(icon);
-
-  return (
-    <Pressable style={styles.categoryChip} onPress={() => onPress?.(category)}>
-      <View style={[styles.categoryIconBox, isMore && styles.categoryIconBoxMore]}>
-        {isMore ? (
-          <Ionicons name="grid-outline" size={18} color="#076F32" />
-        ) : isRemote ? (
-          <Image source={{ uri: icon }} style={styles.categoryImage} />
-        ) : icon ? (
-          <Text style={styles.categoryEmoji}>{icon}</Text>
-        ) : (
-          <Ionicons name="pricetag-outline" size={16} color="#076F32" />
-        )}
-      </View>
-      <Text style={styles.categoryLabel} numberOfLines={1}>
-        {isMore ? 'Xem thêm' : category?.categoryName || category?.name}
-      </Text>
-    </Pressable>
-  );
-}
-
-function formatVoucherDiscount(voucher) {
-  if (Number(voucher.discountType) === 2) {
-    return `Giảm ${formatPrice(voucher.discountValue)}`;
-  }
-  return `Giảm ${voucher.discountValue}%`;
-}
-
-function HomeVoucherCard({ voucher, onPress }) {
+function CategoryChip({ category, label, onPress, active = false }) {
+  const text = label || category?.categoryName || category?.name || '';
   return (
     <Pressable
-      style={({ pressed }) => [styles.voucherCard, pressed && styles.pressed]}
-      onPress={() => onPress?.(voucher)}
+      style={({ pressed }) => [
+        styles.categoryChip,
+        active && styles.categoryChipActive,
+        pressed && styles.pressed,
+      ]}
+      onPress={() => onPress?.(category)}
     >
-      <Text style={styles.voucherCode}>{voucher.code}</Text>
-      <Text style={styles.voucherDiscount}>{formatVoucherDiscount(voucher)}</Text>
-      <Text style={styles.voucherShop} numberOfLines={1}>
-        {voucher.shopName || 'Gian hàng'}
+      <Text
+        style={[styles.categoryLabel, active && styles.categoryLabelActive]}
+        numberOfLines={1}
+      >
+        {text}
       </Text>
     </Pressable>
   );
 }
 
-function HomeBannerCarousel({ banners, onPressBanner }) {
-  if (!banners?.length) {
+const BANNER_AUTO_MS = 3000;
+const BANNER_FALLBACK_WIDTH = Dimensions.get('window').width - 32;
+/** Khớp bề ngang card “Sản phẩm gần bạn”; cao hơn một chút để ảnh banner rõ hơn. */
+const NEARBY_BANNER_HEIGHT = 140;
+
+function shuffleBannerList(items = []) {
+  const next = Array.isArray(items) ? [...items] : [];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const temp = next[i];
+    next[i] = next[j];
+    next[j] = temp;
+  }
+  return next;
+}
+
+function HomeBannerCarousel({ banners, onPressInterest }) {
+  const scrollRef = useRef(null);
+  const indexRef = useRef(0);
+  const slideWidthRef = useRef(BANNER_FALLBACK_WIDTH);
+  const resettingRef = useRef(false);
+  const [slideWidth, setSlideWidth] = useState(BANNER_FALLBACK_WIDTH);
+  const [shuffleKey, setShuffleKey] = useState(0);
+
+  const orderedBanners = useMemo(
+    () => shuffleBannerList(banners),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reshuffle khi đổi list hoặc mở lại app
+    [banners, shuffleKey]
+  );
+
+  // Nhân bản slide đầu ở cuối để auto-scroll luôn trái → phải, rồi nhảy về đầu không animation.
+  const loopBanners = useMemo(() => {
+    if (orderedBanners.length <= 1) {
+      return orderedBanners;
+    }
+    return [...orderedBanners, orderedBanners[0]];
+  }, [orderedBanners]);
+
+  const snapToIndex = useCallback((index, animated) => {
+    indexRef.current = index;
+    scrollRef.current?.scrollTo?.({
+      x: index * slideWidthRef.current,
+      animated,
+    });
+  }, []);
+
+  const resetFromClone = useCallback(() => {
+    if (orderedBanners.length <= 1) {
+      return;
+    }
+    resettingRef.current = true;
+    snapToIndex(0, false);
+    requestAnimationFrame(() => {
+      resettingRef.current = false;
+    });
+  }, [orderedBanners.length, snapToIndex]);
+
+  useEffect(() => {
+    indexRef.current = 0;
+    resettingRef.current = false;
+    scrollRef.current?.scrollTo?.({ x: 0, animated: false });
+  }, [orderedBanners, slideWidth]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        setShuffleKey((value) => value + 1);
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (orderedBanners.length <= 1 || slideWidth <= 0) return undefined;
+    const timer = setInterval(() => {
+      if (resettingRef.current) {
+        return;
+      }
+      const nextIndex = indexRef.current + 1;
+      snapToIndex(nextIndex, true);
+      // Đã tới bản sao slide đầu → nhảy về slide thật (không animation) để lặp một chiều.
+      if (nextIndex >= orderedBanners.length) {
+        setTimeout(resetFromClone, 350);
+      }
+    }, BANNER_AUTO_MS);
+    return () => clearInterval(timer);
+  }, [orderedBanners.length, resetFromClone, slideWidth, snapToIndex]);
+
+  if (!orderedBanners.length) {
     return null;
   }
 
   return (
-    <ScrollView
-      horizontal
-      pagingEnabled
-      showsHorizontalScrollIndicator={false}
-      style={styles.bannerCarousel}
-      contentContainerStyle={styles.bannerCarouselContent}
+    <View
+      style={styles.bannerCarouselWrap}
+      onLayout={(event) => {
+        const nextWidth = Math.round(event.nativeEvent.layout.width);
+        if (nextWidth > 0 && nextWidth !== slideWidthRef.current) {
+          slideWidthRef.current = nextWidth;
+          setSlideWidth(nextWidth);
+        }
+      }}
     >
-      {banners.map((banner) => (
-        <Pressable
-          key={banner.id}
-          style={({ pressed }) => [styles.bannerSlide, pressed && styles.pressed]}
-          onPress={() => onPressBanner?.(banner)}
-        >
-          {banner.image ? (
-            <Image source={{ uri: banner.image }} style={styles.bannerImage} />
-          ) : (
-            <View style={styles.bannerFallback}>
-              <Ionicons name="megaphone-outline" size={28} color="#ffffff" />
-            </View>
-          )}
-          <View style={styles.bannerOverlay}>
-            <Text style={styles.bannerTitle} numberOfLines={2}>
-              {banner.title}
-            </Text>
-            {banner.description ? (
-              <Text style={styles.bannerDesc} numberOfLines={1}>
-                {banner.description}
-              </Text>
-            ) : null}
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={[styles.bannerCarousel, { height: NEARBY_BANNER_HEIGHT }]}
+        contentContainerStyle={styles.bannerCarouselContent}
+        onMomentumScrollEnd={(event) => {
+          if (resettingRef.current) {
+            return;
+          }
+          const width = slideWidthRef.current || BANNER_FALLBACK_WIDTH;
+          const nextIndex = Math.round(event.nativeEvent.contentOffset.x / width);
+          const maxIndex = loopBanners.length - 1;
+          const safeIndex = Math.max(0, Math.min(maxIndex, nextIndex));
+          indexRef.current = safeIndex;
+          if (orderedBanners.length > 1 && safeIndex >= orderedBanners.length) {
+            resetFromClone();
+          }
+        }}
+      >
+        {loopBanners.map((banner, slideIndex) => (
+          <View
+            key={slideIndex === orderedBanners.length ? `${banner.id}-loop` : banner.id}
+            style={[
+              styles.bannerSlide,
+              {
+                width: slideWidth,
+                height: NEARBY_BANNER_HEIGHT,
+              },
+            ]}
+          >
+            {banner.image ? (
+              <Image
+                source={{ uri: banner.image }}
+                style={styles.bannerImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.bannerFallback}>
+                <Ionicons name="megaphone-outline" size={28} color="#ffffff" />
+              </View>
+            )}
+            <Pressable
+              style={({ pressed }) => [styles.interestBtn, pressed && styles.pressed]}
+              onPress={() => onPressInterest?.(banner)}
+              hitSlop={6}
+            >
+              <Text style={styles.interestBtnText}>Quan tâm</Text>
+            </Pressable>
           </View>
-        </Pressable>
-      ))}
-    </ScrollView>
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 
 export default function HomeScreen({
   onOpenMap,
   onOpenProducts,
-  onOpenNotifications,
-  onOpenInbox,
   onOpenBuyerOrders,
   onEditAccount,
+  onOpenWallet,
+  onOpenFavoriteProducts,
+  onOpenReport,
   onStartSellerRegister,
   onOpenShop,
+  onOpenWalletTopUp,
+  onOpenChat,
+  resumeReserveRequest = null,
+  onResumeReserveHandled,
+  isScreenActive = true,
   onNavigationStateChange,
-  unreadNotificationsCount = 0,
   unreadMessagesCount = 0,
 }) {
   const insets = useScreenInsets();
@@ -277,45 +401,139 @@ export default function HomeScreen({
     getSellerRegisterButtonLabel({ role, verification: sellerVerification }) ||
     (Number(role) === 2 ? 'Gian hàng' : '');
 
-  const [search, setSearch] = useState('');
   const [currentLocation, setCurrentLocation] = useState(null);
   const [products, setProducts] = useState([]);
+  const [catalogProducts, setCatalogProducts] = useState([]);
   const [shops, setShops] = useState([]);
   const [categories, setCategories] = useState([]);
   const [banners, setBanners] = useState([]);
-  const [nearbyVouchers, setNearbyVouchers] = useState([]);
+  const [promotionProducts, setPromotionProducts] = useState([]);
   const [likedProducts, setLikedProducts] = useState({});
+  // Trạng thái tym ban đầu từ server — để hiển thị số tym không bị lệch khi user bấm tym.
+  const initialLikedRef = useRef({});
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [locationChecked, setLocationChecked] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState(null);
-  const [showCategoriesScreen, setShowCategoriesScreen] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
+  const [showSearchScreen, setShowSearchScreen] = useState(false);
+  const [showInboxScreen, setShowInboxScreen] = useState(false);
+  const [chatOpenRequest, setChatOpenRequest] = useState(null);
+
+  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
+    if (!shopId) {
+      return;
+    }
+    setChatOpenRequest({
+      shopId: String(shopId),
+      shopName: shopName || 'Gian hàng',
+      at: Date.now(),
+    });
+  }, []);
 
   useEffect(() => {
     onNavigationStateChange?.(
-      Boolean(selectedProductId || selectedStoreId || showCategoriesScreen)
+      Boolean(
+        isScreenActive &&
+          (selectedProductId ||
+            selectedStoreId ||
+            showSearchScreen ||
+            showInboxScreen ||
+            chatOpenRequest)
+      )
     );
-  }, [onNavigationStateChange, selectedProductId, selectedStoreId, showCategoriesScreen]);
+  }, [
+    chatOpenRequest,
+    isScreenActive,
+    onNavigationStateChange,
+    selectedProductId,
+    selectedStoreId,
+    showSearchScreen,
+    showInboxScreen,
+  ]);
+
+  useEffect(() => {
+    if (isScreenActive) {
+      return;
+    }
+    setSelectedProductId(null);
+    setSelectedStoreId(null);
+    setShowSearchScreen(false);
+    setShowInboxScreen(false);
+    setChatOpenRequest(null);
+  }, [isScreenActive]);
+
+  useEffect(() => {
+    if (!resumeReserveRequest?.productId || !resumeReserveRequest?.at) {
+      return;
+    }
+    setSelectedStoreId(null);
+    setSelectedProductId(String(resumeReserveRequest.productId));
+  }, [resumeReserveRequest?.at, resumeReserveRequest?.productId]);
 
   const loadLocation = useCallback(async () => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
         setCurrentLocation(null);
-        return;
+        return null;
       }
 
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      setCurrentLocation(normalizeExpoLocation(position));
+      const nextLocation = normalizeExpoLocation(position);
+      setCurrentLocation(nextLocation);
+      return nextLocation;
     } catch {
       setCurrentLocation(null);
+      return null;
+    } finally {
+      setLocationChecked(true);
     }
   }, []);
 
-  const loadHomeData = useCallback(
-    async ({ refresh = false } = {}) => {
+  const loadHomeMeta = useCallback(async () => {
+    try {
+      const [categoryRows, bannerRows] = await Promise.all([
+        getProductCategoriesOnBackend().catch(() => []),
+        listActiveBannersOnBackend({ limit: 8 }).catch(() => []),
+      ]);
+      setCategories(Array.isArray(categoryRows) ? categoryRows : []);
+      setBanners(Array.isArray(bannerRows) ? bannerRows : []);
+    } catch {
+      setCategories([]);
+      setBanners([]);
+    }
+
+    // Favorites không chặn load sản phẩm.
+    (async () => {
+      try {
+        const idToken = await getCurrentUserIdToken(false);
+        if (!idToken) {
+          return;
+        }
+        const productIds = await getFavoriteProductIdsOnBackend(idToken).catch(() => []);
+        const likedMap = {};
+        (productIds || []).forEach((productId) => {
+          likedMap[String(productId)] = true;
+        });
+        initialLikedRef.current = likedMap;
+        setLikedProducts(likedMap);
+      } catch {
+        // Ignore favorite preload errors.
+      }
+    })();
+  }, []);
+
+  const loadNearbyContent = useCallback(
+    async ({ refresh = false, location = currentLocation, ready = locationChecked } = {}) => {
+      // Chưa xong GPS: giữ loading, đừng clear products (tránh race ghi đè []).
+      if (!ready) {
+        return;
+      }
+
       if (refresh) {
         setIsRefreshing(true);
       } else {
@@ -323,77 +541,161 @@ export default function HomeScreen({
       }
 
       try {
-        const [categoryRows, bannerRows] = await Promise.all([
-          getProductCategoriesOnBackend().catch(() => []),
-          listActiveBannersOnBackend({ limit: 8 }).catch(() => []),
-        ]);
-
-        // Favorites/voucher không được chặn load danh mục + sản phẩm (getIdToken có thể chậm).
-        (async () => {
-          try {
-            const idToken = await getCurrentUserIdToken(false);
-            if (!idToken) {
-              return;
-            }
-            const [productIds, voucherRows] = await Promise.all([
-              getFavoriteProductIdsOnBackend(idToken).catch(() => []),
-              listNearbyVouchersOnBackend(idToken, { limit: 12 }).catch(() => []),
-            ]);
-            const likedMap = {};
-            (productIds || []).forEach((productId) => {
-              likedMap[String(productId)] = true;
-            });
-            setLikedProducts(likedMap);
-            setNearbyVouchers(Array.isArray(voucherRows) ? voucherRows : []);
-          } catch {
-            // Ignore favorite/voucher preload errors.
-          }
-        })();
-
-        setCategories(Array.isArray(categoryRows) ? categoryRows : []);
-        setBanners(Array.isArray(bannerRows) ? bannerRows : []);
-
-        if (!hasValidLocation(currentLocation)) {
+        if (!hasValidLocation(location)) {
           setProducts([]);
           setShops([]);
+          setCatalogProducts([]);
+          setPromotionProducts([]);
           return;
         }
 
-        const [productRows, shopRows] = await Promise.all([
+        const [productRows, shopRows, catalogRows, promoRows] = await Promise.all([
           discoverProductsOnBackend({
-            latitude: currentLocation.latitude,
-            longitude: currentLocation.longitude,
+            latitude: location.latitude,
+            longitude: location.longitude,
             radiusMeters: NEARBY_RADIUS_METERS,
+            categoryId: selectedCategoryId,
             limit: 20,
           }).catch(() => []),
           loadNearbyRegisteredShops({
-            latitude: currentLocation.latitude,
-            longitude: currentLocation.longitude,
+            latitude: location.latitude,
+            longitude: location.longitude,
             radiusMeters: NEARBY_RADIUS_METERS,
+          }).catch(() => []),
+          discoverProductsOnBackend({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            radiusMeters: ALL_PRODUCTS_RADIUS_METERS,
+            categoryId: selectedCategoryId,
+            limit: 24,
+          }).catch(() => []),
+          listPromotionProductsOnBackend({
+            limit: 20,
+            latitude: location.latitude,
+            longitude: location.longitude,
           }).catch(() => []),
         ]);
 
+        const promoById = new Map();
+        (Array.isArray(promoRows) ? promoRows : []).forEach((row) => {
+          const promo = normalizeProduct(row);
+          if (promo.id && promo.isPromotion && Number(promo.discountPercent) > 0) {
+            promoById.set(promo.id, promo);
+          }
+        });
+
+        function withPromotionFields(product) {
+          const promo = promoById.get(product.id);
+          if (!promo) {
+            return product;
+          }
+          return {
+            ...product,
+            isPromotion: true,
+            discountPercent: promo.discountPercent,
+            originalPrice: promo.originalPrice ?? product.minPrice,
+            originalMaxPrice: promo.originalMaxPrice ?? product.maxPrice,
+            promotionPrice: promo.promotionPrice,
+            promotionMinPrice: promo.promotionMinPrice,
+            promotionMaxPrice: promo.promotionMaxPrice,
+            displayPrice: promo.displayPrice ?? promo.promotionPrice ?? product.displayPrice,
+          };
+        }
+
         setProducts(
           Array.isArray(productRows)
-            ? productRows.map((row) => normalizeProduct(row)).slice(0, 12)
+            ? productRows
+                .map((row) => withPromotionFields(normalizeProduct(row)))
+                .slice(0, 12)
             : []
         );
         setShops(Array.isArray(shopRows) ? shopRows.slice(0, 12) : []);
+        const normalizedCatalog = Array.isArray(catalogRows)
+          ? catalogRows
+              .map((row) => withPromotionFields(normalizeProduct(row)))
+              .filter((product) => !product.isOutOfStock && !product.isUnavailable)
+              .slice(0, 12)
+          : [];
+        setCatalogProducts(normalizedCatalog);
+
+        const distanceByProductId = new Map();
+        const distanceByStoreId = new Map();
+        const seedRows = [
+          ...(Array.isArray(productRows) ? productRows : []),
+          ...(Array.isArray(catalogRows) ? catalogRows : []),
+        ];
+        seedRows.forEach((row) => {
+          const normalized = normalizeProduct(row);
+          if (
+            normalized.id &&
+            normalized.distanceMeters != null &&
+            Number.isFinite(Number(normalized.distanceMeters))
+          ) {
+            distanceByProductId.set(normalized.id, Number(normalized.distanceMeters));
+          }
+          if (
+            normalized.store_id &&
+            normalized.distanceMeters != null &&
+            Number.isFinite(Number(normalized.distanceMeters))
+          ) {
+            distanceByStoreId.set(normalized.store_id, Number(normalized.distanceMeters));
+          }
+        });
+
+        setPromotionProducts(
+          (Array.isArray(promoRows) ? promoRows : []).map((row) => {
+            const product = normalizeProduct(row);
+            const fromDiscover =
+              distanceByProductId.get(product.id) ??
+              distanceByStoreId.get(product.store_id) ??
+              null;
+
+            let distanceMeters = product.distanceMeters;
+            if (
+              fromDiscover != null &&
+              (distanceMeters == null ||
+                !Number.isFinite(Number(distanceMeters)) ||
+                (Number(distanceMeters) === 0 && fromDiscover > 50))
+            ) {
+              distanceMeters = fromDiscover;
+            }
+
+            if (
+              (distanceMeters == null || !Number.isFinite(Number(distanceMeters))) &&
+              hasValidLocation(location)
+            ) {
+              const shopLat = Number(row.shopLatitude ?? row.latitude);
+              const shopLng = Number(row.shopLongitude ?? row.longitude);
+              if (Number.isFinite(shopLat) && Number.isFinite(shopLng)) {
+                const meters = calculateDistanceMeters(location, {
+                  latitude: shopLat,
+                  longitude: shopLng,
+                });
+                if (meters != null && Number.isFinite(meters)) {
+                  distanceMeters = Math.round(meters);
+                }
+              }
+            }
+
+            return { ...product, distanceMeters };
+          })
+        );
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
       }
     },
-    [currentLocation]
+    [currentLocation, locationChecked, selectedCategoryId]
   );
 
   useEffect(() => {
     loadLocation();
-  }, [loadLocation]);
+    loadHomeMeta();
+  }, [loadLocation, loadHomeMeta]);
 
   useEffect(() => {
-    loadHomeData();
-  }, [loadHomeData]);
+    loadNearbyContent();
+  }, [loadNearbyContent]);
 
   const toggleLikeProduct = useCallback(
     async (productId) => {
@@ -420,12 +722,19 @@ export default function HomeScreen({
     [likedProducts]
   );
 
-  function handleSearchSubmit() {
-    const keyword = search.trim();
-    onOpenProducts?.({ search: keyword });
+  function getDisplayLikeCount(item) {
+    const id = String(item.id);
+    const base = Math.max(0, Number(item.likeCount) || 0);
+    const wasLiked = Boolean(initialLikedRef.current[id]);
+    const nowLiked = Boolean(likedProducts[id]);
+    return Math.max(0, base + (nowLiked ? 1 : 0) - (wasLiked ? 1 : 0));
   }
 
-  function handleBannerPress(banner) {
+  function handleBannerInterest(banner) {
+    const bannerId = String(banner?.id || '').trim();
+    if (bannerId) {
+      recordBannerClickOnBackend(bannerId).catch(() => {});
+    }
     const targetType = Number(banner?.targetType);
     const targetId = String(banner?.targetId || '').trim();
     if (targetType === 1 && targetId) {
@@ -436,29 +745,50 @@ export default function HomeScreen({
       setSelectedStoreId(targetId);
       return;
     }
-    if (targetType === 3 && targetId) {
-      onOpenProducts?.({ categoryId: targetId });
-      return;
+    const shopId = String(banner?.shopId || '').trim();
+    if (shopId) {
+      setSelectedStoreId(shopId);
     }
-    onOpenProducts?.();
   }
 
-  function handleVoucherPress(voucher) {
-    if (voucher?.shopId) {
-      setSelectedStoreId(String(voucher.shopId));
-    }
+  if (chatOpenRequest) {
+    return (
+      <InboxScreen
+        buyerView
+        messagesOnly
+        chatRequest={chatOpenRequest}
+        onBack={() => setChatOpenRequest(null)}
+        onViewShop={(shopId) => {
+          setChatOpenRequest(null);
+          setSelectedProductId(null);
+          setSelectedStoreId(String(shopId));
+        }}
+      />
+    );
   }
 
   if (selectedProductId) {
     return (
       <ProductDetailScreen
         productId={selectedProductId}
-        onBack={() => setSelectedProductId(null)}
+        onBack={() => {
+          setSelectedProductId(null);
+          onResumeReserveHandled?.();
+        }}
         onStorePress={(storeId) => {
           setSelectedProductId(null);
           setSelectedStoreId(storeId);
         }}
+        onOpenChat={handleOpenChatLocal}
         onOrderSuccess={onOpenBuyerOrders}
+        onOpenTopUp={onOpenWalletTopUp}
+        resumeReserveRequest={
+          resumeReserveRequest &&
+          String(resumeReserveRequest.productId) === String(selectedProductId)
+            ? resumeReserveRequest
+            : null
+        }
+        onResumeReserveConsumed={onResumeReserveHandled}
       />
     );
   }
@@ -472,26 +802,53 @@ export default function HomeScreen({
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
+        onOpenChat={handleOpenChatLocal}
       />
     );
   }
 
-  if (showCategoriesScreen) {
+  if (showSearchScreen) {
     return (
-      <ProductCategoriesScreen
-        categories={categories}
-        onBack={() => setShowCategoriesScreen(false)}
-        onSelectCategory={(categoryId) => {
-          setShowCategoriesScreen(false);
-          onOpenProducts?.({ categoryId });
+      <SearchScreen
+        currentLocation={currentLocation}
+        onBack={() => setShowSearchScreen(false)}
+        onOpenProduct={(productId) => {
+          setShowSearchScreen(false);
+          setSelectedProductId(String(productId));
+        }}
+        onOpenShop={(shopId) => {
+          setShowSearchScreen(false);
+          setSelectedStoreId(String(shopId));
         }}
       />
     );
   }
 
-  const notificationBadgeCount = Math.max(0, Number(unreadNotificationsCount) || 0);
+  if (showInboxScreen) {
+    return (
+      <InboxScreen
+        buyerView
+        messagesOnly
+        onBack={() => setShowInboxScreen(false)}
+        onViewShop={(shopId) => {
+          setShowInboxScreen(false);
+          setSelectedStoreId(String(shopId));
+        }}
+      />
+    );
+  }
+
   const messageBadgeCount = Math.max(0, Number(unreadMessagesCount) || 0);
-  const previewCategories = categories.slice(0, CATEGORY_PREVIEW_COUNT);
+  const categoryKey = String(selectedCategoryId || '').trim();
+  const visiblePromotionProducts = categoryKey
+    ? promotionProducts.filter(
+        (product) => String(product.categoryId || '') === categoryKey
+      )
+    : promotionProducts;
+
+  function handleSelectCategory(categoryId = '') {
+    setSelectedCategoryId(String(categoryId || ''));
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.contentPaddingTop }]}>
@@ -499,38 +856,57 @@ export default function HomeScreen({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: Math.max(insets.bottomSpacing, 24) + 88 },
+          { paddingBottom: insets.tabRootScrollPaddingBottom },
         ]}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={async () => {
-              await loadLocation();
-              await loadHomeData({ refresh: true });
+              const nextLocation = await loadLocation();
+              await loadHomeMeta();
+              await loadNearbyContent({
+                refresh: true,
+                location: nextLocation,
+                ready: true,
+              });
             }}
             tintColor="#076F32"
           />
         }
       >
         <View style={styles.headerRow}>
+          <BuyerQuickMenu
+            sellerButtonLabel={sellerButtonLabel}
+            onEditAccount={onEditAccount}
+            onOpenWallet={onOpenWallet}
+            onOpenFavoriteProducts={onOpenFavoriteProducts}
+            onOpenReport={onOpenReport}
+            onSellerAction={() => {
+              if (getSellerRegisterButtonLabel({ role, verification: sellerVerification })) {
+                onStartSellerRegister?.();
+                return;
+              }
+              onOpenShop?.();
+            }}
+            onLogout={() => dispatch(logoutUser())}
+            buttonStyle={styles.utilityBtn}
+            iconColor="#334155"
+          />
+          <Text style={styles.brandTitle} numberOfLines={1}>
+            FastMark
+          </Text>
           <View style={styles.headerRight}>
-            <BuyerQuickMenu
-              sellerButtonLabel={sellerButtonLabel}
-              onEditAccount={onEditAccount}
-              onSellerAction={() => {
-                if (getSellerRegisterButtonLabel({ role, verification: sellerVerification })) {
-                  onStartSellerRegister?.();
-                  return;
-                }
-                onOpenShop?.();
-              }}
-              onLogout={() => dispatch(logoutUser())}
-              buttonStyle={styles.utilityBtn}
-              iconColor="#334155"
-            />
             <Pressable
               style={styles.bellBtn}
-              onPress={onOpenInbox}
+              onPress={() => setShowSearchScreen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Tìm kiếm"
+            >
+              <Ionicons name="search" size={22} color="#334155" />
+            </Pressable>
+            <Pressable
+              style={styles.bellBtn}
+              onPress={() => setShowInboxScreen(true)}
               accessibilityRole="button"
               accessibilityLabel="Tin nhắn"
             >
@@ -543,132 +919,151 @@ export default function HomeScreen({
                 </View>
               ) : null}
             </Pressable>
-            <Pressable
-              style={styles.bellBtn}
-              onPress={onOpenNotifications}
-              accessibilityRole="button"
-              accessibilityLabel="Thông báo"
-            >
-              <Ionicons name="notifications-outline" size={22} color="#334155" />
-              {notificationBadgeCount > 0 ? (
-                <View style={styles.bellBadge}>
-                  <Text style={styles.bellBadgeText}>
-                    {notificationBadgeCount > 9 ? '9+' : String(notificationBadgeCount)}
-                  </Text>
-                </View>
-              ) : null}
-            </Pressable>
           </View>
         </View>
-
-        <ClearableSearchField
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Tìm sản phẩm, gian hàng..."
-          onSubmitEditing={handleSearchSubmit}
-          returnKeyType="search"
-          style={styles.searchField}
-        />
 
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.categoryRow}
         >
-          {previewCategories.map((item) => (
+          <CategoryChip
+            label="Tất cả"
+            active={!selectedCategoryId}
+            onPress={() => handleSelectCategory('')}
+          />
+          {categories.map((item) => (
             <CategoryChip
               key={String(item.id)}
               category={item}
-              onPress={(category) => onOpenProducts?.({ categoryId: category.id })}
+              active={String(selectedCategoryId) === String(item.id)}
+              onPress={(category) => handleSelectCategory(category.id)}
             />
           ))}
-          <CategoryChip isMore onPress={() => setShowCategoriesScreen(true)} />
         </ScrollView>
 
-        <HomeBannerCarousel banners={banners} onPressBanner={handleBannerPress} />
+        {banners.length > 0 ? (
+          <HomeBannerCarousel
+            banners={banners}
+            onPressInterest={handleBannerInterest}
+          />
+        ) : (
+          <Pressable style={styles.mapBanner} onPress={onOpenMap}>
+            <View style={styles.mapBannerCopy}>
+              <Text style={styles.mapBannerTitle}>Sản phẩm gần bạn</Text>
+              <Text style={styles.mapBannerSubtitle}>
+                Xem các cửa hàng và sản phẩm xung quanh bạn
+              </Text>
+              <View style={styles.mapBannerBtn}>
+                <Text style={styles.mapBannerBtnText}>Xem trên bản đồ</Text>
+              </View>
+            </View>
+            <View style={styles.mapBannerArt}>
+              <View style={styles.mapGrid}>
+                <View style={[styles.mapLine, styles.mapLineH1]} />
+                <View style={[styles.mapLine, styles.mapLineH2]} />
+                <View style={[styles.mapLine, styles.mapLineV1]} />
+                <View style={[styles.mapLine, styles.mapLineV2]} />
+              </View>
+              <View style={styles.mapPulseOuter}>
+                <View style={styles.mapPulseInner} />
+              </View>
+            </View>
+          </Pressable>
+        )}
 
-        {nearbyVouchers.length > 0 ? (
+        {visiblePromotionProducts.length > 0 ? (
           <>
-            <SectionHeader title="Voucher gần bạn" />
+            <SectionHeader title="🔥 Sản phẩm giảm giá" />
             <FlatList
               horizontal
-              data={nearbyVouchers}
+              data={visiblePromotionProducts}
               keyExtractor={(item) => String(item.id)}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hList}
               renderItem={({ item }) => (
-                <HomeVoucherCard voucher={item} onPress={handleVoucherPress} />
+                <HomeProductCard
+                  product={item}
+                  isLiked={Boolean(likedProducts[String(item.id)])}
+                  likeCount={getDisplayLikeCount(item)}
+                  onToggleLike={toggleLikeProduct}
+                  onPress={setSelectedProductId}
+                />
               )}
             />
           </>
         ) : null}
 
-        <Pressable style={styles.mapBanner} onPress={onOpenMap}>
-          <View style={styles.mapBannerCopy}>
-            <Text style={styles.mapBannerTitle}>Sản phẩm gần bạn</Text>
-            <Text style={styles.mapBannerSubtitle}>
-              Xem các cửa hàng và sản phẩm xung quanh bạn
-            </Text>
-            <View style={styles.mapBannerBtn}>
-              <Text style={styles.mapBannerBtnText}>Xem trên bản đồ</Text>
-            </View>
-          </View>
-          <View style={styles.mapBannerArt}>
-            <View style={styles.mapGrid}>
-              <View style={[styles.mapLine, styles.mapLineH1]} />
-              <View style={[styles.mapLine, styles.mapLineH2]} />
-              <View style={[styles.mapLine, styles.mapLineV1]} />
-              <View style={[styles.mapLine, styles.mapLineV2]} />
-            </View>
-            <View style={styles.mapPulseOuter}>
-              <View style={styles.mapPulseInner} />
-            </View>
-          </View>
-        </Pressable>
-
-        <SectionHeader title="Sản phẩm gần bạn" onSeeAll={() => onOpenProducts?.()} />
         {isLoading ? (
           <ActivityIndicator color="#076F32" style={styles.sectionLoader} />
-        ) : products.length === 0 ? (
-          <Text style={styles.emptyText}>Chưa có sản phẩm gần bạn.</Text>
-        ) : (
-          <FlatList
-            horizontal
-            data={products}
-            keyExtractor={(item) => String(item.id)}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.hList}
-            renderItem={({ item }) => (
-              <HomeProductCard
-                product={item}
-                isLiked={Boolean(likedProducts[String(item.id)])}
-                onToggleLike={toggleLikeProduct}
-                onPress={setSelectedProductId}
-              />
-            )}
-          />
-        )}
+        ) : null}
 
-        <SectionHeader
-          title="Cửa hàng gần bạn"
-          onSeeAll={() => onOpenProducts?.({ focusShops: true })}
-        />
-        {isLoading ? (
-          <ActivityIndicator color="#076F32" style={styles.sectionLoader} />
-        ) : shops.length === 0 ? (
-          <Text style={styles.emptyText}>Chưa có cửa hàng gần bạn.</Text>
-        ) : (
-          <FlatList
-            horizontal
-            data={shops}
-            keyExtractor={(item) => String(item.id)}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.hList}
-            renderItem={({ item }) => (
-              <HomeShopCard shop={item} onPress={setSelectedStoreId} />
-            )}
-          />
-        )}
+        {!isLoading && products.length > 0 ? (
+          <>
+            <SectionHeader
+              title="Sản phẩm gần bạn"
+              onSeeAll={() =>
+                onOpenProducts?.(
+                  selectedCategoryId ? { categoryId: selectedCategoryId } : undefined
+                )
+              }
+            />
+            <FlatList
+              horizontal
+              data={products}
+              keyExtractor={(item) => String(item.id)}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.hList}
+              renderItem={({ item }) => (
+                <HomeProductCard
+                  product={item}
+                  isLiked={Boolean(likedProducts[String(item.id)])}
+                  likeCount={getDisplayLikeCount(item)}
+                  onToggleLike={toggleLikeProduct}
+                  onPress={setSelectedProductId}
+                />
+              )}
+            />
+          </>
+        ) : null}
+
+        {!isLoading && shops.length > 0 ? (
+          <>
+            <SectionHeader
+              title="Cửa hàng gần bạn"
+              onSeeAll={() => onOpenProducts?.({ focusShops: true })}
+            />
+            <FlatList
+              horizontal
+              data={shops}
+              keyExtractor={(item) => String(item.id)}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.hList}
+              renderItem={({ item }) => (
+                <HomeShopCard shop={item} onPress={setSelectedStoreId} />
+              )}
+            />
+          </>
+        ) : null}
+
+        {!isLoading && catalogProducts.length > 0 ? (
+          <>
+            <SectionHeader title="Tất cả sản phẩm" />
+            <View style={styles.productGrid}>
+              {catalogProducts.map((item) => (
+                <HomeProductCard
+                  key={`all-${String(item.id)}`}
+                  product={item}
+                  grid
+                  isLiked={Boolean(likedProducts[String(item.id)])}
+                  likeCount={getDisplayLikeCount(item)}
+                  onToggleLike={toggleLikeProduct}
+                  onPress={setSelectedProductId}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -689,9 +1084,15 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 4,
+    gap: 8,
     marginBottom: 12,
+  },
+  brandTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#055528',
+    letterSpacing: 0.2,
   },
   headerRight: {
     flexDirection: 'row',
@@ -730,70 +1131,60 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
   },
-  searchField: {
-    marginBottom: 12,
-  },
   categoryRow: {
     flexDirection: 'row',
-    flexWrap: 'nowrap',
-    alignItems: 'flex-start',
-    gap: 10,
+    alignItems: 'center',
+    gap: 8,
     paddingBottom: 14,
     paddingRight: 4,
   },
   categoryChip: {
-    width: 56,
-    alignItems: 'center',
-    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     flexShrink: 0,
   },
-  categoryIconBox: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  categoryIconBoxMore: {
+  categoryChipActive: {
     backgroundColor: '#E6F4EC',
-  },
-  categoryImage: {
-    width: '100%',
-    height: '100%',
-  },
-  categoryEmoji: {
-    fontSize: 20,
+    borderColor: '#076F32',
   },
   categoryLabel: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '700',
     color: '#334155',
     textAlign: 'center',
-    lineHeight: 12,
-    width: '100%',
   },
-  bannerCarousel: {
+  categoryLabelActive: {
+    color: '#076F32',
+  },
+  bannerCarouselWrap: {
+    alignSelf: 'stretch',
+    width: '100%',
     marginBottom: 16,
   },
+  bannerCarousel: {
+    alignSelf: 'stretch',
+    width: '100%',
+    marginBottom: 0,
+  },
   bannerCarouselContent: {
-    gap: 0,
+    alignItems: 'stretch',
   },
   bannerSlide: {
-    width: Dimensions.get('window').width - 32,
-    height: 140,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#055528',
-    marginRight: 0,
   },
   bannerImage: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
   },
   bannerFallback: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#076F32',
@@ -803,52 +1194,35 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
   },
-  bannerTitle: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  bannerDesc: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  voucherCard: {
-    width: 148,
-    borderRadius: 14,
-    padding: 12,
-    marginRight: 10,
-    backgroundColor: '#f0fdf4',
+  interestBtn: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     borderWidth: 1,
-    borderColor: '#bbf7d0',
+    borderColor: 'rgba(255,255,255,0.55)',
   },
-  voucherCode: {
-    fontSize: 14,
+  interestBtnText: {
+    color: '#ffffff',
     fontWeight: '800',
-    color: '#055528',
-    letterSpacing: 0.4,
-  },
-  voucherDiscount: {
-    marginTop: 6,
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  voucherShop: {
-    marginTop: 4,
     fontSize: 11,
-    color: '#64748b',
   },
   mapBanner: {
     flexDirection: 'row',
+    alignSelf: 'stretch',
+    width: '100%',
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#076F32',
-    minHeight: 118,
+    height: NEARBY_BANNER_HEIGHT,
+    minHeight: NEARBY_BANNER_HEIGHT,
     marginBottom: 16,
   },
   mapBannerCopy: {
@@ -970,14 +1344,24 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     paddingRight: 8,
   },
+  productGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 10,
+    paddingBottom: 14,
+  },
   productCard: {
-    width: 128,
+    width: 168,
     backgroundColor: '#ffffff',
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     overflow: 'hidden',
     paddingBottom: 6,
+  },
+  productCardGrid: {
+    width: '48.5%',
   },
   productImageWrap: {
     width: '100%',
@@ -996,73 +1380,95 @@ const styles = StyleSheet.create({
   productEmoji: {
     fontSize: 18,
   },
-  distanceTag: {
+  productDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginLeft: 'auto',
+  },
+  productDistanceText: {
+    fontSize: 8,
+    color: '#64748b',
+    fontWeight: '700',
+  },
+  promoBadge: {
     position: 'absolute',
     top: 6,
-    left: 6,
-    backgroundColor: '#076F32',
-    borderRadius: 999,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    right: 6,
+    zIndex: 4,
+    backgroundColor: '#dc2626',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  distanceTagText: {
+  promoBadgeText: {
     color: '#ffffff',
     fontSize: 10,
     fontWeight: '800',
   },
+  promoPriceWrap: {
+    flex: 1,
+    gap: 1,
+  },
   heartBtn: {
     position: 'absolute',
-    top: 6,
+    bottom: 6,
     right: 6,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 3,
+    minHeight: 30,
+    borderRadius: 15,
+    paddingHorizontal: 9,
+    backgroundColor: 'rgba(255,255,255,0.95)',
     justifyContent: 'center',
   },
+  heartCountText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
   productName: {
-    marginTop: 3,
-    marginHorizontal: 5,
-    fontSize: 9,
-    lineHeight: 12,
+    marginTop: 4,
+    marginHorizontal: 6,
+    fontSize: 13,
+    lineHeight: 17,
     fontWeight: '700',
     color: '#0f172a',
-    minHeight: 24,
+    minHeight: 34,
   },
   productPrice: {
     flex: 1,
-    marginHorizontal: 5,
+    marginHorizontal: 6,
     marginTop: 1,
     fontSize: 11,
     fontWeight: '800',
     color: '#dc2626',
   },
+  productOriginalPrice: {
+    marginHorizontal: 6,
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+  },
   productFooter: {
     marginTop: 4,
-    marginHorizontal: 5,
+    marginHorizontal: 6,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-  },
-  productCartBtn: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#076F32',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   productMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
-    marginHorizontal: 5,
+    marginHorizontal: 6,
     marginTop: 1,
   },
   productStore: {
     flex: 1,
-    fontSize: 8,
+    fontSize: 11,
     color: '#64748b',
     fontWeight: '600',
   },
@@ -1121,6 +1527,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     color: '#64748b',
+    marginLeft: 'auto',
   },
   shopStatusRow: {
     flexDirection: 'row',

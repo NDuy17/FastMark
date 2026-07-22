@@ -17,6 +17,15 @@ import * as ImagePicker from 'expo-image-picker';
 
 const REVIEW_PLACEHOLDER =
   'Hãy chia sẻ trải nghiệm của bạn về dịch vụ và sản phẩm của gian hàng này...';
+const MAX_REVIEW_IMAGES = 5;
+
+function assetToDataUri(asset) {
+  if (asset?.base64) {
+    const mimeType = asset.mimeType || 'image/jpeg';
+    return `data:${mimeType};base64,${asset.base64}`;
+  }
+  return asset?.uri || '';
+}
 
 export default function ShopReviewModal({
   visible,
@@ -27,19 +36,25 @@ export default function ShopReviewModal({
 }) {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
-  const [imageUri, setImageUri] = useState('');
+  const [imageUris, setImageUris] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setRating(0);
       setComment('');
-      setImageUri('');
+      setImageUris([]);
       setIsSubmitting(false);
     }
   }, [visible]);
 
-  async function handlePickImage() {
+  async function handlePickImages() {
+    const remaining = MAX_REVIEW_IMAGES - imageUris.length;
+    if (remaining <= 0) {
+      Alert.alert('Giới hạn ảnh', `Bạn chỉ có thể đính kèm tối đa ${MAX_REVIEW_IMAGES} ảnh.`);
+      return;
+    }
+
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       Alert.alert('Thông báo', 'Cần quyền truy cập thư viện ảnh để đính kèm hình.');
@@ -48,24 +63,22 @@ export default function ShopReviewModal({
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
+      allowsMultipleSelection: true,
+      selectionLimit: remaining,
       quality: 0.7,
       base64: true,
     });
 
-    if (result.canceled || !result.assets?.[0]) {
+    if (result.canceled || !result.assets?.length) {
       return;
     }
 
-    const asset = result.assets[0];
-    if (asset.base64) {
-      const mimeType = asset.mimeType || 'image/jpeg';
-      setImageUri(`data:${mimeType};base64,${asset.base64}`);
-      return;
-    }
-    if (asset.uri) {
-      setImageUri(asset.uri);
-    }
+    const next = result.assets.map(assetToDataUri).filter(Boolean);
+    setImageUris((current) => [...current, ...next].slice(0, MAX_REVIEW_IMAGES));
+  }
+
+  function removeImage(index) {
+    setImageUris((current) => current.filter((_, imageIndex) => imageIndex !== index));
   }
 
   async function handleSubmit() {
@@ -79,7 +92,8 @@ export default function ShopReviewModal({
       await onSubmit?.({
         rating,
         comment: comment.trim(),
-        imageUrl: imageUri,
+        images: imageUris,
+        imageUrl: imageUris[0] || '',
       });
     } finally {
       setIsSubmitting(false);
@@ -127,23 +141,25 @@ export default function ShopReviewModal({
               placeholderTextColor="#94a3b8"
             />
 
-            <Text style={styles.label}>Ảnh sản phẩm (tuỳ chọn)</Text>
+            <Text style={styles.label}>Ảnh sản phẩm (tuỳ chọn, tối đa {MAX_REVIEW_IMAGES})</Text>
             <View style={styles.photoRow}>
-              <Pressable
-                style={({ pressed }) => [styles.photoButton, pressed && styles.pressed]}
-                onPress={handlePickImage}
-              >
-                <Text style={styles.photoIcon}>📷</Text>
-                <Text style={styles.photoText}>Thêm ảnh</Text>
-              </Pressable>
-              {imageUri ? (
-                <View style={styles.previewWrap}>
-                  <Image source={{ uri: imageUri }} style={styles.previewImage} />
-                  <Pressable onPress={() => setImageUri('')} style={styles.removePhoto}>
+              {imageUris.length < MAX_REVIEW_IMAGES ? (
+                <Pressable
+                  style={({ pressed }) => [styles.photoButton, pressed && styles.pressed]}
+                  onPress={handlePickImages}
+                >
+                  <Text style={styles.photoIcon}>📷</Text>
+                  <Text style={styles.photoText}>Thêm ảnh</Text>
+                </Pressable>
+              ) : null}
+              {imageUris.map((uri, index) => (
+                <View key={`review-img-${index}`} style={styles.previewWrap}>
+                  <Image source={{ uri }} style={styles.previewImage} />
+                  <Pressable onPress={() => removeImage(index)} style={styles.removePhoto}>
                     <Text style={styles.removePhotoText}>✕</Text>
                   </Pressable>
                 </View>
-              ) : null}
+              ))}
             </View>
 
             <Pressable
@@ -242,6 +258,7 @@ const styles = StyleSheet.create({
   },
   photoRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 12,
   },

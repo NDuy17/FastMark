@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { checkRegisterAvailabilityOnBackend } from '../../api/authBackendApi';
 
 import {
@@ -353,11 +353,7 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <View style={styles.topBar}>
-        <CircularBackButton onPress={onBack} variant="light" />
-        <Text style={styles.topBarTitle}>Sửa thông tin tài khoản</Text>
-        <View style={styles.topBarSpacer} />
-      </View>
+      <SubScreenHeader title="Sửa thông tin tài khoản" onBack={onBack} />
 
       {isEmailAccount ? (
         <View style={styles.segmentedControl}>

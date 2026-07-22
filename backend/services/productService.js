@@ -1,10 +1,14 @@
 const Product = require("../models/Product");
+const ProductImage = require("../models/ProductImage");
 const ProductVariant = require("../models/ProductVariant");
 const ProductCategory = require("../models/ProductCategory");
 const { assertProductCategoryExists } = require("./productCategoryService");
 const ShopProfile = require("../models/ShopProfile");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
-const { isSubscriptionActive } = require("../constants/sellerSubscription");
+const { PRODUCT_STATUS } = require("../constants");
+const { isSubscriptionActive } = require("../constants");
+const {
+  assertCanManageProducts,
+} = require("./sellerPlanAccessService");
 const { sanitizeUploadLabel } = require("../utils/sanitizeFileName");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
 
@@ -18,7 +22,117 @@ function pickString(value) {
   return String(value || "").trim();
 }
 
-function normalizeVariantsInput(rawVariants, { requireImages = true } = {}) {
+/** Thứ tự hiển thị: pin 1 → pin 2 → không ghim. */
+function sortProductsByPin(products = []) {
+  return [...products].sort((left, right) => {
+    const pinLeft = Number(left.pinProduct) || 0;
+    const pinRight = Number(right.pinProduct) || 0;
+    const orderLeft = pinLeft === 0 ? 99 : pinLeft;
+    const orderRight = pinRight === 0 ? 99 : pinRight;
+    if (orderLeft !== orderRight) {
+      return orderLeft - orderRight;
+    }
+    return (
+      new Date(right.createdAt || right.CreatedAt || 0).getTime() -
+      new Date(left.createdAt || left.CreatedAt || 0).getTime()
+    );
+  });
+}
+
+function normalizePinProduct(value) {
+  const pin = Number(value);
+  if (!Number.isFinite(pin) || ![0, 1, 2].includes(pin)) {
+    throw createServiceError("pinProduct chỉ nhận 0, 1 hoặc 2.");
+  }
+  return pin;
+}
+
+/** Legacy Product.Thumbnail (string | string[]) — chỉ fallback khi chưa có ProductImage. */
+function normalizeLegacyThumbnailList(value) {
+  if (Array.isArray(value)) {
+    return value.map(pickString).filter(Boolean);
+  }
+  const single = pickString(value);
+  return single ? [single] : [];
+}
+
+function toPublicProductImages(imageDocs = []) {
+  return (imageDocs || [])
+    .slice()
+    .sort((left, right) => (Number(left.Stt) || 0) - (Number(right.Stt) || 0))
+    .map((doc) => ({
+      id: doc._id,
+      productId: doc.ProductId,
+      imageUrl: pickString(doc.ImageUrl),
+      stt: Number(doc.Stt) || 0,
+      uploadedAt: doc.UploadedAt || null,
+    }))
+    .filter((item) => item.imageUrl);
+}
+
+async function loadProductImages(productId) {
+  return ProductImage.find({ ProductId: productId }).sort({ Stt: 1, UploadedAt: 1 });
+}
+
+async function loadProductImagesByProductIds(productIds = []) {
+  if (!productIds.length) {
+    return new Map();
+  }
+
+  const rows = await ProductImage.find({ ProductId: { $in: productIds } }).sort({
+    Stt: 1,
+    UploadedAt: 1,
+  });
+
+  return rows.reduce((map, row) => {
+    const key = String(row.ProductId);
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+    map.get(key).push(row);
+    return map;
+  }, new Map());
+}
+
+async function replaceProductImages(productId, imageUrls = []) {
+  await ProductImage.deleteMany({ ProductId: productId });
+  const urls = (imageUrls || []).map(pickString).filter(Boolean);
+  if (!urls.length) {
+    return [];
+  }
+
+  const now = new Date();
+  return ProductImage.insertMany(
+    urls.map((imageUrl, index) => ({
+      ProductId: productId,
+      ImageUrl: imageUrl,
+      Stt: index,
+      UploadedAt: now,
+    }))
+  );
+}
+
+function pickVariantImageInput(variant) {
+  if (variant.image && typeof variant.image === "object") {
+    return variant.image;
+  }
+  if (pickString(variant.imageUrl || variant.ImageUrl)) {
+    return { imageUrl: pickString(variant.imageUrl || variant.ImageUrl) };
+  }
+  if (variant.imageBase64 || variant.ImageBase64) {
+    return {
+      imageUrl: pickString(variant.imageUrl || variant.ImageUrl),
+      imageBase64: variant.imageBase64 || variant.ImageBase64,
+      mimeType: variant.mimeType || variant.MimeType,
+    };
+  }
+  if (Array.isArray(variant.images) && variant.images[0]) {
+    return variant.images[0];
+  }
+  return null;
+}
+
+function normalizeVariantsInput(rawVariants, { requireImage = true } = {}) {
   if (!Array.isArray(rawVariants) || rawVariants.length === 0) {
     throw createServiceError("Cần ít nhất một biến thể sản phẩm.");
   }
@@ -27,7 +141,7 @@ function normalizeVariantsInput(rawVariants, { requireImages = true } = {}) {
     const variantName = pickString(variant.variantName || variant.VariantName || variant.name);
     const price = Number(variant.price ?? variant.Price);
     const quantity = Number(variant.quantity ?? variant.Quantity ?? 0);
-    const images = Array.isArray(variant.images) ? variant.images : [];
+    const image = pickVariantImageInput(variant);
 
     if (!variantName) {
       throw createServiceError(`Biến thể #${index + 1} thiếu tên.`);
@@ -41,22 +155,21 @@ function normalizeVariantsInput(rawVariants, { requireImages = true } = {}) {
       throw createServiceError(`Biến thể "${variantName}" có số lượng không hợp lệ.`);
     }
 
-    const hasImages = images.some(
-      (image) =>
-        pickString(image.imageUrl || image.ImageUrl) ||
+    const hasImage =
+      image &&
+      (pickString(image.imageUrl || image.ImageUrl) ||
         image.imageBase64 ||
-        image.ImageBase64
-    );
+        image.ImageBase64);
 
-    if (requireImages && !hasImages) {
-      throw createServiceError(`Biến thể "${variantName}" cần ít nhất một ảnh.`);
+    if (requireImage && !hasImage) {
+      throw createServiceError(`Biến thể "${variantName}" cần một ảnh.`);
     }
 
     return {
       variantName,
       price,
       quantity,
-      images,
+      image,
     };
   });
 }
@@ -95,25 +208,16 @@ async function uploadVariantImage({ user, imageInput, folder, label }) {
   return uploadResult.publicUrl;
 }
 
-async function resolveVariantImages({ user, images, variantName }) {
-  const uploads = [];
-
-  for (let index = 0; index < images.length; index += 1) {
-    const imageUrl = await uploadVariantImage({
-      user,
-      imageInput: images[index],
-      folder: "product-images",
-      label: `${variantName}-${index + 1}`,
-    });
-
-    uploads.push({
-      ImageUrl: imageUrl,
-      SortOrder: Number(images[index].sortOrder ?? images[index].SortOrder ?? index),
-    });
+async function resolveVariantImage({ user, image, variantName }) {
+  if (!image) {
+    return "";
   }
-
-  uploads.sort((left, right) => left.SortOrder - right.SortOrder);
-  return uploads;
+  return uploadVariantImage({
+    user,
+    imageInput: image,
+    folder: "product-images",
+    label: variantName || "variant",
+  });
 }
 
 function computePriceRange(variants) {
@@ -124,15 +228,12 @@ function computePriceRange(variants) {
   };
 }
 
-function toPublicVariantImage(image) {
-  return {
-    id: image._id,
-    imageUrl: image.ImageUrl,
-    sortOrder: image.SortOrder,
-  };
-}
-
 function toPublicVariant(variant) {
+  const imageUrl =
+    pickString(variant.ImageUrl) ||
+    pickString(variant.Images?.[0]?.ImageUrl) ||
+    "";
+
   return {
     id: variant._id,
     productId: variant.ProductId,
@@ -140,7 +241,9 @@ function toPublicVariant(variant) {
     price: variant.Price,
     quantity: Math.max(0, Number(variant.Quantity) || 0),
     soldCount: variant.SoldCount || 0,
-    images: (variant.Images || []).map(toPublicVariantImage),
+    imageUrl,
+    // Tương thích client cũ từng dùng mảng images.
+    images: imageUrl ? [{ id: "", imageUrl, sortOrder: 0 }] : [],
     status: variant.Status,
     createdAt: variant.CreatedAt,
     updatedAt: variant.UpdatedAt,
@@ -157,7 +260,7 @@ function activeProductFilter(extra = {}) {
   };
 }
 
-function toPublicProduct(product, variants = [], category = null) {
+function toPublicProduct(product, variants = [], category = null, imageDocs = null) {
   const normalizedVariants = variants.map(toPublicVariant);
   const remainingQuantity = normalizedVariants.reduce(
     (sum, variant) => sum + Math.max(0, Number(variant.quantity) || 0),
@@ -182,7 +285,27 @@ function toPublicProduct(product, variants = [], category = null) {
         ? PRODUCT_STATUS.HIDDEN
         : PRODUCT_STATUS.ACTIVE;
 
-  return {
+  const images = toPublicProductImages(imageDocs || []);
+  let thumbnails = images.map((image) => image.imageUrl);
+  if (thumbnails.length === 0) {
+    thumbnails = normalizeLegacyThumbnailList(product.Thumbnail);
+  }
+
+  const {
+    attachPromotionDto,
+  } = require("./productPromotionService");
+
+  if (
+    product.IsPromotion &&
+    product.PromotionEndDate &&
+    new Date(product.PromotionEndDate) < new Date() &&
+    typeof product.save === "function"
+  ) {
+    const { ensureProductPromotionFresh } = require("./productPromotionService");
+    ensureProductPromotionFresh(product).catch(() => {});
+  }
+
+  const dto = {
     id: product._id,
     shopId: product.ShopId,
     categoryId: product.CategoryId,
@@ -191,7 +314,9 @@ function toPublicProduct(product, variants = [], category = null) {
     productName: product.ProductName,
     description: product.Description || "",
     donVi: product.DonVi || "",
-    thumbnail: product.Thumbnail || "",
+    images,
+    thumbnails,
+    thumbnail: thumbnails[0] || "",
     viewCount: product.ViewCount || 0,
     likeCount: product.LikeCount || 0,
     soldCount: product.SoldCount || 0,
@@ -202,10 +327,13 @@ function toPublicProduct(product, variants = [], category = null) {
     isUnavailable: status === PRODUCT_STATUS.HIDDEN,
     minPrice,
     maxPrice: maxPrice || minPrice,
+    pinProduct: Math.max(0, Math.min(2, Number(product.pinProduct) || 0)),
     variants: normalizedVariants,
     createdAt: product.CreatedAt,
     updatedAt: product.UpdatedAt,
   };
+
+  return attachPromotionDto(dto, product);
 }
 
 async function getSellerShop(user) {
@@ -239,9 +367,9 @@ async function buildVariantDocs(user, variantsInput) {
   const variantDocs = [];
 
   for (const variantInput of variantsInput) {
-    const images = await resolveVariantImages({
+    const imageUrl = await resolveVariantImage({
       user,
-      images: variantInput.images,
+      image: variantInput.image,
       variantName: variantInput.variantName,
     });
 
@@ -249,7 +377,7 @@ async function buildVariantDocs(user, variantsInput) {
       variantName: variantInput.variantName,
       price: variantInput.price,
       quantity: variantInput.quantity,
-      images,
+      imageUrl,
     });
   }
 
@@ -259,42 +387,87 @@ async function buildVariantDocs(user, variantsInput) {
 async function syncShopProductStats(shop) {
   const products = await Product.find(activeProductFilter({ ShopId: shop._id }));
   shop.totalProducts = products.length;
-  // Shop followersCount is maintained by ShopFollow, not product likes.
+  // Shop followersCount is maintained by Follow, not product likes.
   shop.UpdatedAt = new Date();
   await shop.save();
   return shop;
 }
 
-async function resolveThumbnail({ user, payload }) {
-  const thumbnailUrl = pickString(payload.thumbnail || payload.Thumbnail || payload.thumbnailUrl);
-  if (thumbnailUrl) {
-    return thumbnailUrl;
+async function resolveThumbnails({ user, payload }) {
+  const collected = [];
+
+  const rawList =
+    payload.thumbnails ||
+    payload.Thumbnails ||
+    payload.thumbnailImages ||
+    payload.ThumbnailImages ||
+    null;
+
+  if (Array.isArray(rawList) && rawList.length > 0) {
+    for (let index = 0; index < rawList.length; index += 1) {
+      const item = rawList[index];
+      if (typeof item === "string" && pickString(item)) {
+        collected.push(pickString(item));
+        continue;
+      }
+      if (item && typeof item === "object") {
+        const url = await uploadVariantImage({
+          user,
+          imageInput: item,
+          folder: "product-thumbnails",
+          label: `thumbnail-${index + 1}`,
+        });
+        if (url) {
+          collected.push(url);
+        }
+      }
+    }
   }
 
-  const thumbnailInput = payload.thumbnailImage || payload.ThumbnailImage;
-  if (thumbnailInput) {
-    return uploadVariantImage({
-      user,
-      imageInput: thumbnailInput,
-      folder: "product-thumbnails",
-      label: "thumbnail",
-    });
+  // Legacy: 1 ảnh đơn.
+  if (collected.length === 0) {
+    const thumbnailUrl = pickString(
+      payload.thumbnail || payload.Thumbnail || payload.thumbnailUrl
+    );
+    if (thumbnailUrl) {
+      collected.push(thumbnailUrl);
+    }
   }
 
-  const thumbnailBase64 = payload.thumbnailBase64 || payload.ThumbnailBase64;
-  if (thumbnailBase64) {
-    return uploadVariantImage({
-      user,
-      imageInput: {
-        imageBase64: thumbnailBase64,
-        mimeType: payload.thumbnailMimeType || payload.ThumbnailMimeType || "image/jpeg",
-      },
-      folder: "product-thumbnails",
-      label: "thumbnail",
-    });
+  if (collected.length === 0) {
+    const thumbnailInput = payload.thumbnailImage || payload.ThumbnailImage;
+    if (thumbnailInput) {
+      const url = await uploadVariantImage({
+        user,
+        imageInput: thumbnailInput,
+        folder: "product-thumbnails",
+        label: "thumbnail",
+      });
+      if (url) {
+        collected.push(url);
+      }
+    }
   }
 
-  return "";
+  if (collected.length === 0) {
+    const thumbnailBase64 = payload.thumbnailBase64 || payload.ThumbnailBase64;
+    if (thumbnailBase64) {
+      const url = await uploadVariantImage({
+        user,
+        imageInput: {
+          imageBase64: thumbnailBase64,
+          mimeType: payload.thumbnailMimeType || payload.ThumbnailMimeType || "image/jpeg",
+        },
+        folder: "product-thumbnails",
+        label: "thumbnail",
+      });
+      if (url) {
+        collected.push(url);
+      }
+    }
+  }
+
+  return collected;
 }
 
 async function createProduct(user, payload) {
@@ -315,16 +488,24 @@ async function createProduct(user, payload) {
   const category = await assertProductCategoryExists(categoryId);
 
   const shop = await getSellerShop(user);
+  await assertCanManageProducts(shop);
+
   const { minPrice, maxPrice } = computePriceRange(variantsInput);
   const variantDocs = await buildVariantDocs(user, variantsInput);
 
-  let thumbnail = await resolveThumbnail({ user, payload });
-  if (!thumbnail) {
-    thumbnail = variantDocs[0]?.images?.[0]?.ImageUrl || "";
+  let thumbnails = await resolveThumbnails({ user, payload });
+  if (thumbnails.length === 0) {
+    const fallback = variantDocs[0]?.imageUrl || "";
+    thumbnails = fallback ? [fallback] : [];
   }
 
-  const subscriptionActive = isSubscriptionActive(shop);
-  const status = subscriptionActive ? PRODUCT_STATUS.ACTIVE : PRODUCT_STATUS.HIDDEN;
+  const status = PRODUCT_STATUS.ACTIVE;
+
+  const {
+    normalizePromotionPayload,
+    applyPromotionToProduct,
+  } = require("./productPromotionService");
+  const promotion = normalizePromotionPayload(payload, minPrice);
 
   const product = await Product.create({
     ShopId: shop._id,
@@ -334,9 +515,14 @@ async function createProduct(user, payload) {
     DonVi: donVi,
     MinPrice: minPrice,
     MaxPrice: maxPrice,
-    Thumbnail: thumbnail,
     Status: status,
+    IsPromotion: promotion.isPromotion,
+    DiscountPercent: promotion.discountPercent,
+    PromotionStartDate: promotion.promotionStartDate,
+    PromotionEndDate: promotion.promotionEndDate,
   });
+
+  const imageDocs = await replaceProductImages(product._id, thumbnails);
 
   const savedVariants = await ProductVariant.insertMany(
     variantDocs.map((variant) => ({
@@ -344,7 +530,7 @@ async function createProduct(user, payload) {
       VariantName: variant.variantName,
       Price: variant.price,
       Quantity: variant.quantity,
-      Images: variant.images,
+      ImageUrl: variant.imageUrl || "",
     }))
   );
 
@@ -353,11 +539,10 @@ async function createProduct(user, payload) {
   return {
     product,
     variants: savedVariants,
-    subscriptionActive,
-    publiclyVisible: subscriptionActive,
-    message: subscriptionActive
-      ? ""
-      : "Đã lưu bài. Gian hàng chưa có gói active nên bài bị ẩn công khai.",
+    images: imageDocs,
+    subscriptionActive: true,
+    publiclyVisible: true,
+    message: "",
   };
 }
 
@@ -373,11 +558,15 @@ async function listMyProducts(user) {
       { Status: { $exists: false }, IsDeleted: { $ne: true } },
     ],
   }).sort({
+    pinProduct: -1,
     CreatedAt: -1,
   });
 
   const productIds = products.map((product) => product._id);
-  const variants = await ProductVariant.find({ ProductId: { $in: productIds } });
+  const [variants, imagesByProduct] = await Promise.all([
+    ProductVariant.find({ ProductId: { $in: productIds } }),
+    loadProductImagesByProductIds(productIds),
+  ]);
   const variantsByProduct = variants.reduce((map, variant) => {
     const key = String(variant.ProductId);
     if (!map[key]) {
@@ -387,8 +576,15 @@ async function listMyProducts(user) {
     return map;
   }, {});
 
-  return products.map((product) =>
-    toPublicProduct(product, variantsByProduct[String(product._id)] || [])
+  return sortProductsByPin(
+    products.map((product) =>
+      toPublicProduct(
+        product,
+        variantsByProduct[String(product._id)] || [],
+        null,
+        imagesByProduct.get(String(product._id)) || []
+      )
+    )
   );
 }
 
@@ -407,7 +603,7 @@ async function getProductById(productId) {
   }
 
   const shop = await ShopProfile.findById(product.ShopId).lean();
-  if (!shop || !isSubscriptionActive(shop)) {
+  if (!shop || !isSubscriptionActive(shop) || shop.isActive === false) {
     throw createServiceError("Không tìm thấy sản phẩm.", 404);
   }
 
@@ -415,26 +611,32 @@ async function getProductById(productId) {
     CreatedAt: 1,
   });
 
-  const category = product.CategoryId
-    ? await ProductCategory.findById(product.CategoryId).lean()
-    : null;
+  const [category, imageDocs] = await Promise.all([
+    product.CategoryId
+      ? ProductCategory.findById(product.CategoryId).lean()
+      : Promise.resolve(null),
+    loadProductImages(product._id),
+  ]);
 
-  return toPublicProduct(product, variants, category);
+  return toPublicProduct(product, variants, category, imageDocs);
 }
 
 async function getMyProductById(user, productId) {
   const { product, variants } = await getOwnedProduct(user, productId, { includeHidden: true });
-  return toPublicProduct(product, variants);
+  const imageDocs = await loadProductImages(product._id);
+  return toPublicProduct(product, variants, null, imageDocs);
 }
 
 async function updateProduct(user, productId, payload) {
-  const { product, shop } = await getOwnedProduct(user, productId, { includeHidden: true });
+  const { product } = await getOwnedProduct(user, productId, { includeHidden: true });
+  const shop = await getSellerShop(user);
+  await assertCanManageProducts(shop);
 
   const productName = pickString(payload.productName || payload.ProductName || product.ProductName);
   const description = pickString(payload.description ?? payload.Description ?? product.Description);
   const donVi = pickString(payload.donVi ?? payload.DonVi ?? product.DonVi);
   const categoryId = payload.categoryId || payload.CategoryId || product.CategoryId;
-  const variantsInput = normalizeVariantsInput(payload.variants, { requireImages: true });
+  const variantsInput = normalizeVariantsInput(payload.variants, { requireImage: true });
 
   if (!productName) {
     throw createServiceError("Vui lòng nhập tên sản phẩm.");
@@ -445,9 +647,12 @@ async function updateProduct(user, productId, payload) {
   const { minPrice, maxPrice } = computePriceRange(variantsInput);
   const variantDocs = await buildVariantDocs(user, variantsInput);
 
-  let thumbnail = await resolveThumbnail({ user, payload });
-  if (!thumbnail) {
-    thumbnail = product.Thumbnail || variantDocs[0]?.images?.[0]?.ImageUrl || "";
+  let thumbnails = await resolveThumbnails({ user, payload });
+  if (thumbnails.length === 0) {
+    const existingImages = await loadProductImages(product._id);
+    const existingUrls = toPublicProductImages(existingImages).map((image) => image.imageUrl);
+    const fallback = variantDocs[0]?.imageUrl || "";
+    thumbnails = existingUrls.length > 0 ? existingUrls : fallback ? [fallback] : [];
   }
 
   product.CategoryId = category._id;
@@ -456,9 +661,27 @@ async function updateProduct(user, productId, payload) {
   product.DonVi = donVi;
   product.MinPrice = minPrice;
   product.MaxPrice = maxPrice;
-  product.Thumbnail = thumbnail;
   product.UpdatedAt = new Date();
+
+  if (
+    payload.isPromotion !== undefined ||
+    payload.promotionPrice !== undefined ||
+    payload.discountPercent !== undefined ||
+    payload.originalPrice !== undefined ||
+    payload.promotionStartDate !== undefined ||
+    payload.promotionEndDate !== undefined
+  ) {
+    const {
+      normalizePromotionPayload,
+      applyPromotionToProduct,
+    } = require("./productPromotionService");
+    const promotion = normalizePromotionPayload(payload, minPrice);
+    applyPromotionToProduct(product, promotion);
+  }
+
   await product.save();
+
+  const imageDocs = await replaceProductImages(product._id, thumbnails);
 
   await ProductVariant.deleteMany({ ProductId: product._id });
   const savedVariants = await ProductVariant.insertMany(
@@ -467,13 +690,14 @@ async function updateProduct(user, productId, payload) {
       VariantName: variant.variantName,
       Price: variant.price,
       Quantity: variant.quantity,
-      Images: variant.images,
+      ImageUrl: variant.imageUrl || "",
     }))
   );
 
   return {
     product,
     variants: savedVariants,
+    images: imageDocs,
   };
 }
 
@@ -485,12 +709,60 @@ async function softDeleteProduct(user, productId) {
   }
 
   product.Status = PRODUCT_STATUS.HIDDEN;
+  product.pinProduct = 0;
   product.UpdatedAt = new Date();
   await product.save();
 
   await syncShopProductStats(shop);
 
   return { product };
+}
+
+/**
+ * Ghim sản phẩm trên shop: 0 bỏ ghim, 1/2 vị trí ghim.
+ * Mỗi vị trí chỉ 1 SP — gán đè sẽ bỏ ghim SP cũ cùng vị trí.
+ */
+async function setProductPin(user, productId, pinValue) {
+  const shop = await getSellerShop(user);
+  await assertCanManageProducts(shop);
+  const pinProduct = normalizePinProduct(pinValue);
+
+  const product = await Product.findOne({
+    _id: productId,
+    ShopId: shop._id,
+    $or: [
+      { Status: PRODUCT_STATUS.ACTIVE },
+      { Status: PRODUCT_STATUS.HIDDEN },
+      { Status: { $exists: false }, IsDeleted: { $ne: true } },
+    ],
+  });
+  if (!product) {
+    throw createServiceError("Không tìm thấy sản phẩm.", 404);
+  }
+
+  const now = new Date();
+
+  if (pinProduct === 0) {
+    product.pinProduct = 0;
+    product.UpdatedAt = now;
+    await product.save();
+  } else {
+    await Product.updateMany(
+      {
+        ShopId: shop._id,
+        pinProduct,
+        _id: { $ne: product._id },
+      },
+      { $set: { pinProduct: 0, UpdatedAt: now } }
+    );
+    product.pinProduct = pinProduct;
+    product.UpdatedAt = now;
+    await product.save();
+  }
+
+  const imageDocs = await loadProductImages(product._id);
+  const variants = await ProductVariant.find({ ProductId: product._id }).sort({ CreatedAt: 1 });
+  return toPublicProduct(product, variants, null, imageDocs);
 }
 
 async function listCategories() {
@@ -514,6 +786,11 @@ module.exports = {
   getMyProductById,
   updateProduct,
   softDeleteProduct,
+  setProductPin,
   listCategories,
   toPublicProduct,
+  sortProductsByPin,
+  loadProductImages,
+  loadProductImagesByProductIds,
+  toPublicProductImages,
 };

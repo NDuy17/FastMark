@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 
 import { getShopCategoriesOnBackend } from '../../api/productApi';
@@ -19,6 +20,7 @@ import DirectionsScreen from './DirectionsScreen';
 import AddressSearchBar from './AddressSearchBar';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
+import InboxScreen from '../inbox/InboxScreen';
 import ReservationModal from '../buyer/ReservationModal';
 import { calculateDistanceMeters, formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { loadNearbyRegisteredShops, reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
@@ -74,6 +76,7 @@ export default function MapScreen({
   onClearFocus,
   onPickupCompleted,
   onOpenBuyerOrders,
+  onOpenWalletTopUp,
   onNavigationStateChange,
   isScreenActive = true,
 }) {
@@ -87,10 +90,14 @@ export default function MapScreen({
   const [recenterRequest, setRecenterRequest] = useState(null);
 
   const [menuVisible, setMenuVisible] = useState(false);
-  const [selectedRadius, setSelectedRadius] = useState(2000);
+  const [selectedRadius, setSelectedRadius] = useState(5000);
+  // Giá trị đang kéo trên slider (commit vào selectedRadius khi thả tay).
+  const [radiusDraft, setRadiusDraft] = useState(5000);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [registeredShops, setRegisteredShops] = useState([]);
+  const [isScanningShops, setIsScanningShops] = useState(false);
   const [storeNav, setStoreNav] = useState(null);
+  const [chatOpenRequest, setChatOpenRequest] = useState(null);
   const [reserveModal, setReserveModal] = useState(null);
   const [directionsSession, setDirectionsSession] = useState(null);
   const [routeDistanceById, setRouteDistanceById] = useState({});
@@ -161,8 +168,30 @@ export default function MapScreen({
   }, [resolveScanAddress]);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(storeNav || directionsSession));
-  }, [onNavigationStateChange, storeNav, directionsSession]);
+    onNavigationStateChange?.(
+      Boolean(isScreenActive && (storeNav || directionsSession || chatOpenRequest))
+    );
+  }, [chatOpenRequest, directionsSession, isScreenActive, onNavigationStateChange, storeNav]);
+
+  useEffect(() => {
+    if (isScreenActive) {
+      return;
+    }
+    setStoreNav(null);
+    setDirectionsSession(null);
+    setChatOpenRequest(null);
+  }, [isScreenActive]);
+
+  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
+    if (!shopId) {
+      return;
+    }
+    setChatOpenRequest({
+      shopId: String(shopId),
+      shopName: shopName || 'Gian hàng',
+      at: Date.now(),
+    });
+  }, []);
 
   const openStore = useCallback((storeId) => {
     setMenuVisible(false);
@@ -288,13 +317,23 @@ export default function MapScreen({
       return;
     }
 
-    setScanLocation(currentLocation);
-    resolveScanAddress(currentLocation);
+    setScanLocation((prev) => {
+      if (hasValidLocation(prev)) {
+        const movedMeters = calculateDistanceMeters(prev, currentLocation);
+        // Tránh GPS nhấp nháy hủy liên tục request quét.
+        if (movedMeters !== null && movedMeters < 40) {
+          return prev;
+        }
+      }
+      resolveScanAddress(currentLocation);
+      return currentLocation;
+    });
   }, [currentLocation, usingCustomScan, resolveScanAddress]);
 
   useEffect(() => {
     if (selectedCategory === 'none') {
       setRegisteredShops([]);
+      setIsScanningShops(false);
       return undefined;
     }
 
@@ -303,20 +342,20 @@ export default function MapScreen({
     }
 
     let isCurrent = true;
-    const effectiveRadius = selectedRadius ?? 20000;
+    // null = tắt lọc hiển thị → quét rộng (unlimited phía API).
+    const effectiveRadius = selectedRadius == null ? 0 : selectedRadius;
 
     if (scanFetchTimerRef.current) {
       clearTimeout(scanFetchTimerRef.current);
     }
 
-    scanFetchTimerRef.current = setTimeout(() => {
+    const runFetch = () => {
       const categoryKey =
         selectedCategory === 'all' || selectedCategory === 'none' ? 'all' : String(selectedCategory);
       const locKey = `${Number(scanLocation.latitude).toFixed(4)},${Number(scanLocation.longitude).toFixed(4)},${effectiveRadius},${categoryKey}`;
       if (lastScanFetchRef.current === locKey) {
         return;
       }
-      lastScanFetchRef.current = locKey;
 
       log.info('fetchRegisteredShops:map', {
         lat: scanLocation.latitude,
@@ -326,6 +365,7 @@ export default function MapScreen({
         customScan: usingCustomScan,
       });
 
+      setIsScanningShops(true);
       loadNearbyRegisteredShops({
         latitude: scanLocation.latitude,
         longitude: scanLocation.longitude,
@@ -333,15 +373,31 @@ export default function MapScreen({
         shopCategoryId: selectedCategory === 'all' || selectedCategory === 'none' ? '' : selectedCategory,
       })
         .then((data) => {
-          if (isCurrent) {
-            log.ok('fetchRegisteredShops:map-loaded', { count: data.length });
-            setRegisteredShops(data);
+          if (!isCurrent) {
+            return;
           }
+          lastScanFetchRef.current = locKey;
+          log.ok('fetchRegisteredShops:map-loaded', { count: data.length });
+          setRegisteredShops(Array.isArray(data) ? data : []);
         })
         .catch((error) => {
+          if (!isCurrent) {
+            return;
+          }
+          // Không khóa locKey khi lỗi — lần sau vẫn quét lại được.
+          lastScanFetchRef.current = null;
           log.fail('fetchRegisteredShops:map-failed', error);
+        })
+        .finally(() => {
+          if (isCurrent) {
+            setIsScanningShops(false);
+          }
         });
-    }, 400);
+    };
+
+    // Tab đang mở: quét ngay. Tab ẩn: debounce nhẹ để preload.
+    const delayMs = isScreenActive ? 0 : 400;
+    scanFetchTimerRef.current = setTimeout(runFetch, delayMs);
 
     return () => {
       isCurrent = false;
@@ -349,7 +405,7 @@ export default function MapScreen({
         clearTimeout(scanFetchTimerRef.current);
       }
     };
-  }, [scanLocation, selectedRadius, selectedCategory, usingCustomScan]);
+  }, [scanLocation, selectedRadius, selectedCategory, usingCustomScan, isScreenActive]);
 
   useEffect(() => {
     let active = true;
@@ -674,12 +730,31 @@ export default function MapScreen({
       });
   }
 
+  const wasScreenActiveRef = useRef(isScreenActive);
+
   useEffect(() => {
     if (!isScreenActive) {
       setMenuVisible(false);
       setIsSearchFocused(false);
+      wasScreenActiveRef.current = false;
+      return;
     }
-  }, [isScreenActive]);
+
+    const justActivated = !wasScreenActiveRef.current;
+    wasScreenActiveRef.current = true;
+
+    if (!justActivated) {
+      return;
+    }
+
+    // Mở tab Khám phá: bỏ cache quét cũ và ép quét lại quanh vị trí gần nhất.
+    lastScanFetchRef.current = null;
+    const cached = lastAcceptedRef.current;
+    if (hasValidLocation(cached) && !usingCustomScan) {
+      resolveScanAddress(cached);
+      setScanLocation({ ...cached });
+    }
+  }, [isScreenActive, usingCustomScan, resolveScanAddress]);
 
   useEffect(() => {
     if (storeNav) {
@@ -725,13 +800,25 @@ export default function MapScreen({
     log.info('search:select', { label: result.label });
   }
 
-  const radiusOptions = [
-    { key: null, label: '🚫 Tắt bán kính' },
-    { key: 100, label: '📍 100 m' },
-    { key: 500, label: '📍 500 m' },
-    { key: 1000, label: '📍 1 km' },
-    { key: 2000, label: '📍 2 km' },
-  ];
+  const RADIUS_SLIDER_MAX = 30000;
+  const RADIUS_SLIDER_STEP = 500;
+
+  function formatRadiusLabel(meters) {
+    if (!meters) {
+      return 'Tắt';
+    }
+    return formatDistance(meters);
+  }
+
+  function adjustRadius(delta) {
+    const base = selectedRadius == null ? 0 : Number(selectedRadius) || 0;
+    const next = Math.max(0, Math.min(RADIUS_SLIDER_MAX, base + delta));
+    setSelectedRadius(next > 0 ? next : null);
+  }
+
+  useEffect(() => {
+    setRadiusDraft(selectedRadius == null ? 0 : selectedRadius);
+  }, [selectedRadius]);
 
   const restaurantCategories = useMemo(() => {
     const dynamicCategories = shopCategories.map((category) => ({
@@ -750,8 +837,7 @@ export default function MapScreen({
   const selectedCategoryLabel =
     restaurantCategories.find((category) => category.key === selectedCategory)?.name || 'Tất cả';
 
-  const selectedRadiusLabel =
-    radiusOptions.find((opt) => opt.key === selectedRadius)?.label || 'Tắt';
+  const selectedRadiusLabel = formatRadiusLabel(selectedRadius);
 
   const showNearbyPanel =
     selectedCategory !== 'none' && displayRestaurants.length > 0 && !storeNav;
@@ -770,7 +856,20 @@ export default function MapScreen({
 
   let screenContent;
 
-  if (directionsSession) {
+  if (chatOpenRequest) {
+    screenContent = (
+      <InboxScreen
+        buyerView
+        messagesOnly
+        chatRequest={chatOpenRequest}
+        onBack={() => setChatOpenRequest(null)}
+        onViewShop={(shopId) => {
+          setChatOpenRequest(null);
+          openStore(shopId);
+        }}
+      />
+    );
+  } else if (directionsSession) {
     screenContent = (
       <DirectionsScreen
         session={directionsSession}
@@ -784,7 +883,7 @@ export default function MapScreen({
         originLocation={originLocation}
         onBack={closeStoreNav}
         onProductPress={openProduct}
-        onOpenChat={onOpenChat}
+        onOpenChat={handleOpenChatLocal}
         onNavigateDirections={startDirectionsToStore}
       />
     );
@@ -794,7 +893,8 @@ export default function MapScreen({
         productId={storeNav.productId}
         onBack={goBackStoreNav}
         onStorePress={openStore}
-        onOpenChat={onOpenChat}
+        onOpenChat={handleOpenChatLocal}
+        onOpenTopUp={onOpenWalletTopUp}
         onReserve={(product, store, selectedVariant) =>
           setReserveModal({
             product: { ...product, id: product.id || storeNav.productId },
@@ -870,22 +970,49 @@ export default function MapScreen({
                 Bán kính: {selectedRadiusLabel}
               </Text>
 
-              <Text style={styles.menuSubHeader}>Bán kính hiển thị</Text>
-              {radiusOptions.map((opt) => {
-                const isSelected = selectedRadius === opt.key;
-                return (
-                  <Pressable
-                    key={String(opt.key)}
-                    style={[styles.categoryItem, isSelected && styles.categoryItemActive]}
-                    onPress={() => setSelectedRadius(opt.key)}
-                  >
-                    <Text style={[styles.categoryText, isSelected && styles.categoryTextActive]}>
-                      {opt.label}
-                    </Text>
-                    {isSelected ? <Text style={styles.checkmark}>✓</Text> : null}
-                  </Pressable>
-                );
-              })}
+              <View style={styles.radiusHeaderRow}>
+                <Text style={styles.menuSubHeader}>Bán kính hiển thị</Text>
+                <Text style={styles.radiusValueText}>
+                  {radiusDraft > 0 ? `📍 ${formatRadiusLabel(radiusDraft)}` : '🚫 0 km'}
+                </Text>
+              </View>
+              <Slider
+                style={styles.radiusSlider}
+                minimumValue={0}
+                maximumValue={RADIUS_SLIDER_MAX}
+                step={RADIUS_SLIDER_STEP}
+                value={selectedRadius == null ? 0 : selectedRadius}
+                minimumTrackTintColor="#076F32"
+                maximumTrackTintColor="#e2e8f0"
+                thumbTintColor="#076F32"
+                onValueChange={(value) => setRadiusDraft(value)}
+                onSlidingComplete={(value) =>
+                  setSelectedRadius(value > 0 ? Math.round(value) : null)
+                }
+              />
+              <View style={styles.radiusScaleRow}>
+                <Text style={styles.radiusScaleText}>0 km</Text>
+                <Text style={styles.radiusScaleText}>15 km</Text>
+                <Text style={styles.radiusScaleText}>30 km</Text>
+              </View>
+              <View style={styles.radiusStepRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Giảm bán kính 0,5 km"
+                  style={({ pressed }) => [styles.radiusStepBtn, pressed && styles.mapFabPressed]}
+                  onPress={() => adjustRadius(-RADIUS_SLIDER_STEP)}
+                >
+                  <Ionicons name="remove" size={18} color="#076F32" />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Tăng bán kính 0,5 km"
+                  style={({ pressed }) => [styles.radiusStepBtn, pressed && styles.mapFabPressed]}
+                  onPress={() => adjustRadius(RADIUS_SLIDER_STEP)}
+                >
+                  <Ionicons name="add" size={18} color="#076F32" />
+                </Pressable>
+              </View>
 
               <View style={styles.divider} />
 
@@ -952,7 +1079,9 @@ export default function MapScreen({
                 ? 'Chọn loại hiển thị để xem danh sách'
                 : !hasValidLocation(scanLocation || currentLocation)
                   ? 'Đang lấy vị trí để quét gian hàng gần bạn...'
-                  : `Không có điểm nào trong bán kính ${selectedRadiusLabel}`}
+                  : isScanningShops
+                    ? 'Đang quét gian hàng gần bạn...'
+                    : `Không có điểm nào trong bán kính ${selectedRadiusLabel}`}
           </Text>
           {showNearbyPanel ? (
             <FlatList
@@ -1034,6 +1163,7 @@ export default function MapScreen({
           setStoreNav(null);
           onOpenBuyerOrders?.(RESERVATION_TAB.HOLDING);
         }}
+        onOpenTopUp={onOpenWalletTopUp}
       />
     </>
   );
@@ -1325,6 +1455,46 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 6,
     textTransform: 'uppercase',
+  },
+  radiusHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  radiusValueText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#076F32',
+  },
+  radiusSlider: {
+    width: '100%',
+    height: 32,
+  },
+  radiusScaleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  radiusScaleText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  radiusStepRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  radiusStepBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#c7ead6',
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   divider: {
     height: 1,

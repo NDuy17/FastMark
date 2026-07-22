@@ -17,7 +17,7 @@ export function createVariant() {
     variantName: '',
     price: '',
     quantity: '',
-    images: [],
+    image: null,
   };
 }
 
@@ -113,18 +113,10 @@ export function CategoryCombobox({ categories, value, onChange, disabled, showDe
 }
 
 function CategoryOptionContent({ category, active = false, compact = false }) {
-  const iconUrl = String(category?.icon || '').trim();
   const description = String(category?.description || '').trim();
 
   return (
     <View style={[styles.categoryOptionRow, compact && styles.categoryOptionRowCompact]}>
-      {iconUrl ? (
-        <Image source={{ uri: iconUrl }} style={styles.categoryOptionImage} />
-      ) : (
-        <View style={[styles.categoryOptionImage, styles.categoryOptionImagePlaceholder]}>
-          <Text style={styles.categoryOptionImagePlaceholderText}>?</Text>
-        </View>
-      )}
       <View style={styles.categoryOptionTextWrap}>
         <Text
           style={[
@@ -157,66 +149,64 @@ function CategoryOptionContent({ category, active = false, compact = false }) {
   );
 }
 
-export function ThumbnailField({ thumbnail, onChange, onError }) {
-  async function handlePickThumbnail() {
-    try {
-      const picked = await pickImages({ multiple: false });
-      if (picked[0]) {
-        onChange(picked[0]);
-      }
-    } catch (error) {
-      onError?.(error.message || 'Không chọn được ảnh thumbnail.');
-    }
-  }
-
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>Ảnh thumbnail</Text>
-      <View style={styles.thumbnailRow}>
-        {thumbnail ? (
-          <View style={styles.thumbnailWrap}>
-            <Image source={{ uri: thumbnail.uri }} style={styles.thumbnailImage} />
-            <Pressable onPress={() => onChange(null)} style={styles.removeImageButton}>
-              <Text style={styles.removeImageText}>×</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <Pressable
-            onPress={handlePickThumbnail}
-            style={({ pressed }) => [styles.thumbnailPicker, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.addImageText}>+ Chọn ảnh</Text>
-          </Pressable>
-        )}
-      </View>
-      <Text style={styles.helperText}>Bấm × để xóa và chọn ảnh khác.</Text>
-    </View>
-  );
-}
-
-export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) {
-  async function handlePickImages() {
+export function ThumbnailsField({ thumbnails, onChange, onError }) {
+  async function handlePickThumbnails() {
     try {
       const picked = await pickImages({ multiple: true });
       if (!picked.length) {
         return;
       }
+      onChange([...(thumbnails || []), ...picked]);
+    } catch (error) {
+      onError?.(error.message || 'Không chọn được ảnh sản phẩm.');
+    }
+  }
+
+  function removeThumbnail(index) {
+    onChange((thumbnails || []).filter((_, idx) => idx !== index));
+  }
+
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>Ảnh sản phẩm (thumbnail / gallery)</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageRow}>
+        {(thumbnails || []).map((image, imageIndex) => (
+          <View key={`thumb-${imageIndex}-${image.uri || image.imageUrl}`} style={styles.imageThumbWrap}>
+            <Image source={{ uri: image.uri || image.imageUrl }} style={styles.imageThumb} />
+            <Pressable onPress={() => removeThumbnail(imageIndex)} style={styles.removeImageButton}>
+              <Text style={styles.removeImageText}>×</Text>
+            </Pressable>
+          </View>
+        ))}
+        <Pressable
+          onPress={handlePickThumbnails}
+          style={({ pressed }) => [styles.addImageButton, pressed && styles.buttonPressed]}
+        >
+          <Text style={styles.addImageText}>+ Ảnh</Text>
+        </Pressable>
+      </ScrollView>
+      <Text style={styles.helperText}>
+        Ảnh đầu (Stt 0) là ảnh đại diện trên danh sách sản phẩm.
+      </Text>
+    </View>
+  );
+}
+
+export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) {
+  async function handlePickImage() {
+    try {
+      const picked = await pickImages({ multiple: false });
+      if (!picked[0]) {
+        return;
+      }
       onChange({
         ...variant,
-        images: [...variant.images, ...picked],
+        image: picked[0],
         error: '',
       });
     } catch (error) {
       onChange({ ...variant, error: error.message });
     }
-  }
-
-  function removeImage(imageIndex) {
-    onChange({
-      ...variant,
-      images: variant.images.filter((_, idx) => idx !== imageIndex),
-      error: '',
-    });
   }
 
   return (
@@ -267,23 +257,30 @@ export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) 
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Ảnh biến thể</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageRow}>
-          {variant.images.map((image, imageIndex) => (
-            <View key={`${variant.id}-${imageIndex}`} style={styles.imageThumbWrap}>
-              <Image source={{ uri: image.uri }} style={styles.imageThumb} />
-              <Pressable onPress={() => removeImage(imageIndex)} style={styles.removeImageButton}>
+        <Text style={styles.label}>Ảnh biến thể (1 ảnh)</Text>
+        <View style={styles.thumbnailRow}>
+          {variant.image ? (
+            <View style={styles.thumbnailWrap}>
+              <Image
+                source={{ uri: variant.image.uri || variant.image.imageUrl }}
+                style={styles.thumbnailImage}
+              />
+              <Pressable
+                onPress={() => onChange({ ...variant, image: null, error: '' })}
+                style={styles.removeImageButton}
+              >
                 <Text style={styles.removeImageText}>×</Text>
               </Pressable>
             </View>
-          ))}
-          <Pressable
-            onPress={handlePickImages}
-            style={({ pressed }) => [styles.addImageButton, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.addImageText}>+ Ảnh</Text>
-          </Pressable>
-        </ScrollView>
+          ) : (
+            <Pressable
+              onPress={handlePickImage}
+              style={({ pressed }) => [styles.thumbnailPicker, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.addImageText}>+ Chọn ảnh</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {variant.error ? <Text style={styles.errorText}>{variant.error}</Text> : null}

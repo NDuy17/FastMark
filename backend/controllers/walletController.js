@@ -50,6 +50,22 @@ exports.syncTopup = async (req, res) => {
   }
 };
 
+exports.cancelTopup = async (req, res) => {
+  try {
+    const orderCode = req.body.orderCode ?? req.body.order_code ?? req.query.orderCode;
+    const result = await walletService.cancelTopup(req.currentUser, orderCode);
+    return success(res, {
+      message: "Đã hủy giao dịch nạp tiền.",
+      data: result,
+    });
+  } catch (error) {
+    return fail(res, {
+      status: error.statusCode || 500,
+      message: error.message || "Không hủy được giao dịch.",
+    });
+  }
+};
+
 exports.payosWebhook = async (req, res) => {
   try {
     const result = await walletService.creditTopupFromWebhook(req.body);

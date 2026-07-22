@@ -1,46 +1,66 @@
 import { createLogger } from '../core/utils/logger';
-import {
-  fetchNodeProfile,
-  hasProfileNodeApi,
-  saveNodeProfile,
-} from '../api/profileApi';
+import { hasApiBaseUrl } from '../api/client';
+import { getCurrentUserIdToken } from '../api/authApi';
+import { getMeOnBackend, updateProfileOnBackend } from '../api/authBackendApi';
 import { readCachedProfile, writeCachedProfile } from '../api/profileCacheApi';
-import { mergeProfile } from '../model/profileModel';
+import {
+  makeProfileFromAuthUser,
+  mapBackendUserToProfile,
+  mergeProfile,
+} from '../model/profileModel';
 
 const log = createLogger('ProfileRepository');
 
 export { makeProfileFromAuthUser } from '../model/profileModel';
 
+/**
+ * Đọc hồ sơ từ User (GET /api/auth/me). Cache local chỉ để mở app nhanh.
+ */
 export async function readUserProfile(authUser) {
   log.info('readUserProfile:start', { uid: authUser.uid });
 
   const cachedProfile = await readCachedProfile(authUser.uid);
+  if (cachedProfile && !hasApiBaseUrl()) {
+    log.ok('readUserProfile:cache', { uid: authUser.uid });
+    return mergeProfile(authUser, cachedProfile, null);
+  }
+
+  if (hasApiBaseUrl()) {
+    try {
+      const idToken = await getCurrentUserIdToken(false);
+      if (idToken) {
+        const data = await getMeOnBackend(idToken);
+        const profile = mapBackendUserToProfile(data.user, authUser);
+        await writeCachedProfile(profile);
+        log.ok('readUserProfile:user-api', { uid: authUser.uid });
+        return profile;
+      }
+    } catch (error) {
+      log.fail('readUserProfile:user-api-failed', error);
+      if (cachedProfile) {
+        log.ok('readUserProfile:cache-fallback', { uid: authUser.uid });
+        return mergeProfile(authUser, cachedProfile, null);
+      }
+    }
+  }
+
   if (cachedProfile) {
     log.ok('readUserProfile:cache', { uid: authUser.uid });
     return mergeProfile(authUser, cachedProfile, null);
   }
 
-  if (hasProfileNodeApi()) {
-    try {
-      const nodeProfile = await fetchNodeProfile();
-      if (nodeProfile) {
-        const profile = mergeProfile(authUser, nodeProfile, null);
-        await writeCachedProfile(profile);
-        log.ok('readUserProfile:node-api', { uid: authUser.uid });
-        return profile;
-      }
-      log.warn('readUserProfile:node-api-empty', { uid: authUser.uid });
-    } catch (error) {
-      log.fail('readUserProfile:node-api-failed', error);
-    }
-  }
-
   log.info('readUserProfile:default-profile', { uid: authUser.uid });
-  return mergeProfile(authUser, null, null);
+  return makeProfileFromAuthUser(authUser);
 }
 
+/**
+ * Cập nhật hồ sơ qua User (PUT /api/auth/me). Không còn bảng Profile.
+ */
 export async function upsertUserProfile(authUser, updates = {}, options = {}) {
-  log.info('upsertUserProfile:start', { uid: authUser.uid, updates: Object.keys(updates || {}) });
+  log.info('upsertUserProfile:start', {
+    uid: authUser.uid,
+    updates: Object.keys(updates || {}),
+  });
   const { existingProfile = null } = options;
 
   let currentProfile = existingProfile;
@@ -49,21 +69,27 @@ export async function upsertUserProfile(authUser, updates = {}, options = {}) {
   }
 
   const profile = mergeProfile(authUser, currentProfile, updates);
-  await writeCachedProfile(profile);
 
-  if (hasProfileNodeApi()) {
+  if (hasApiBaseUrl()) {
     try {
-      const saved = await saveNodeProfile(profile);
-      if (saved) {
+      const idToken = await getCurrentUserIdToken();
+      if (idToken) {
+        const data = await updateProfileOnBackend({
+          idToken,
+          fullName: profile.fullName,
+          userName: profile.userName,
+        });
+        const saved = mapBackendUserToProfile(data.user, authUser);
         await writeCachedProfile(saved);
-        log.ok('upsertUserProfile:node-api-saved', { uid: authUser.uid });
+        log.ok('upsertUserProfile:user-api-saved', { uid: authUser.uid });
         return saved;
       }
     } catch (error) {
-      log.fail('upsertUserProfile:node-api-failed', error);
+      log.fail('upsertUserProfile:user-api-failed', error);
     }
   }
 
+  await writeCachedProfile(profile);
   log.ok('upsertUserProfile:local-cache', { uid: authUser.uid });
   return profile;
 }

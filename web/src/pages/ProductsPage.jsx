@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import {
   deleteProduct,
@@ -7,6 +8,7 @@ import {
   listProducts,
   showProduct,
 } from '../api/catalogApi';
+import { listCategories } from '../api/categoryApi';
 import { useAuth } from '../context/AuthContext';
 
 const STATUS_OPTIONS = [
@@ -16,13 +18,17 @@ const STATUS_OPTIONS = [
 ];
 
 function formatDate(value) {
-  if (!value) return '—';
+  if (!value) return '';
   return new Date(value).toLocaleString('vi-VN');
 }
 
 export default function ProductsPage() {
   const { getIdToken } = useAuth();
+  const [searchParams] = useSearchParams();
+  const shopIdFilter = searchParams.get('shopId') || '';
+  const productIdParam = searchParams.get('productId') || '';
   const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -30,16 +36,42 @@ export default function ProductsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const [page, setPage] = useState(1);
   const [busyId, setBusyId] = useState('');
   const [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getIdToken();
+        const payload = await listCategories(token, 'products');
+        if (!cancelled) {
+          setCategories(payload.data?.categories || payload.data?.items || []);
+        }
+      } catch {
+        if (!cancelled) setCategories([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [getIdToken]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const token = await getIdToken();
-      const payload = await listProducts(token, { search, status, page, limit: 20 });
+      const payload = await listProducts(token, {
+        search,
+        status,
+        categoryId,
+        shopId: shopIdFilter || undefined,
+        page,
+        limit: 20,
+      });
       setItems(payload.data?.items || []);
       setPagination(payload.data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 });
     } catch (loadError) {
@@ -48,11 +80,30 @@ export default function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [getIdToken, page, search, status]);
+  }, [categoryId, getIdToken, page, search, shopIdFilter, status]);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    if (!productIdParam) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getIdToken();
+        const payload = await getProductDetail(token, productIdParam);
+        if (!cancelled) {
+          setSelected(payload.data?.product || null);
+        }
+      } catch {
+        // ignore auto-open failures
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [getIdToken, productIdParam]);
 
   async function runAction(productId, action) {
     setBusyId(productId);
@@ -86,20 +137,23 @@ export default function ProductsPage() {
     }
   }
 
-  return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Sản phẩm</h1>
-          <p>Quản lý sản phẩm toàn hệ thống: xem, ẩn, hiện, xóa.</p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
+  const categoryOptions = [
+    { value: '', label: 'Tất cả danh mục' },
+    ...categories.map((item) => ({
+      value: String(item.id || item._id || ''),
+      label: item.name || item.categoryName || 'Danh mục',
+    })),
+  ];
 
+  return (
+    <div className="page catalog-page">
       {error ? <p className="error-banner">{error}</p> : null}
       {message ? <p className="success-banner">{message}</p> : null}
+      {shopIdFilter ? (
+        <p className="muted">
+          Đang lọc theo gian hàng · <Link to="/products">Xóa bộ lọc</Link>
+        </p>
+      ) : null}
 
       <section className="filter-card">
         <form
@@ -115,14 +169,30 @@ export default function ProductsPage() {
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Tên sản phẩm, mô tả..."
+              placeholder="Tên sản phẩm, tên gian hàng, @username..."
             />
           </label>
           <button type="submit" className="primary-btn">
             Tìm
           </button>
         </form>
-        <div className="filter-grid">
+        <div className="filter-grid filter-grid-2">
+          <label>
+            Danh mục
+            <select
+              value={categoryId}
+              onChange={(event) => {
+                setCategoryId(event.target.value);
+                setPage(1);
+              }}
+            >
+              {categoryOptions.map((option) => (
+                <option key={option.value || 'all-cat'} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             Trạng thái
             <select
@@ -143,91 +213,122 @@ export default function ProductsPage() {
       </section>
 
       <section className="table-card">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Ảnh</th>
-              <th>Tên sản phẩm</th>
-              <th>Giá</th>
-              <th>Gian hàng</th>
-              <th>Trạng thái</th>
-              <th>Thao tác</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={6}>Đang tải...</td></tr>
-            ) : items.length === 0 ? (
-              <tr><td colSpan={6}>Không có sản phẩm.</td></tr>
-            ) : (
-              items.map((product) => (
-                <tr key={product.id}>
-                  <td>
-                    {product.thumbnail ? (
-                      <img src={product.thumbnail} alt="" className="thumb-sm" />
-                    ) : (
-                      <div className="thumb-sm thumb-fallback">SP</div>
-                    )}
-                  </td>
-                  <td>
-                    <strong>{product.productName}</strong>
-                    <div className="muted">{product.categoryName || '—'}</div>
-                  </td>
-                  <td>{product.priceLabel}</td>
-                  <td>{product.shopName || '—'}</td>
-                  <td>
-                    <span className={product.status === 1 ? 'badge badge-success' : 'badge'}>
-                      {product.status === 1 ? 'Đang hiện' : 'Đã ẩn'}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="action-row">
-                      <button type="button" onClick={() => openDetail(product.id)}>
-                        Xem
-                      </button>
-                      {product.status === 1 ? (
-                        <button
-                          type="button"
-                          disabled={busyId === product.id}
-                          onClick={() => runAction(product.id, 'hide')}
-                        >
-                          Ẩn
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busyId === product.id}
-                          onClick={() => runAction(product.id, 'show')}
-                        >
-                          Hiện
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="danger-btn"
-                        disabled={busyId === product.id}
-                        onClick={() => runAction(product.id, 'delete')}
-                      >
-                        Xóa
-                      </button>
-                    </div>
+        <div className="table-scroll">
+          <table className="data-table catalog-table">
+            <thead>
+              <tr>
+                <th className="col-thumb">Ảnh</th>
+                <th>Sản phẩm</th>
+                <th>Gian hàng</th>
+                <th className="col-price">Giá</th>
+                <th className="col-status">Trạng thái</th>
+                <th className="col-actions">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="table-empty">
+                    Đang tải...
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="table-empty">
+                    Không có sản phẩm.
+                  </td>
+                </tr>
+              ) : (
+                items.map((product) => (
+                  <tr key={product.id}>
+                    <td className="col-thumb">
+                      {product.thumbnail ? (
+                        <img src={product.thumbnail} alt="" className="thumb-sm" />
+                      ) : (
+                        <div className="thumb-sm thumb-fallback">SP</div>
+                      )}
+                    </td>
+                    <td>
+                      <div className="cell-title">{product.productName}</div>
+                      <div className="cell-sub">{product.categoryName || 'Chưa có danh mục'}</div>
+                    </td>
+                    <td>
+                      {product.shopId ? (
+                        <Link to={`/shops/${product.shopId}`} className="shop-cell-link">
+                          <span className="cell-title">{product.shopName || 'Gian hàng'}</span>
+                          {product.shopUsername ? (
+                            <span className="cell-sub">@{product.shopUsername}</span>
+                          ) : null}
+                        </Link>
+                      ) : (
+                        <span className="cell-sub" />
+                      )}
+                    </td>
+                    <td className="col-price cell-price">{product.priceLabel}</td>
+                    <td className="col-status">
+                      <span
+                        className={
+                          product.status === 1 ? 'badge badge-success' : 'badge badge-neutral'
+                        }
+                      >
+                        {product.status === 1 ? 'Đang hiện' : 'Đã ẩn'}
+                      </span>
+                    </td>
+                    <td className="col-actions">
+                      <div className="table-actions">
+                        <button type="button" className="detail-btn" onClick={() => openDetail(product.id)}>
+                          Chi tiết
+                        </button>
+                        {product.status === 1 ? (
+                          <button
+                            type="button"
+                            disabled={busyId === product.id}
+                            onClick={() => runAction(product.id, 'hide')}
+                          >
+                            Ẩn
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busyId === product.id}
+                            onClick={() => runAction(product.id, 'show')}
+                          >
+                            Hiện
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="danger-btn"
+                          disabled={busyId === product.id}
+                          onClick={() => runAction(product.id, 'delete')}
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
         <div className="pagination-row">
           <span>
             Trang {pagination.page}/{pagination.totalPages} · {pagination.total} sản phẩm
           </span>
-          <div className="action-row">
-            <button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>
+          <div className="pagination-actions">
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={page <= 1}
+              onClick={() => setPage((value) => value - 1)}
+            >
               Trước
             </button>
             <button
               type="button"
+              className="ghost-btn"
               disabled={page >= pagination.totalPages}
               onClick={() => setPage((value) => value + 1)}
             >
@@ -239,34 +340,86 @@ export default function ProductsPage() {
 
       {selected ? (
         <div className="modal-backdrop" onClick={() => setSelected(null)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <header className="page-header">
+          <div className="modal-card catalog-modal" onClick={(event) => event.stopPropagation()}>
+            <header className="modal-header">
               <div>
                 <h2>{selected.productName}</h2>
-                <p>{selected.shopName} · {selected.categoryName || '—'}</p>
+                <p>
+                  {selected.shopId ? (
+                    <Link to={`/shops/${selected.shopId}`}>
+                      {selected.shopName || 'Gian hàng'}
+                      {selected.shopUsername ? ` (@${selected.shopUsername})` : ''}
+                    </Link>
+                  ) : (
+                    selected.shopName || ''
+                  )}
+                  {' · '}
+                  {selected.categoryName || ''}
+                </p>
               </div>
-              <button type="button" onClick={() => setSelected(null)}>
+              <button type="button" className="ghost-btn" onClick={() => setSelected(null)}>
                 Đóng
               </button>
             </header>
-            <dl className="detail-list">
-              <div><dt>Trạng thái</dt><dd>{selected.status === 1 ? 'Đang hiện' : 'Đã ẩn'}</dd></div>
-              <div><dt>Đơn vị</dt><dd>{selected.donVi || '—'}</dd></div>
-              <div><dt>Lượt xem</dt><dd>{selected.viewCount}</dd></div>
-              <div><dt>Lượt thích</dt><dd>{selected.likeCount}</dd></div>
-              <div><dt>Đã bán</dt><dd>{selected.soldCount}</dd></div>
-              <div><dt>Ngày tạo</dt><dd>{formatDate(selected.createdAt)}</dd></div>
+            <dl className="detail-list detail-list-grid">
+              <div>
+                <dt>Trạng thái</dt>
+                <dd>{selected.status === 1 ? 'Đang hiện' : 'Đã ẩn'}</dd>
+              </div>
+              <div>
+                <dt>Đơn vị</dt>
+                <dd>{selected.donVi || ''}</dd>
+              </div>
+              <div>
+                <dt>Lượt xem</dt>
+                <dd>{selected.viewCount}</dd>
+              </div>
+              <div>
+                <dt>Lượt thích</dt>
+                <dd>{selected.likeCount}</dd>
+              </div>
+              <div>
+                <dt>Yêu thích</dt>
+                <dd>{selected.favoriteCount ?? ''}</dd>
+              </div>
+              <div>
+                <dt>Đã bán</dt>
+                <dd>{selected.soldCount}</dd>
+              </div>
+              <div>
+                <dt>Đơn giữ hàng</dt>
+                <dd>
+                  {selected.reservationCount ?? 0} (hoàn thành {selected.completedReservations ?? 0})
+                </dd>
+              </div>
+              <div>
+                <dt>Chuyển đổi</dt>
+                <dd>{selected.conversionRate ?? 0}% (xem → giữ hàng)</dd>
+              </div>
+              <div>
+                <dt>Ngày tạo</dt>
+                <dd>{formatDate(selected.createdAt)}</dd>
+              </div>
             </dl>
-            <p>{selected.description || 'Chưa có mô tả.'}</p>
-            <h3>Phân loại</h3>
-            <ul className="report-list">
+            {(selected.thumbnails || []).length > 0 ? (
+              <div className="image-grid">
+                {selected.thumbnails.slice(0, 6).map((url) => (
+                  <a key={url} href={url} target="_blank" rel="noreferrer">
+                    <img src={url} alt="Ảnh sản phẩm" />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            <p className="modal-description">{selected.description || 'Chưa có mô tả.'}</p>
+            <h3 className="modal-section-title">Phân loại</h3>
+            <ul className="variant-list">
               {(selected.variants || []).map((variant) => (
-                <li key={variant.id} className="report-item">
+                <li key={variant.id}>
                   <strong>{variant.variantName}</strong>
-                  <p>
+                  <span>
                     {Number(variant.price || 0).toLocaleString('vi-VN')}đ · Tồn {variant.quantity} ·
                     Đã bán {variant.soldCount}
-                  </p>
+                  </span>
                 </li>
               ))}
             </ul>

@@ -102,7 +102,7 @@ export default function LoginScreen({ onGoRegister, onGoForgot }) {
       >
         <View style={styles.brandWrap}>
           <Image
-            source={require('../../../assets/welcome.png')}
+            source={require('../../../assets/welcome.jpg')}
             style={styles.brandLogo}
             resizeMode="cover"
           />

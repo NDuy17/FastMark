@@ -1,5 +1,6 @@
 /**
- * Drop legacy unique indexes on reviews after unifying BuyerReview → Review.
+ * Align reviews collection indexes with Review schema
+ * (shopId / productId / reservationId / soft-delete flags).
  */
 async function syncReviewCollectionIndexes(connection) {
   const db = connection.db;
@@ -17,7 +18,17 @@ async function syncReviewCollectionIndexes(connection) {
 
   const indexByName = new Map(indexes.map((idx) => [idx.name, idx]));
 
-  const stale = ["externalId_1", "store_id_1", "user_name_1"];
+  const stale = [
+    "externalId_1",
+    "store_id_1",
+    "user_name_1",
+    "storeId_1",
+    "storeId_1_CreatedAt_-1",
+    "orderCode_1",
+    "orderCode_1_sparse",
+    "legacyExternalId_1",
+    "reservationId_1",
+  ];
   for (const name of stale) {
     if (indexByName.has(name)) {
       try {
@@ -31,10 +42,25 @@ async function syncReviewCollectionIndexes(connection) {
   }
 
   const desired = [
-    { keys: { storeId: 1, CreatedAt: -1 }, options: { name: "storeId_1_CreatedAt_-1" } },
+    { keys: { shopId: 1, CreatedAt: -1 }, options: { name: "shopId_1_CreatedAt_-1" } },
+    { keys: { productId: 1, CreatedAt: -1 }, options: { name: "productId_1_CreatedAt_-1" } },
     { keys: { userId: 1, CreatedAt: -1 }, options: { name: "userId_1_CreatedAt_-1" } },
-    { keys: { legacyExternalId: 1 }, options: { name: "legacyExternalId_1", sparse: true } },
-    { keys: { orderCode: 1 }, options: { name: "orderCode_1_sparse", sparse: true } },
+    {
+      keys: { isHidden: 1 },
+      options: { name: "isHidden_1" },
+    },
+    {
+      keys: { isDeleted: 1 },
+      options: { name: "isDeleted_1" },
+    },
+    {
+      keys: { reservationId: 1 },
+      options: {
+        name: "reservationId_1_active",
+        unique: true,
+        partialFilterExpression: { isDeleted: { $ne: true } },
+      },
+    },
   ];
 
   for (const item of desired) {

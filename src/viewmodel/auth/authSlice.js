@@ -150,13 +150,15 @@ function normalizeEmailVerification(payload, fallbackEmail = '', { isResend = fa
   }
 
   let resendAvailableAt = null;
-  if (isResend) {
-    const resendMs = payload.resendAvailableAt
-      ? new Date(payload.resendAvailableAt).getTime()
-      : now + EMAIL_RESEND_COOLDOWN_SECONDS * 1000;
+  if (payload.resendAvailableAt) {
+    const resendMs = new Date(payload.resendAvailableAt).getTime();
     if (Number.isFinite(resendMs) && resendMs > now) {
       resendAvailableAt = new Date(resendMs).toISOString();
     }
+  } else if (isResend || Number(payload.resendCooldownSeconds) > 0) {
+    const cooldownSec =
+      Number(payload.resendCooldownSeconds) || EMAIL_RESEND_COOLDOWN_SECONDS;
+    resendAvailableAt = new Date(now + cooldownSec * 1000).toISOString();
   }
 
   return {
@@ -829,6 +831,23 @@ const authSlice = createSlice({
         state.error = null;
         // Không giữ success message để tránh hiện trên tab Tài khoản.
         state.successMessage = null;
+      })
+      .addCase(confirmEmailVerificationCode.rejected, (state, action) => {
+        const data = action.payload?.data;
+        if (!data?.mustUseNewCode) {
+          return;
+        }
+        state.emailVerification = normalizeEmailVerification(
+          {
+            email: data.email || state.emailVerification?.email,
+            expiresAt: data.expiresAt,
+            expiresInSeconds: data.expiresInSeconds,
+            resendAvailableAt: data.resendAvailableAt,
+            resendCooldownSeconds: data.resendCooldownSeconds,
+          },
+          state.emailVerification?.email || state.profile?.email || state.user?.email || '',
+          { isResend: true }
+        );
       })
       .addCase(requestEmailVerificationCode.fulfilled, (state, action) => {
         state.actionStatus = 'idle';

@@ -2,8 +2,9 @@ const Notification = require("../models/Notification.js");
 const {
   NOTIFICATION_AUDIENCE,
   normalizeNotificationAudience,
-} = require("../constants/notificationAudience");
+} = require("../constants");
 const { emitUserEvent } = require("../socket");
+const { sendPushToUser } = require("./pushNotificationService");
 
 function buildAudienceListFilter(audience) {
   const normalized = normalizeNotificationAudience(audience, NOTIFICATION_AUDIENCE.BUYER);
@@ -68,6 +69,18 @@ async function createNotification(userId, { title, content, audience } = {}) {
   };
 
   emitUserEvent(String(userId), "notification:new", payload);
+
+  sendPushToUser(userId, {
+    title: notification.title,
+    content: notification.content,
+    data: {
+      notificationId: String(notification._id),
+      audience: notification.audience,
+      type: "in_app_notification",
+    },
+  }).catch((error) => {
+    console.warn("[FCM] createNotification push failed:", error?.message || error);
+  });
 
   return payload;
 }

@@ -26,28 +26,6 @@ exports.updateShopSettings = async (req, res) => {
   });
 };
 
-exports.uploadShopAvatar = async (req, res) => {
-  const imageBase64 = pickBodyValue(req.body, ["imageBase64", "base64"]);
-  const mimeType = pickBodyValue(req.body, ["mimeType", "contentType"]) || "image/jpeg";
-
-  if (!imageBase64) {
-    return fail(res, {
-      status: 400,
-      message: "Thiếu file ảnh gian hàng.",
-    });
-  }
-
-  const result = await shopSettingsService.uploadShopAvatar(req.currentUser, {
-    imageBase64,
-    mimeType,
-  });
-
-  return success(res, {
-    message: "Cập nhật ảnh gian hàng thành công.",
-    data: result,
-  });
-};
-
 exports.checkShopUsernameAvailability = async (req, res) => {
   const shopUsername =
     pickBodyValue(req.body, ["shopUsername", "username"]) ||
@@ -112,27 +90,6 @@ exports.cancelReservation = async (req, res) => {
   );
   return success(res, {
     message: "Đã hủy đơn giữ hàng.",
-    data: { reservation },
-  });
-};
-
-exports.completeReservation = async (req, res) => {
-  const reservation = await reservationService.completeReservation(req.currentUser, req.params.id);
-  return success(res, {
-    message: "Đã xác nhận khách nhận hàng.",
-    data: { reservation },
-  });
-};
-
-exports.completeReservationByScan = async (req, res) => {
-  const payload =
-    pickBodyValue(req.body, ["qrPayload", "payload", "code", "pickupCode", "data"]) || "";
-  const reservation = await reservationService.completeReservationByScan(
-    req.currentUser,
-    payload
-  );
-  return success(res, {
-    message: "Đã quét mã — đơn hoàn thành.",
     data: { reservation },
   });
 };

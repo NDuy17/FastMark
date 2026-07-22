@@ -20,6 +20,7 @@ import { hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import ProductCard from '../shared/components/ProductCard';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_DEBOUNCE_MS = 400;
 
@@ -52,6 +53,7 @@ export default function FavoriteProductsScreen({
   onBack = null,
   title = 'Quản lý sản phẩm yêu thích',
 }) {
+  const insets = useScreenInsets();
   const searchTimerRef = useRef(null);
   const [favorites, setFavorites] = useState([]);
   const [search, setSearch] = useState('');
@@ -219,7 +221,11 @@ export default function FavoriteProductsScreen({
           keyExtractor={(item) => String(item.id || item.productId)}
           numColumns={2}
           columnWrapperStyle={styles.productGrid}
-          contentContainerStyle={favorites.length === 0 ? styles.emptyList : styles.listContent}
+          contentContainerStyle={
+            favorites.length === 0
+              ? [styles.emptyList, { paddingBottom: insets.nestedScrollPaddingBottom }]
+              : [styles.listContent, { paddingBottom: insets.nestedScrollPaddingBottom }]
+          }
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -312,9 +318,7 @@ const styles = StyleSheet.create({
   searchField: {
     marginBottom: 12,
   },
-  listContent: {
-    paddingBottom: 32,
-  },
+  listContent: {},
   emptyList: {
     flexGrow: 1,
   },

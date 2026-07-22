@@ -9,6 +9,10 @@ async function parseApiResponse(response) {
     error.statusCode = response.status;
     error.code = payload.code || '';
     error.field = payload.field || '';
+    error.payload = payload;
+    if (payload.data !== undefined) {
+      error.data = payload.data;
+    }
     throw error;
   }
 

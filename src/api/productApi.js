@@ -163,3 +163,99 @@ export async function deleteProductOnBackend(idToken, productId) {
 
   return parseApiResponse(response);
 }
+
+export async function setProductPinOnBackend({ idToken, productId, pinProduct }) {
+  const response = await apiRequest(
+    API_ENDPOINTS.productPin(productId),
+    {
+      method: 'PUT',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({ pinProduct: Number(pinProduct) || 0 }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const parsed = await parseApiResponse(response);
+  return parsed.data?.product;
+}
+
+export async function listPromotionProductsOnBackend({
+  limit = 40,
+  latitude,
+  longitude,
+} = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+    params.set('lat', String(latitude));
+    params.set('lng', String(longitude));
+  }
+  const response = await apiRequest(
+    `${API_ENDPOINTS.productsPromotions}?${params.toString()}`,
+    { method: 'GET' },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.products || [];
+}
+
+export async function listShopPromotionProductsOnBackend(shopId, { limit = 80 } = {}) {
+  const response = await apiRequest(
+    `${API_ENDPOINTS.shopPromotions(shopId)}?limit=${limit}`,
+    { method: 'GET' },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.products || [];
+}
+
+export async function setProductPromotionOnBackend({ idToken, productId, payload }) {
+  const response = await apiRequest(
+    API_ENDPOINTS.productPromotion(productId),
+    {
+      method: 'PUT',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify(payload),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const parsed = await parseApiResponse(response);
+  return parsed.data?.product;
+}
+
+export async function listMyPromotionProductsOnBackend(idToken, { limit = 100 } = {}) {
+  const response = await apiRequest(
+    `${API_ENDPOINTS.productsPromotionsMine}?limit=${limit}`,
+    {
+      method: 'GET',
+      headers: await authHeaders(idToken),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.products || [];
+}
+
+/** Giảm giá hàng loạt — cập nhật thẳng Product. */
+export async function bulkSetProductPromotionsOnBackend({
+  idToken,
+  productIds,
+  discountPercent,
+  promotionStartDate,
+  promotionEndDate,
+}) {
+  const response = await apiRequest(
+    API_ENDPOINTS.productsPromotionsBulk,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({
+        productIds,
+        discountPercent,
+        promotionStartDate,
+        promotionEndDate,
+      }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data || { updatedCount: 0, products: [] };
+}

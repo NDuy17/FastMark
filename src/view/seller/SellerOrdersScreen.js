@@ -13,15 +13,20 @@ import {
   confirmSellerReservationOnBackend,
   getSellerOrdersOnBackend,
   rejectSellerReservationOnBackend,
+  reportBuyerNoShowOnBackend,
 } from '../../api/sellerOpsApi';
 import {
   RESERVATION_TAB,
   RESERVATION_STATUS,
+  RESERVATION_STATUS_LABELS,
+  getCancelledReservationReason,
 } from '../../constants/sellerOrders';
-import CircularBackButton from '../shared/components/CircularBackButton';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import OrderItemHeader from '../shared/components/OrderItemHeader';
+import ReservationDisputeModal from '../shared/components/ReservationDisputeModal';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { formatPrice } from '../../core/utils/productFormat';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const TABS = [
   { key: RESERVATION_TAB.HOLDING, label: 'Giữ hàng' },
@@ -29,24 +34,41 @@ const TABS = [
   { key: RESERVATION_TAB.CANCELLED, label: 'Đã hủy' },
 ];
 
-const RESERVATION_STATUS_LABELS = {
-  [RESERVATION_STATUS.PENDING]: 'Chờ xác nhận',
-  [RESERVATION_STATUS.CONFIRMED]: 'Đã xác nhận',
-  [RESERVATION_STATUS.COMPLETED]: 'Hoàn thành',
-  [RESERVATION_STATUS.CANCELLED]: 'Đã hủy',
-};
-
 function getReservationStatusStyle(status) {
-  if (status === RESERVATION_STATUS.CONFIRMED) {
+  if (status === RESERVATION_STATUS.WAITING_PICKUP) {
     return { badge: styles.statusBadgeSuccess, text: styles.statusBadgeTextSuccess };
   }
-  if (status === RESERVATION_STATUS.COMPLETED) {
-    return { badge: styles.statusBadgeInfo, text: styles.statusBadgeTextInfo };
+  if (
+    status === RESERVATION_STATUS.COMPLETED ||
+    status === RESERVATION_STATUS.AUTO_COMPLETED
+  ) {
+    return { badge: styles.statusBadgeSuccess, text: styles.statusBadgeTextSuccess };
   }
-  if (status === RESERVATION_STATUS.CANCELLED) {
+  if (
+    status === RESERVATION_STATUS.REJECTED ||
+    status === RESERVATION_STATUS.REFUNDED ||
+    status === RESERVATION_STATUS.DISPUTED ||
+    status === RESERVATION_STATUS.DISPUTE_RESOLVED
+  ) {
     return { badge: styles.statusBadgeDanger, text: styles.statusBadgeTextDanger };
   }
   return { badge: styles.statusBadgePending, text: styles.statusBadgeTextPending };
+}
+
+function isPastPickup(item, now) {
+  if (!item?.pickupTime) return false;
+  const pickup = new Date(item.pickupTime);
+  return Number.isFinite(pickup.getTime()) && now >= pickup.getTime();
+}
+
+function canReportBuyerNoShow(item, now) {
+  return (
+    item.canReportBuyer === true ||
+    ((item.status === RESERVATION_STATUS.WAITING_PICKUP ||
+      item.status === RESERVATION_STATUS.DISPUTED) &&
+      isPastPickup(item, now) &&
+      !item.disputeBySeller)
+  );
 }
 
 function formatOrderTime(iso) {
@@ -71,11 +93,14 @@ export default function SellerOrdersScreen({
   onRefreshKey = 0,
   embedded = false,
 }) {
+  const insets = useScreenInsets();
   const [activeTab, setActiveTab] = useState(RESERVATION_TAB.HOLDING);
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [disputeTarget, setDisputeTarget] = useState(null);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const loadOrders = useCallback(async () => {
     setIsLoading(true);
@@ -96,6 +121,24 @@ export default function SellerOrdersScreen({
     setSearch('');
     loadOrders();
   }, [loadOrders, onRefreshKey]);
+
+  useEffect(() => {
+    const nextPickupAt = items.reduce((nearest, item) => {
+      const pickupAt = new Date(item.pickupTime).getTime();
+      if (!Number.isFinite(pickupAt) || pickupAt <= currentTime) {
+        return nearest;
+      }
+      return nearest == null || pickupAt < nearest ? pickupAt : nearest;
+    }, null);
+    if (nextPickupAt == null) {
+      return undefined;
+    }
+    const timer = setTimeout(
+      () => setCurrentTime(Date.now()),
+      Math.min(nextPickupAt - currentTime + 50, 2_147_483_647)
+    );
+    return () => clearTimeout(timer);
+  }, [items, currentTime]);
 
   const filteredItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -125,7 +168,11 @@ export default function SellerOrdersScreen({
   }, [items, search]);
 
   function handleConfirmReservation(reservation) {
-    Alert.alert('Xác nhận giữ hàng', 'Bạn xác nhận giữ hàng cho khách này?', [
+    const depositNote =
+      Number(reservation.depositAmount) > 0
+        ? `\n\nSau khi xác nhận, đưa QR gian hàng cho khách quét khi nhận hàng. Khi đó bạn nhận cọc ${formatPrice(reservation.depositAmount)}.`
+        : '\n\nSau khi xác nhận, đưa QR gian hàng cho khách quét khi nhận hàng để hoàn tất.';
+    Alert.alert('Xác nhận giữ hàng', `Bạn xác nhận giữ hàng cho khách này?${depositNote}`, [
       { text: 'Huỷ', style: 'cancel' },
       {
         text: 'Xác nhận',
@@ -133,7 +180,10 @@ export default function SellerOrdersScreen({
           try {
             const idToken = await getCurrentUserIdToken();
             await confirmSellerReservationOnBackend(idToken, reservation.id);
-            Alert.alert('Thành công', 'Đã xác nhận giữ hàng.');
+            Alert.alert(
+              'Thành công',
+              'Đã xác nhận giữ hàng. Đưa QR gian hàng cho khách quét khi nhận.'
+            );
             loadOrders();
           } catch (actionError) {
             Alert.alert('Lỗi', actionError.message || 'Không xác nhận được đơn.');
@@ -166,6 +216,32 @@ export default function SellerOrdersScreen({
     ]);
   }
 
+  async function handleSubmitBuyerNoShow(payload) {
+    if (!disputeTarget) {
+      return;
+    }
+    try {
+      const idToken = await getCurrentUserIdToken();
+      await reportBuyerNoShowOnBackend({
+        idToken,
+        reservationId: disputeTarget.id,
+        title: payload.title,
+        description: payload.description,
+        note: payload.note,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        address: payload.address,
+        images: payload.images,
+      });
+      setDisputeTarget(null);
+      Alert.alert('Đã gửi', 'Đã báo cáo người mua không đến. Cọc đang giữ chờ admin.');
+      loadOrders();
+    } catch (actionError) {
+      Alert.alert('Lỗi', actionError.message || 'Không gửi được báo cáo.');
+      throw actionError;
+    }
+  }
+
   function renderReservationItem({ item }) {
     const statusLabel = RESERVATION_STATUS_LABELS[item.status] || 'Không rõ';
     const statusStyle = getReservationStatusStyle(item.status);
@@ -173,7 +249,10 @@ export default function SellerOrdersScreen({
     const thumb = item.product?.thumbnail || '';
     const qty = Number(item.quantity) || 0;
     const buyerName = item.buyer?.fullName || 'Khách';
-    const canConfirm = item.status === RESERVATION_STATUS.PENDING;
+    const canConfirm = item.status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION;
+    const canReportBuyer = canReportBuyerNoShow(item, currentTime);
+    const cancelReasonText = getCancelledReservationReason(item);
+    const showActiveDisputeHint = item.status === RESERVATION_STATUS.DISPUTED;
     const unitPrice =
       item.agreedPrice != null
         ? Number(item.agreedPrice)
@@ -214,8 +293,24 @@ export default function SellerOrdersScreen({
             ) : (
               <Text style={styles.infoLineMuted}>Giữ: {formatOrderTime(item.createdAt)}</Text>
             )}
-            {item.status === RESERVATION_STATUS.CANCELLED && item.cancelReason ? (
-              <Text style={styles.infoLineDanger}>Lý do: {item.cancelReason}</Text>
+            {item.status === RESERVATION_STATUS.WAITING_PICKUP ? (
+              <Text style={styles.infoLineMuted}>
+                Đưa QR gian hàng cho khách quét để hoàn tất.
+              </Text>
+            ) : null}
+            {showActiveDisputeHint ? (
+              <Text style={styles.infoLineDanger}>
+                {item.disputeByBuyer && item.disputeBySeller
+                  ? 'Đang tranh chấp — cả hai bên đã báo cáo. Cọc đang giữ chờ admin.'
+                  : item.disputeByBuyer
+                    ? 'Người mua đã báo cáo. Cọc đang giữ chờ admin xử lý.'
+                    : item.disputeBySeller
+                      ? 'Bạn đã báo cáo người mua. Cọc đang giữ chờ admin xử lý.'
+                      : 'Đang tranh chấp. Cọc đang giữ chờ admin xử lý.'}
+              </Text>
+            ) : null}
+            {cancelReasonText ? (
+              <Text style={styles.infoLineDanger}>Lý do: {cancelReasonText}</Text>
             ) : null}
           </OrderItemHeader>
         </Pressable>
@@ -226,7 +321,7 @@ export default function SellerOrdersScreen({
               style={[styles.actionButton, styles.actionButtonFlex]}
               onPress={() => handleConfirmReservation(item)}
             >
-              <Text style={styles.actionButtonText}>Xác nhận</Text>
+              <Text style={styles.actionButtonText}>Đồng ý</Text>
             </Pressable>
             <Pressable
               style={[styles.actionButton, styles.actionButtonDanger, styles.actionButtonFlex]}
@@ -236,22 +331,28 @@ export default function SellerOrdersScreen({
             </Pressable>
           </View>
         ) : null}
+
+        {canReportBuyer ? (
+          <Pressable
+            style={styles.reportButton}
+            onPress={() => setDisputeTarget(item)}
+          >
+            <Text style={styles.reportButtonText}>Báo cáo người mua không đến</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        {embedded ? (
+      {embedded ? (
+        <View style={styles.header}>
           <Text style={styles.title}>Đơn hàng</Text>
-        ) : (
-          <View style={styles.headerRow}>
-            <CircularBackButton onPress={onBack} variant="plain" />
-            <Text style={styles.title}>Đơn hàng</Text>
-          </View>
-        )}
-      </View>
+        </View>
+      ) : (
+        <SubScreenHeader title="Đơn hàng" onBack={onBack} />
+      )}
 
       <View style={styles.tabRow}>
         {TABS.map((tab) => {
@@ -288,7 +389,10 @@ export default function SellerOrdersScreen({
         <FlatList
           data={filteredItems}
           keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: insets.nestedScrollPaddingBottom },
+          ]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           renderItem={renderReservationItem}
@@ -301,6 +405,13 @@ export default function SellerOrdersScreen({
           }
         />
       )}
+
+      <ReservationDisputeModal
+        visible={Boolean(disputeTarget)}
+        mode="seller"
+        onClose={() => setDisputeTarget(null)}
+        onSubmit={handleSubmitBuyerNoShow}
+      />
     </View>
   );
 }
@@ -362,7 +473,7 @@ const styles = StyleSheet.create({
     color: '#076F32',
     fontWeight: '800',
   },
-  listContent: { padding: 16, paddingBottom: 32 },
+  listContent: { padding: 16 },
   searchBar: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -455,6 +566,23 @@ const styles = StyleSheet.create({
     color: '#b91c1c',
     fontWeight: '800',
     fontSize: 13,
+  },
+  reportButton: {
+    marginTop: 12,
+    minHeight: 40,
+    borderRadius: 10,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fdba74',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  reportButtonText: {
+    color: '#c2410c',
+    fontWeight: '800',
+    fontSize: 13,
+    textAlign: 'center',
   },
   centered: { alignItems: 'center', paddingVertical: 40 },
   emptyBox: { alignItems: 'center', paddingVertical: 40 },

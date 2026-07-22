@@ -109,9 +109,17 @@ export default function EmailVerificationScreen() {
       const resendMs = new Date(emailVerification.resendAvailableAt).getTime();
       if (Number.isFinite(resendMs) && resendMs > now) {
         setResendAvailableAtMs(resendMs);
-      } else if (emailVerification.isResend) {
+      } else if (
+        emailVerification.isResend ||
+        Number(emailVerification.resendCooldownSeconds) > 0
+      ) {
         setResendAvailableAtMs(now + RESEND_COOLDOWN_SECONDS * 1000);
       }
+    } else if (
+      emailVerification.isResend ||
+      Number(emailVerification.resendCooldownSeconds) > 0
+    ) {
+      setResendAvailableAtMs(now + RESEND_COOLDOWN_SECONDS * 1000);
     }
   }, [emailVerification]);
 
@@ -162,6 +170,30 @@ export default function EmailVerificationScreen() {
     try {
       await dispatch(confirmEmailVerificationCode({ code: normalizedCode })).unwrap();
     } catch (submitError) {
+      const errData =
+        (typeof submitError === 'object' && submitError?.data) || {};
+
+      if (errData.mustUseNewCode) {
+        setCode('');
+        const now = Date.now();
+        const ttl = Number(errData.expiresInSeconds) || CODE_TTL_SECONDS;
+        setCodeExpiresAtMs(
+          errData.expiresAt
+            ? new Date(errData.expiresAt).getTime()
+            : now + ttl * 1000
+        );
+        if (errData.resendAvailableAt) {
+          setResendAvailableAtMs(new Date(errData.resendAvailableAt).getTime());
+        } else {
+          setResendAvailableAtMs(now + RESEND_COOLDOWN_SECONDS * 1000);
+        }
+        setLocalError(
+          submitError?.message ||
+            'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
+        );
+        return;
+      }
+
       setLocalError(
         typeof submitError === 'string'
           ? submitError

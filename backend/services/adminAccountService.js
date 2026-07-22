@@ -6,10 +6,10 @@ const Product = require("../models/Product");
 const Reservation = require("../models/Reservation");
 const Report = require("../models/Report");
 const Review = require("../models/Review");
-const { USER_ROLE, SELLER_VERIFICATION_STATUS } = require("../constants/sellerVerification");
-const { USER_STATUS } = require("../constants/userStatus");
-const { SHOP_STATUS } = require("../constants/shopStatus");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
+const { USER_ROLE, SELLER_VERIFICATION_STATUS } = require("../constants");
+const { USER_STATUS } = require("../constants");
+const { SHOP_STATUS } = require("../constants");
+const { PRODUCT_STATUS } = require("../constants");
 
 const ROLE_LABELS = {
   [USER_ROLE.BUYER]: "Người mua",
@@ -72,19 +72,19 @@ function toAdminUserBase(user) {
     followersCount: 0,
     followingCount: user.FollowingCount || 0,
     verifyAccount: Boolean(user.VerifyAccount),
-    sellerPhoneVerified: Boolean(user.SellerPhoneVerified),
+    sellerPhoneVerified: require("../models/User").isPhoneVerified(user),
   };
 }
 
-function toAdminShopSummary(shop) {
+function toAdminShopSummary(shop, owner = null) {
   if (!shop) {
     return null;
   }
 
   return {
     id: String(shop._id),
-    shopName: shop.shopName || "",
-    shopUsername: shop.shopUsername || "",
+    shopName: owner?.FullName || owner?.UserName || shop.shopName || "",
+    shopUsername: owner?.UserName || shop.shopUsername || "",
     status: shop.status,
     statusLabel: shop.status === SHOP_STATUS.ACTIVE ? "Hoạt động" : "Đã khóa",
     averageRating: Number(shop.averageRating) || 0,
@@ -92,8 +92,8 @@ function toAdminShopSummary(shop) {
     totalReviews: Number(shop.totalReviews) || 0,
     followersCount: Number(shop.followersCount) || 0,
     soldCount: Number(shop.soldCount) || 0,
-    address: shop.address || "",
-    phone: shop.phone || "",
+    address: shop.addressHeThong || shop.address || "",
+    phone: owner?.Phone || shop.phone || "",
     openTime: shop.openTime || "",
     closeTime: shop.closeTime || "",
     description: shop.description || "",
@@ -114,18 +114,32 @@ function toAdminVerificationSummary(verification) {
     cccdFrontImage: verification.cccdFrontImage || "",
     cccdBackImage: verification.cccdBackImage || "",
     selfieImage: verification.selfieImage || "",
-    address: verification.address || "",
-    systemAddress: verification.DiaChiHeThong || "",
+    address:
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "",
+    systemAddress:
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "",
     submittedAt: verification.submittedAt || verification.CreatedAt || null,
-    approvedAt: verification.approvedAt || null,
-    rejectedAt: verification.rejectedAt || null,
+    approvedAt:
+      Number(verification.status) === SELLER_VERIFICATION_STATUS.APPROVED
+        ? verification.approvedAt || verification.UpdatedAt || null
+        : null,
+    rejectedAt:
+      Number(verification.status) === SELLER_VERIFICATION_STATUS.REJECTED
+        ? verification.rejectedAt || verification.UpdatedAt || null
+        : null,
     rejectionReason: verification.LyDoTuChoi || "",
   };
 }
 
 function toAdminAccountListItem(user, shop, verification) {
   const base = toAdminUserBase(user);
-  const shopSummary = toAdminShopSummary(shop);
+  const shopSummary = toAdminShopSummary(shop, user);
   const verificationSummary = toAdminVerificationSummary(verification);
 
   return {
@@ -361,7 +375,7 @@ async function getAccountDetail(userId) {
 
   return {
     user: toAdminUserBase(user),
-    shop: toAdminShopSummary(shop),
+    shop: toAdminShopSummary(shop, user),
     verification: toAdminVerificationSummary(verification),
     stats,
     recentReports,

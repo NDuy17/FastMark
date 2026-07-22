@@ -11,6 +11,8 @@ export default function ClearableSearchField({
   onSubmitEditing,
   autoCapitalize = 'none',
   autoCorrect = false,
+  autoFocus = false,
+  inputRef = null,
 }) {
   const hasValue = String(value || '').length > 0;
 
@@ -18,6 +20,7 @@ export default function ClearableSearchField({
     <View style={[styles.searchWrap, style]}>
       <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -27,6 +30,7 @@ export default function ClearableSearchField({
         onSubmitEditing={onSubmitEditing}
         autoCapitalize={autoCapitalize}
         autoCorrect={autoCorrect}
+        autoFocus={autoFocus}
         clearButtonMode="never"
       />
       {hasValue ? (

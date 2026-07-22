@@ -27,22 +27,36 @@ import { useScreenInsets } from '../../hooks/useScreenInsets';
 import CircularBackButton from '../shared/components/CircularBackButton';
 import {
   CategoryCombobox,
-  ThumbnailField,
+  ThumbnailsField,
   VariantBlock,
   createVariant,
   sellerFormStyles as formStyles,
 } from './SellerProductFormFields';
+import ProductPromotionSection, {
+  buildPromotionPayload,
+} from './ProductPromotionSection';
+
+function toDateInput(value) {
+  if (!value) return '';
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return '';
+  }
+}
 
 function createVariantFromApi(variant) {
+  const imageUrl =
+    String(variant.imageUrl || '').trim() ||
+    String(variant.images?.[0]?.imageUrl || '').trim() ||
+    '';
+
   return {
     id: variant.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     variantName: variant.variantName || '',
     price: String(variant.price ?? ''),
     quantity: String(variant.quantity ?? ''),
-    images: (variant.images || []).map((image) => ({
-      uri: image.imageUrl,
-      imageUrl: image.imageUrl,
-    })),
+    image: imageUrl ? { uri: imageUrl, imageUrl } : null,
   };
 }
 
@@ -61,15 +75,39 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
   const [description, setDescription] = useState('');
   const [donVi, setDonVi] = useState('');
   const [categoryId, setCategoryId] = useState('');
-  const [thumbnail, setThumbnail] = useState(null);
+  const [thumbnails, setThumbnails] = useState([]);
   const [variants, setVariants] = useState([]);
+  const [promotion, setPromotion] = useState({
+    enabled: false,
+    discountPercent: '',
+    startDate: '',
+    endDate: '',
+  });
 
   const priceLabel = useMemo(() => {
     if (!product) {
       return '';
     }
+    if (product.isPromotion && Number(product.discountPercent) > 0) {
+      const sale =
+        Number(product.minPrice) > 0
+          ? Math.round(Number(product.minPrice) * (1 - Number(product.discountPercent) / 100))
+          : product.promotionPrice ?? product.minPrice;
+      return `${formatPrice(sale)} (−${product.discountPercent}%)`;
+    }
     return formatPriceRange(product.minPrice, product.maxPrice);
   }, [product]);
+
+  const promotionBasePrice = useMemo(() => {
+    const fromProduct = Number(product?.minPrice);
+    if (Number.isFinite(fromProduct) && fromProduct > 0) {
+      return fromProduct;
+    }
+    const prices = (variants || [])
+      .map((v) => Number(v.price))
+      .filter((p) => Number.isFinite(p) && p > 0);
+    return prices.length ? Math.min(...prices) : 0;
+  }, [product?.minPrice, variants]);
 
   const applyProductToForm = useCallback((nextProduct) => {
     setProduct(nextProduct);
@@ -77,12 +115,25 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
     setDescription(nextProduct.description || '');
     setDonVi(nextProduct.donVi || '');
     setCategoryId(String(nextProduct.categoryId || ''));
-    setThumbnail(
-      nextProduct.thumbnail
-        ? { uri: nextProduct.thumbnail, imageUrl: nextProduct.thumbnail }
-        : null
+    const gallery =
+      Array.isArray(nextProduct.thumbnails) && nextProduct.thumbnails.length > 0
+        ? nextProduct.thumbnails
+        : nextProduct.thumbnail
+          ? [nextProduct.thumbnail]
+          : [];
+    setThumbnails(
+      gallery.map((url) => ({
+        uri: url,
+        imageUrl: url,
+      }))
     );
     setVariants((nextProduct.variants || []).map(createVariantFromApi));
+    setPromotion({
+      enabled: Boolean(nextProduct.isPromotion),
+      discountPercent: String(nextProduct.discountPercent || ''),
+      startDate: toDateInput(nextProduct.promotionStartDate),
+      endDate: toDateInput(nextProduct.promotionEndDate),
+    });
   }, []);
 
   const loadProduct = useCallback(async () => {
@@ -137,20 +188,29 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
       return;
     }
 
-    const normalizedVariants = variants.map((variant) => ({
-      variantName: variant.variantName.trim(),
-      price: Number(variant.price),
-      quantity: Number(variant.quantity || 0),
-      images: variant.images.map((image) =>
-        image.base64
-          ? { imageBase64: image.base64, mimeType: image.mimeType }
-          : { imageUrl: image.imageUrl || image.uri }
-      ),
-    }));
+    if (!thumbnails.length) {
+      setError('Vui lòng chọn ít nhất một ảnh sản phẩm.');
+      return;
+    }
+
+    const normalizedVariants = variants.map((variant) => {
+      const image = variant.image
+        ? variant.image.base64
+          ? { imageBase64: variant.image.base64, mimeType: variant.image.mimeType }
+          : { imageUrl: variant.image.imageUrl || variant.image.uri }
+        : null;
+
+      return {
+        variantName: variant.variantName.trim(),
+        price: Number(variant.price),
+        quantity: Number(variant.quantity || 0),
+        image,
+      };
+    });
 
     for (let index = 0; index < normalizedVariants.length; index += 1) {
       const variant = normalizedVariants[index];
-      if (!variant.variantName || !Number.isFinite(variant.price) || !variant.images.length) {
+      if (!variant.variantName || !Number.isFinite(variant.price) || !variant.image) {
         setError(`Biến thể ${index + 1} chưa hợp lệ.`);
         return;
       }
@@ -164,15 +224,14 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
         description: description.trim(),
         donVi: donVi.trim(),
         categoryId,
+        thumbnails: thumbnails.map((image) =>
+          image.base64
+            ? { imageBase64: image.base64, mimeType: image.mimeType }
+            : { imageUrl: image.imageUrl || image.uri }
+        ),
         variants: normalizedVariants,
+        ...buildPromotionPayload(promotion),
       };
-
-      if (thumbnail?.base64) {
-        payload.thumbnailBase64 = thumbnail.base64;
-        payload.thumbnailMimeType = thumbnail.mimeType;
-      } else if (thumbnail?.imageUrl || thumbnail?.uri) {
-        payload.thumbnailUrl = thumbnail.imageUrl || thumbnail.uri;
-      }
 
       const updated = await updateProductOnBackend({ idToken, productId, payload });
       applyProductToForm(updated);
@@ -181,7 +240,13 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
       onChanged?.();
       dispatch(syncSellerAccess());
     } catch (saveError) {
-      setError(saveError.message || 'Không lưu được sản phẩm.');
+      const message = saveError.message || 'Không lưu được sản phẩm.';
+      if (saveError.statusCode === 403 || /gói bán hàng/i.test(message)) {
+        setError(message);
+        Alert.alert('Cần mua gói bán hàng', message);
+      } else {
+        setError(message);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -213,9 +278,17 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
   }
 
   function getVariantThumb(variant) {
-    const firstImage = (variant.images || [])[0];
-    return firstImage?.imageUrl || product?.thumbnail || '';
+    return (
+      variant.imageUrl ||
+      variant.images?.[0]?.imageUrl ||
+      product?.thumbnail ||
+      product?.thumbnails?.[0] ||
+      ''
+    );
   }
+
+  const heroThumbnail =
+    product?.thumbnails?.[0] || product?.thumbnail || '';
 
   const headerTitle = isEditing ? 'Chỉnh sửa sản phẩm' : 'Chi tiết sản phẩm';
 
@@ -293,8 +366,8 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
 
         {!isEditing ? (
           <>
-            {product.thumbnail ? (
-              <Image source={{ uri: product.thumbnail }} style={styles.heroImage} />
+            {heroThumbnail ? (
+              <Image source={{ uri: heroThumbnail }} style={styles.heroImage} />
             ) : null}
 
             <View style={styles.detailCard}>
@@ -411,7 +484,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
               <CategoryCombobox categories={categories} value={categoryId} onChange={setCategoryId} />
             </View>
 
-            <ThumbnailField thumbnail={thumbnail} onChange={setThumbnail} onError={setError} />
+            <ThumbnailsField thumbnails={thumbnails} onChange={setThumbnails} onError={setError} />
 
             <View style={formStyles.field}>
               <Text style={formStyles.label}>Mô tả</Text>
@@ -454,6 +527,16 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
             >
               <Text style={formStyles.addVariantText}>+ Thêm biến thể</Text>
             </Pressable>
+
+            <ProductPromotionSection
+              enabled={promotion.enabled}
+              basePrice={promotionBasePrice}
+              discountPercent={promotion.discountPercent}
+              startDate={promotion.startDate}
+              endDate={promotion.endDate}
+              onChange={setPromotion}
+              disabled={isSaving}
+            />
 
             <Pressable
               disabled={isSaving}

@@ -314,7 +314,13 @@ export default function ChatScreen({
     setPeerOverlay('account');
   }
 
-  const peerAvatarUri = isRemoteAvatarUrl(peer?.avatar) ? String(peer.avatar).trim() : '';
+  const peerAvatarUri = isRemoteAvatarUrl(peer?.avatar)
+    ? String(peer.avatar).trim()
+    : isRemoteAvatarUrl(peer?.accountAvatar)
+      ? String(peer.accountAvatar).trim()
+      : isRemoteAvatarUrl(buyerAvatar)
+        ? String(buyerAvatar).trim()
+        : '';
   const activityStatus = peer?.isOnline
     ? 'Đang hoạt động'
     : peer?.activityLabel || formatActivityLabel(peer?.isOnline, peer?.lastActiveAt);
@@ -355,7 +361,10 @@ export default function ChatScreen({
       throw new Error('Không tìm thấy gian hàng để nhắn tin.');
     }
 
-    const result = await startBuyerConversationOnBackend({ shopId, shopName: displayName });
+    const result = await startBuyerConversationOnBackend({
+      shopId,
+      shopName: shopName || 'Gian hàng',
+    });
     const nextId = String(result.conversationId || '');
     if (!nextId) {
       throw new Error('Không tạo được cuộc trò chuyện.');
@@ -367,7 +376,7 @@ export default function ChatScreen({
 
     setResolvedConversationId(nextId);
     return nextId;
-  }, [conversationId, displayName, isSellerMode, resolvedConversationId, shopId]);
+  }, [conversationId, isSellerMode, resolvedConversationId, shopId, shopName]);
 
   useEffect(() => {
     if (isRealConversationId(conversationId)) {
@@ -410,11 +419,9 @@ export default function ChatScreen({
         setResolvedConversationId(activeConversationId);
       }
 
-      if (!activeConversationId && !isSellerMode) {
-        setMessages([]);
-        setSequence(null);
-        setIsLoading(false);
-        return;
+      // Buyer mở chat từ shop/product: tạo/resolve conversation sớm để lấy avatar + presence.
+      if (!activeConversationId && !isSellerMode && shopId) {
+        activeConversationId = await ensureConversation();
       }
 
       if (!activeConversationId && isSellerMode) {
@@ -461,7 +468,16 @@ export default function ChatScreen({
     } finally {
       setIsLoading(false);
     }
-  }, [conversationId, ensureConversation, isSellerMode, loadPeer, ownShopId, resolvedConversationId, viewerContext]);
+  }, [
+    conversationId,
+    ensureConversation,
+    isSellerMode,
+    loadPeer,
+    ownShopId,
+    resolvedConversationId,
+    shopId,
+    viewerContext,
+  ]);
 
   useEffect(() => {
     if (!isSellerMode) {
@@ -571,15 +587,48 @@ export default function ChatScreen({
 
         const expectedTarget = isSellerMode ? 'user' : 'shop';
         if (payload?.target && payload.target !== expectedTarget) {
+          // Buyer: cập nhật luôn trạng thái tài khoản chủ shop nếu nhận user presence.
+          if (
+            !isSellerMode &&
+            payload.target === 'user' &&
+            payload?.userId &&
+            (String(current.ownerUserId || '') === String(payload.userId) ||
+              String(current.userId || '') === String(payload.userId))
+          ) {
+            return {
+              ...current,
+              accountIsOnline: payload.isOnline,
+              accountLastActiveAt: payload.lastActiveAt,
+              accountActivityLabel: payload.activityLabel,
+              // Fallback khi chưa có shop presence.
+              isOnline: current.isOnline || Boolean(payload.isOnline),
+              lastActiveAt: current.lastActiveAt || payload.lastActiveAt,
+              activityLabel: current.isOnline
+                ? current.activityLabel
+                : payload.activityLabel || current.activityLabel,
+            };
+          }
           return current;
         }
 
         const matchesPeer = isSellerMode
           ? payload?.userId && String(current.id) === String(payload.userId)
-          : payload?.shopId && String(current.id) === String(payload.shopId);
+          : (payload?.shopId && String(current.id) === String(payload.shopId)) ||
+            (payload?.userId &&
+              (String(current.ownerUserId || '') === String(payload.userId) ||
+                String(current.userId || '') === String(payload.userId)));
 
         if (!matchesPeer) {
           return current;
+        }
+
+        if (isSellerMode) {
+          return {
+            ...current,
+            isOnline: payload.isOnline,
+            lastActiveAt: payload.lastActiveAt,
+            activityLabel: payload.activityLabel,
+          };
         }
 
         return {
@@ -587,10 +636,29 @@ export default function ChatScreen({
           isOnline: payload.isOnline,
           lastActiveAt: payload.lastActiveAt,
           activityLabel: payload.activityLabel,
+          accountIsOnline:
+            payload.target === 'shop' ? current.accountIsOnline : payload.isOnline,
+          accountLastActiveAt:
+            payload.target === 'shop' ? current.accountLastActiveAt : payload.lastActiveAt,
+          accountActivityLabel:
+            payload.target === 'shop' ? current.accountActivityLabel : payload.activityLabel,
         };
       });
     },
   });
+
+  // Làm mới avatar + presence định kỳ khi đang mở chat.
+  useEffect(() => {
+    if (!resolvedConversationId) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      loadPeer(resolvedConversationId);
+    }, 20000);
+
+    return () => clearInterval(timer);
+  }, [loadPeer, resolvedConversationId]);
 
   async function sendImageMessage(image) {
     if (!image) {

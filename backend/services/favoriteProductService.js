@@ -5,9 +5,9 @@ const ProductVariant = require("../models/ProductVariant");
 const ProductCategory = require("../models/ProductCategory");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
+const { PRODUCT_STATUS } = require("../constants");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants/notificationAudience");
+const { NOTIFICATION_AUDIENCE } = require("../constants");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -39,6 +39,7 @@ function parsePagination(query = {}) {
 
 function pickShopLocation(shop) {
   return (
+    pickString(shop?.addressHeThong) ||
     pickString(shop?.DiaChiHeThong) ||
     pickString(shop?.address) ||
     pickString(shop?.description) ||
@@ -119,7 +120,12 @@ function toClientFavorite({
     price: minPrice,
     minPrice,
     maxPrice: maxPrice || minPrice,
-    thumbnail: product?.Thumbnail || product?.thumbnail || "",
+    thumbnail: (() => {
+      const legacy = Array.isArray(product?.Thumbnail)
+        ? product.Thumbnail[0]
+        : product?.Thumbnail;
+      return product?.thumbnail || legacy || "";
+    })(),
     location: pickShopLocation(shop),
     shopName: pickString(shop?.shopName) || pickString(seller?.UserName) || "Gian hàng",
     categoryId: product?.CategoryId ? String(product.CategoryId) : "",
@@ -150,7 +156,11 @@ async function buildFavoriteMaps(rows) {
   const products = await Product.find({ _id: { $in: productIds } }).lean();
   const productById = new Map(products.map((product) => [String(product._id), product]));
 
-  const variants = await ProductVariant.find({ ProductId: { $in: productIds } }).lean();
+  const { loadProductImagesByProductIds, toPublicProductImages } = require("./productService");
+  const [variants, imagesByProduct] = await Promise.all([
+    ProductVariant.find({ ProductId: { $in: productIds } }).lean(),
+    loadProductImagesByProductIds(productIds),
+  ]);
   const variantsByProduct = variants.reduce((map, variant) => {
     const key = String(variant.ProductId);
     if (!map.has(key)) {
@@ -159,6 +169,16 @@ async function buildFavoriteMaps(rows) {
     map.get(key).push(variant);
     return map;
   }, new Map());
+
+  // Gắn cover từ ProductImage vào product lean doc để toClientFavorite dùng.
+  for (const product of products) {
+    const thumbs = toPublicProductImages(imagesByProduct.get(String(product._id)) || []).map(
+      (image) => image.imageUrl
+    );
+    if (thumbs[0]) {
+      product.thumbnail = thumbs[0];
+    }
+  }
 
   const shopIds = [...new Set(products.map((product) => String(product.ShopId)).filter(Boolean))];
   const shops = shopIds.length
@@ -383,7 +403,6 @@ async function addFavorite(user, productId) {
             userId: user._id,
             productId: product._id,
             CreatedAt: now,
-            UpdatedAt: now,
           },
         ],
         { session }

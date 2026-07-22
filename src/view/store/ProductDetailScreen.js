@@ -7,7 +7,6 @@ import {
   Image,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   View,
@@ -16,9 +15,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSelector } from 'react-redux';
 
-import { formatPrice, formatPriceRange } from '../../core/utils/productFormat';
+import { formatPrice, formatPriceRange, getProductPromoPriceLabels, getPromotionalUnitPrice } from '../../core/utils/productFormat';
 import { formatDistance } from '../../core/utils/geo';
 import { getPhoneGateStep } from '../../core/utils/phoneVerification';
+import { callStore } from '../../core/utils/storeContact';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
 import {
   addFavoriteProductOnBackend,
@@ -30,8 +30,8 @@ import { submitReportOnBackend } from '../../api/reportApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import ReservationModal from '../buyer/ReservationModal';
-import QuantityStepper from '../buyer/QuantityStepper';
 import ReportSheet from '../shared/components/ReportSheet';
+import ReportComposeModal from '../shared/components/ReportComposeModal';
 import OutOfStockOverlay from '../shared/components/OutOfStockOverlay';
 import CircularBackButton from '../shared/components/CircularBackButton';
 import AvatarBadge from '../shared/components/AvatarBadge';
@@ -41,8 +41,6 @@ import { RESERVATION_TAB } from '../../constants/sellerOrders';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const HERO_HEIGHT = 320;
-const QTY_CHIPS = [1, 2, 5, 10];
-
 export default function ProductDetailScreen({
   productId,
   onBack,
@@ -51,6 +49,9 @@ export default function ProductDetailScreen({
   onReserve,
   onMessageSeller,
   onOrderSuccess,
+  onOpenTopUp,
+  resumeReserveRequest = null,
+  onResumeReserveConsumed,
 }) {
   const insets = useScreenInsets();
   const profile = useSelector(selectAuthProfile);
@@ -60,6 +61,8 @@ export default function ProductDetailScreen({
   const [store, setStore] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reportVisible, setReportVisible] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [composeVisible, setComposeVisible] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const [selectedVariantId, setSelectedVariantId] = useState(null);
@@ -69,6 +72,21 @@ export default function ProductDetailScreen({
   const [phoneGateVisible, setPhoneGateVisible] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!resumeReserveRequest?.at || !product || loading) {
+      return;
+    }
+    const variantId = resumeReserveRequest.variantId || null;
+    const qty = Math.max(1, Number(resumeReserveRequest.quantity) || 1);
+    if (variantId) {
+      setSelectedVariantId(variantId);
+      setActionVariantId(variantId);
+    }
+    setQuantity(qty);
+    setReserveModalVisible(true);
+    onResumeReserveConsumed?.();
+  }, [resumeReserveRequest?.at, product?.id, loading]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -149,8 +167,11 @@ export default function ProductDetailScreen({
     ? Math.max(0, Number(selectedVariant.quantity) || 0)
     : totalRemaining;
 
+  const displaySold = selectedVariant
+    ? Math.max(0, Number(selectedVariant.soldCount) || 0)
+    : Math.max(0, Number(product?.soldCount) || 0);
+
   const maxQuantity = Math.max(0, displayRemaining);
-  const unitLabel = product?.donVi ? String(product.donVi) : 'sp';
 
   useEffect(() => {
     if (!product || selectedVariantId) {
@@ -176,13 +197,23 @@ export default function ProductDetailScreen({
       return [];
     }
 
+    // Chi tiết biến thể: đúng 1 ảnh từ ProductVariant.ImageUrl.
     if (selectedVariant) {
-      const variantImages = (selectedVariant.images || [])
-        .map((image) => image?.imageUrl)
-        .filter(Boolean);
-      if (variantImages.length > 0) {
-        return variantImages;
+      const variantUrl =
+        selectedVariant.imageUrl ||
+        selectedVariant.images?.[0]?.imageUrl ||
+        '';
+      if (variantUrl) {
+        return [variantUrl];
       }
+    }
+
+    // Chưa chọn biến thể: gallery ProductImage (thumbnail theo Stt).
+    const productGallery = Array.isArray(product.thumbnails)
+      ? product.thumbnails.filter(Boolean)
+      : [];
+    if (productGallery.length > 0) {
+      return productGallery;
     }
 
     if (product.thumbnail) {
@@ -198,7 +229,11 @@ export default function ProductDetailScreen({
     }
 
     if (selectedVariant) {
-      return formatPrice(selectedVariant.price);
+      return formatPrice(getPromotionalUnitPrice(product, selectedVariant.price));
+    }
+
+    if (product.isPromotion && Number(product.discountPercent) > 0) {
+      return getProductPromoPriceLabels(product).saleLabel;
     }
 
     return formatPriceRange(
@@ -206,6 +241,21 @@ export default function ProductDetailScreen({
       product.maxPrice ?? product.price
     );
   }, [product, selectedVariant]);
+
+  const originalPriceLabel = useMemo(() => {
+    if (!product?.isPromotion || !(Number(product.discountPercent) > 0)) {
+      return '';
+    }
+    if (selectedVariant) {
+      return formatPrice(selectedVariant.price);
+    }
+    return getProductPromoPriceLabels(product).originalLabel;
+  }, [product, selectedVariant]);
+
+  const discountPercentLabel =
+    product?.isPromotion && Number(product.discountPercent) > 0
+      ? `-${Number(product.discountPercent)}%`
+      : '';
 
   function handleSelectVariant(variant) {
     if (product?.isUnavailable) {
@@ -292,14 +342,26 @@ export default function ProductDetailScreen({
     }
   }
 
-  async function handleShare() {
-    try {
-      await Share.share({
-        message: `${product.name} — ${priceLabel} trên Chợ Quê FastMark`,
-      });
-    } catch {
-      // User cancelled share.
+  function handleMenuPress() {
+    setReportVisible(true);
+  }
+
+  function handleCallPress() {
+    callStore(store?.phone);
+  }
+
+  function handleMessagePress() {
+    const shopId = store?.id || product?.store_id;
+    if (!shopId) {
+      Alert.alert('Không nhắn tin được', 'Không tìm thấy thông tin gian hàng.');
+      return;
     }
+    const shopName = store?.shop_name || store?.name || 'Gian hàng';
+    if (onMessageSeller) {
+      onMessageSeller({ shopId, shopName, product });
+      return;
+    }
+    onOpenChat?.({ shopId, shopName });
   }
 
   if (loading) {
@@ -321,9 +383,13 @@ export default function ProductDetailScreen({
     );
   }
 
-  async function handleReportSubmit(reason) {
+  function handleReportReason(reason) {
     setReportVisible(false);
+    setReportReason(reason);
+    setComposeVisible(true);
+  }
 
+  async function handleReportComposeSubmit({ title, content, images }) {
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
@@ -338,10 +404,14 @@ export default function ProductDetailScreen({
         productName: product.name,
         shopId: store?.id || product.store_id,
         shopName: store?.name,
-        title: reason,
+        title,
+        content,
+        images,
       });
 
-      Alert.alert('Đã gửi báo cáo', `Cảm ơn bạn. Chúng tôi đã ghi nhận: "${reason}".`);
+      setComposeVisible(false);
+      setReportReason('');
+      Alert.alert('Đã gửi báo cáo', 'Cảm ơn bạn. Chúng tôi đã ghi nhận tố cáo.');
     } catch (error) {
       Alert.alert('Không gửi được báo cáo', error.message || 'Vui lòng thử lại sau.');
     }
@@ -359,19 +429,33 @@ export default function ProductDetailScreen({
 
   return (
     <View style={styles.screen}>
+      <View style={styles.header}>
+        <CircularBackButton onPress={onBack} variant="plain" style={styles.headerRoundBtn} />
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          Chi tiết sản phẩm
+        </Text>
+        <View style={styles.headerSpacer} />
+        <Pressable
+          onPress={handleMenuPress}
+          style={({ pressed }) => [styles.headerMenuBtn, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Báo cáo sản phẩm"
+          hitSlop={8}
+        >
+          <Ionicons name="ellipsis-vertical" size={18} color="#0f172a" />
+        </Pressable>
+      </View>
+
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: 88 + insets.bottomSpacing }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: insets.nestedScrollPaddingBottom + 72 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.imageSection}>
-          <CircularBackButton
-            onPress={onBack}
-            variant="surface"
-            style={[styles.backBtn, { top: insets.floatingTop }]}
-          />
-
-          <View style={[styles.floatingActions, { top: insets.floatingTop }]}>
+          <View style={styles.floatingActions}>
             <Pressable
               onPress={handleToggleLike}
               style={styles.floatingBtn}
@@ -383,14 +467,7 @@ export default function ProductDetailScreen({
                 size={20}
                 color={isLiked ? '#ef4444' : '#0f172a'}
               />
-            </Pressable>
-            <Pressable
-              onPress={handleShare}
-              style={styles.floatingBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Chia sẻ"
-            >
-              <Ionicons name="share-outline" size={20} color="#0f172a" />
+              <Text style={styles.floatingLikeCount}>{likeCount}</Text>
             </Pressable>
           </View>
 
@@ -432,15 +509,82 @@ export default function ProductDetailScreen({
         <View style={styles.infoSection}>
           <Text style={styles.productName}>{product.name}</Text>
 
-          <View style={styles.priceDistanceRow}>
-            <Text style={styles.productPrice}>{priceLabel}</Text>
-            {hasDistance ? (
-              <View style={styles.distanceBadge}>
-                <Ionicons name="location" size={13} color="#076F32" />
-                <Text style={styles.distanceBadgeText}>Cách bạn {distanceLabel}</Text>
+          {product.isPromotion && originalPriceLabel ? (
+            <View style={styles.priceBlock}>
+              <View style={styles.promoMeta}>
+                <Text style={styles.originalPrice}>{originalPriceLabel}</Text>
+                {discountPercentLabel ? (
+                  <Text style={styles.discountBadgeText}>{discountPercentLabel}</Text>
+                ) : null}
               </View>
-            ) : null}
-          </View>
+              <Text style={styles.productPrice}>{priceLabel}</Text>
+            </View>
+          ) : (
+            <View style={styles.priceBlock}>
+              <Text style={styles.productPrice}>{priceLabel}</Text>
+            </View>
+          )}
+          <Text style={styles.stockSoldText}>
+            Còn lại: {displayRemaining} · Đã bán: {displaySold}
+          </Text>
+
+          {variants.length > 1 ? (
+            <View style={styles.qtyBlock}>
+              <Text style={styles.qtyLabel}>Phân loại</Text>
+              <View style={styles.chipRow}>
+                {variants.map((variant) => {
+                  const isSelected = String(selectedVariantId) === String(variant.id);
+                  const stockLeft = Math.max(0, Number(variant.quantity) || 0);
+                  const variantDisabled =
+                    Boolean(product.isUnavailable) || stockLeft <= 0 || totalRemaining <= 0;
+
+                  return (
+                    <Pressable
+                      key={variant.id}
+                      disabled={variantDisabled}
+                      style={[
+                        styles.chip,
+                        isSelected && styles.chipActive,
+                        variantDisabled && styles.chipDisabled,
+                      ]}
+                      onPress={() => handleSelectVariant(variant)}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          isSelected && styles.chipTextActive,
+                          variantDisabled && styles.chipTextDisabled,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {variant.variantName || 'Loại'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          <Pressable
+            style={styles.descriptionRow}
+            onPress={() => setDescriptionExpanded((prev) => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel="Xem mô tả sản phẩm"
+          >
+            <Ionicons name="list-outline" size={18} color="#076F32" />
+            <Text
+              style={styles.descriptionPreview}
+              numberOfLines={descriptionExpanded ? undefined : 1}
+            >
+              {descriptionText}
+            </Text>
+            <Ionicons
+              name={descriptionExpanded ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color="#94a3b8"
+            />
+          </Pressable>
 
           {store ? (
             <Pressable
@@ -481,123 +625,39 @@ export default function ProductDetailScreen({
                   >
                     {storeIsOpen ? 'Đang mở cửa' : 'Đang đóng cửa'}
                   </Text>
+                  {hasDistance ? (
+                    <View style={styles.distanceBadge}>
+                      <Ionicons name="location" size={11} color="#076F32" />
+                      <Text style={styles.distanceBadgeText}>Cách bạn {distanceLabel}</Text>
+                    </View>
+                  ) : null}
                 </View>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
             </Pressable>
           ) : null}
-
-          {variants.length > 1 ? (
-            <View style={styles.qtyBlock}>
-              <Text style={styles.qtyLabel}>Phân loại</Text>
-              <View style={styles.chipRow}>
-                {variants.map((variant) => {
-                  const isSelected = String(selectedVariantId) === String(variant.id);
-                  const stockLeft = Math.max(0, Number(variant.quantity) || 0);
-                  const variantDisabled =
-                    Boolean(product.isUnavailable) || stockLeft <= 0 || totalRemaining <= 0;
-
-                  return (
-                    <Pressable
-                      key={variant.id}
-                      disabled={variantDisabled}
-                      style={[
-                        styles.chip,
-                        isSelected && styles.chipActive,
-                        variantDisabled && styles.chipDisabled,
-                      ]}
-                      onPress={() => handleSelectVariant(variant)}
-                    >
-                      <Text
-                        style={[
-                          styles.chipText,
-                          isSelected && styles.chipTextActive,
-                          variantDisabled && styles.chipTextDisabled,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {variant.variantName || 'Loại'}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          ) : null}
-
-          <View style={styles.qtyBlock}>
-            <Text style={styles.qtyLabel}>Số lượng ({unitLabel})</Text>
-            <QuantityStepper
-              value={quantity}
-              onChange={setQuantity}
-              min={1}
-              max={maxQuantity}
-              disabled={productUnavailable || maxQuantity <= 0}
-            />
-            <View style={styles.chipRow}>
-              {QTY_CHIPS.map((chipQty) => {
-                const isSelected = quantity === chipQty;
-                const chipDisabled = productUnavailable || chipQty > maxQuantity || maxQuantity <= 0;
-
-                return (
-                  <Pressable
-                    key={chipQty}
-                    disabled={chipDisabled}
-                    style={[
-                      styles.chip,
-                      isSelected && styles.chipActive,
-                      chipDisabled && styles.chipDisabled,
-                    ]}
-                    onPress={() => setQuantity(chipQty)}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        isSelected && styles.chipTextActive,
-                        chipDisabled && styles.chipTextDisabled,
-                      ]}
-                    >
-                      {chipQty} {unitLabel}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <Pressable
-            style={styles.descriptionRow}
-            onPress={() => setDescriptionExpanded((prev) => !prev)}
-            accessibilityRole="button"
-            accessibilityLabel="Xem mô tả sản phẩm"
-          >
-            <Ionicons name="list-outline" size={18} color="#076F32" />
-            <Text
-              style={styles.descriptionPreview}
-              numberOfLines={descriptionExpanded ? undefined : 1}
-            >
-              {descriptionText}
-            </Text>
-            <Ionicons
-              name={descriptionExpanded ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color="#94a3b8"
-            />
-          </Pressable>
-
-          <Pressable
-            style={styles.reportLink}
-            onPress={() => setReportVisible(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Báo cáo sản phẩm"
-          >
-            <Ionicons name="flag-outline" size={14} color="#94a3b8" />
-            <Text style={styles.reportLinkText}>Báo cáo sản phẩm</Text>
-          </Pressable>
         </View>
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottomSpacing, 12) }]}>
+        <View style={styles.contactHalf}>
+          <Pressable
+            style={({ pressed }) => [styles.iconActionBtn, pressed && styles.pressed]}
+            onPress={handleCallPress}
+            accessibilityRole="button"
+            accessibilityLabel="Gọi điện"
+          >
+            <Ionicons name="call" size={22} color="#076F32" />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.iconActionBtn, pressed && styles.pressed]}
+            onPress={handleMessagePress}
+            accessibilityRole="button"
+            accessibilityLabel="Nhắn tin"
+          >
+            <Ionicons name="chatbubble-ellipses" size={22} color="#076F32" />
+          </Pressable>
+        </View>
         <Pressable
           style={({ pressed }) => [styles.actionBtn, styles.reserveBtn, pressed && styles.pressed]}
           onPress={handleReservePress}
@@ -610,7 +670,17 @@ export default function ProductDetailScreen({
         visible={reportVisible}
         title="Báo cáo sản phẩm"
         onClose={() => setReportVisible(false)}
-        onSubmit={handleReportSubmit}
+        onSubmit={handleReportReason}
+      />
+      <ReportComposeModal
+        visible={composeVisible}
+        headerTitle="Chi tiết tố cáo sản phẩm"
+        reasonTitle={reportReason}
+        onClose={() => {
+          setComposeVisible(false);
+          setReportReason('');
+        }}
+        onSubmit={handleReportComposeSubmit}
       />
 
       <ReservationModal
@@ -624,6 +694,7 @@ export default function ProductDetailScreen({
           setReserveModalVisible(false);
           onOrderSuccess?.(RESERVATION_TAB.HOLDING);
         }}
+        onOpenTopUp={onOpenTopUp}
       />
       <PhoneVerifyGateFlow
         visible={phoneGateVisible}
@@ -679,30 +750,68 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 5,
   },
-  backBtn: {
-    position: 'absolute',
-    left: 16,
-    zIndex: 10,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  headerRoundBtn: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  headerMenuBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  headerSpacer: {
+    flex: 1,
   },
   floatingActions: {
     position: 'absolute',
     right: 16,
+    top: 12,
     zIndex: 10,
     flexDirection: 'row',
     gap: 10,
   },
   floatingBtn: {
-    width: 40,
-    height: 40,
+    minHeight: 40,
+    minWidth: 40,
     borderRadius: 20,
+    paddingHorizontal: 10,
     backgroundColor: 'rgba(255,255,255,0.95)',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,
     shadowRadius: 6,
     elevation: 3,
+  },
+  floatingLikeCount: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
   },
   imageBox: {
     height: HERO_HEIGHT,
@@ -743,11 +852,10 @@ const styles = StyleSheet.create({
     lineHeight: 30,
     marginBottom: 10,
   },
-  priceDistanceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+  stockSoldText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '600',
     marginBottom: 16,
   },
   productPrice: {
@@ -756,17 +864,40 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#ef4444',
   },
+  priceBlock: {
+    marginTop: 6,
+    marginBottom: 8,
+    gap: 4,
+  },
+  promoMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  originalPrice: {
+    color: '#94a3b8',
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'line-through',
+  },
+  discountBadgeText: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '900',
+  },
   distanceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
     backgroundColor: '#E6F4EC',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginLeft: 6,
   },
   distanceBadgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#076F32',
   },
@@ -876,18 +1007,6 @@ const styles = StyleSheet.create({
     color: '#475569',
     lineHeight: 20,
   },
-  reportLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    paddingVertical: 4,
-  },
-  reportLinkText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#94a3b8',
-  },
   pressed: {
     opacity: 0.85,
   },
@@ -910,6 +1029,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 12,
     elevation: 10,
+  },
+  contactHalf: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  iconActionBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
   },
   actionBtn: {
     flex: 1,

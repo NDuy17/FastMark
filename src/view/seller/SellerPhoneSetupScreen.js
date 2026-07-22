@@ -40,7 +40,6 @@ export default function SellerPhoneSetupScreen({
   const [isConfirming, setIsConfirming] = useState(false);
   const [verification, setVerification] = useState(null);
   const [resendSecondsLeft, setResendSecondsLeft] = useState(0);
-  const [lockedOut, setLockedOut] = useState(false);
 
   const isChangeMode = mode === 'change';
   const isTransactionMode = mode === 'transaction';
@@ -68,10 +67,6 @@ export default function SellerPhoneSetupScreen({
   }, [resendAvailableAtMs]);
 
   async function handleSendCode({ isResend = false } = {}) {
-    if (lockedOut) {
-      return;
-    }
-
     const normalizedPhone = phone.trim();
     if (!normalizedPhone) {
       setError('Vui lòng nhập số điện thoại.');
@@ -131,10 +126,6 @@ export default function SellerPhoneSetupScreen({
   }
 
   async function handleConfirm() {
-    if (lockedOut) {
-      return;
-    }
-
     const normalizedCode = code.trim();
     if (!normalizedCode) {
       setError('Vui lòng nhập mã xác minh.');
@@ -158,27 +149,27 @@ export default function SellerPhoneSetupScreen({
       await dispatch(loadUserProfile()).unwrap();
       (onVerified || onContinue)?.(phone.trim());
     } catch (confirmError) {
-      const locked = Boolean(confirmError?.payload?.data?.lockedOut);
-      if (locked) {
-        setLockedOut(true);
-        setVerification(null);
+      const errData = confirmError?.data || confirmError?.payload?.data || {};
+      if (errData.mustUseNewCode) {
         setCode('');
-        setError(confirmError.message || 'Bạn đã nhập sai quá 5 lần.');
+        setVerification({
+          phone: errData.phone || phone.trim(),
+          verificationCode: errData.verificationCode || '',
+          expiresAt: errData.expiresAt || null,
+          expiresInSeconds: errData.expiresInSeconds || 0,
+          resendAvailableAt: errData.resendAvailableAt || null,
+          resendCooldownSeconds: errData.resendCooldownSeconds || 0,
+        });
+        setError(
+          confirmError.message ||
+            'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
+        );
         return;
       }
       setError(confirmError.message || 'Mã xác minh không đúng.');
     } finally {
       setIsConfirming(false);
     }
-  }
-
-  function handleLockedOutBack() {
-    setLockedOut(false);
-    setStep('phone');
-    setCode('');
-    setVerification(null);
-    setError('');
-    onBack?.();
   }
 
   return (
@@ -190,7 +181,7 @@ export default function SellerPhoneSetupScreen({
             ? 'Thêm số điện thoại'
             : 'Thêm số điện thoại'
       }
-      onBack={lockedOut ? handleLockedOutBack : onBack}
+      onBack={onBack}
     >
       <View style={styles.card}>
         <Text style={styles.title}>
@@ -202,7 +193,7 @@ export default function SellerPhoneSetupScreen({
         </Text>
         <Text style={styles.subtitle}>
           {step === 'otp'
-            ? 'Nhập đúng mã demo bên dưới để lưu số điện thoại. Sai quá 5 lần sẽ bị khóa phiên này.'
+            ? 'Nhập đúng mã để lưu số điện thoại. Sai 5 lần hệ thống sẽ gửi mã mới. Gửi lại thủ công bị khóa 2 phút.'
             : 'Số chỉ được lưu vào hệ thống sau khi xác minh OTP thành công.'}
         </Text>
 
@@ -213,7 +204,7 @@ export default function SellerPhoneSetupScreen({
         <Text style={styles.label}>Số điện thoại</Text>
         <TextInput
           value={phone}
-          editable={step === 'phone' && !lockedOut}
+          editable={step === 'phone'}
           onChangeText={(value) => {
             setPhone(value.replace(/\D/g, '').slice(0, 10));
             setError('');
@@ -241,7 +232,6 @@ export default function SellerPhoneSetupScreen({
             <Text style={styles.label}>Mã xác minh</Text>
             <TextInput
               value={code}
-              editable={!lockedOut}
               onChangeText={(value) => {
                 setCode(value.replace(/\D/g, '').slice(0, 6));
                 setError('');
@@ -256,14 +246,7 @@ export default function SellerPhoneSetupScreen({
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        {lockedOut ? (
-          <Pressable
-            onPress={handleLockedOutBack}
-            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.buttonText}>Thoát</Text>
-          </Pressable>
-        ) : step === 'phone' ? (
+        {step === 'phone' ? (
           <Pressable
             disabled={isSending}
             onPress={() => handleSendCode({ isResend: false })}

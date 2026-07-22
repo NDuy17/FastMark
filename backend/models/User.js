@@ -1,6 +1,14 @@
 const mongoose = require("mongoose");
 
+/**
+ * User — tài khoản chung (buyer + seller cùng 1 user).
+ * Tên hiển thị / username dùng chung; gian hàng lấy từ User, không tách profile riêng.
+ *
+ * OTP email/SĐT: không lưu trên User — chỉ giữ phiên tạm trong bộ nhớ server
+ * (otpSessionStore). SĐT đã xác minh = đã có Phone 10 số (chỉ ghi khi OTP đúng).
+ */
 const userSchema = new mongoose.Schema({
+  // UID từ Firebase Auth (đăng nhập email/Google).
   FirebaseUID: {
     type: String,
     required: true,
@@ -8,6 +16,7 @@ const userSchema = new mongoose.Schema({
     trim: true,
   },
 
+  // Tên đăng nhập công khai (cũng dùng làm handle gian hàng khi là seller).
   UserName: {
     type: String,
     required: true,
@@ -17,6 +26,7 @@ const userSchema = new mongoose.Schema({
     maxlength: 20,
   },
 
+  // Họ tên hiển thị (cũng dùng làm tên gian hàng khi là seller).
   FullName: {
     type: String,
     required: true,
@@ -25,6 +35,7 @@ const userSchema = new mongoose.Schema({
     maxlength: 50,
   },
 
+  // Email (sparse: Google có thể chưa có lúc tạo tạm).
   Email: {
     type: String,
     unique: true,
@@ -33,6 +44,7 @@ const userSchema = new mongoose.Schema({
     trim: true,
   },
 
+  // SĐT 10 số — chỉ ghi vào DB sau khi xác minh OTP thành công.
   Phone: {
     type: String,
     unique: true,
@@ -42,44 +54,50 @@ const userSchema = new mongoose.Schema({
     maxlength: 10,
   },
 
+  // Phương thức đăng ký ban đầu: "email" | "google".
   AuthProvider: {
     type: String,
     enum: ["email", "google"],
     required: true,
   },
 
+  // URL ảnh đại diện.
   Avatar: { type: String, default: "" },
 
+  // Vai trò: 1 = buyer, 2 = seller (đã duyệt), 3 = admin.
   Role: { type: Number, default: 1 },
+
+  // Trạng thái tài khoản: 0 = khóa, 1 = hoạt động.
   Status: { type: Number, default: 1 },
 
-  // Số gian hàng / người bán user đang theo dõi (ShopFollow).
+  // Số người mà user đang theo dõi (Follow.followerId).
   FollowingCount: { type: Number, default: 0 },
-  // Số người đang theo dõi user này (qua gian hàng của họ).
+
+  // Số người đang theo dõi user này (Follow.followedUserId).
   FollowersCount: { type: Number, default: 0 },
 
+  // Đang online (presence realtime).
   DangHoatDong: { type: Boolean, default: false },
+
+  // Lần hoạt động gần nhất (presence).
   LanHoatDongCuoi: { type: Date, default: null },
 
+  // true sau khi xác nhận mã OTP email (đăng ký email). Google có thể set sẵn true.
   VerifyAccount: { type: Boolean, default: false },
 
-  EmailVerifyCode: { type: String, default: null },
-  EmailVerifyCodeExpiresAt: { type: Date, default: null },
-  EmailVerifyResendAt: { type: Date, default: null },
-
-  SellerPhoneVerified: { type: Boolean, default: false },
-  SellerPhoneVerifyCode: { type: String, default: null },
-  SellerPhoneVerifyCodeExpiresAt: { type: Date, default: null },
-  SellerPhoneVerifyResendAt: { type: Date, default: null },
-  SellerPhoneVerifyFailCount: { type: Number, default: 0 },
-
+  // Thời điểm tạo tài khoản.
   CreatedAt: { type: Date, default: Date.now },
+  // Thời điểm cập nhật gần nhất (auto trong pre-save).
   UpdatedAt: { type: Date, default: Date.now },
 });
 
 userSchema.pre("save", function saveHook() {
   this.UpdatedAt = new Date();
 });
+
+function isPhoneVerified(user) {
+  return /^\d{10}$/.test(String(user?.Phone || "").trim());
+}
 
 userSchema.methods.toPublicJSON = function toPublicJSON() {
   return {
@@ -94,12 +112,15 @@ userSchema.methods.toPublicJSON = function toPublicJSON() {
     role: this.Role,
     status: this.Status,
     verifyAccount: this.VerifyAccount,
-    sellerPhoneVerified: Boolean(this.SellerPhoneVerified),
+    // Tương thích client: đã xác minh SĐT khi có Phone hợp lệ.
+    sellerPhoneVerified: isPhoneVerified(this),
     followingCount: Number(this.FollowingCount) || 0,
     followersCount: Number(this.FollowersCount) || 0,
     createdAt: this.CreatedAt,
     updatedAt: this.UpdatedAt,
   };
 };
+
+userSchema.statics.isPhoneVerified = isPhoneVerified;
 
 module.exports = mongoose.model("User", userSchema);

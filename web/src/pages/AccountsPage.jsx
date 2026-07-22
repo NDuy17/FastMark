@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { listAccounts } from '../api/accountApi';
 import { useAuth } from '../context/AuthContext';
@@ -31,21 +31,78 @@ const SORT_OPTIONS = [
 ];
 
 function formatDate(value) {
-  if (!value) {
-    return '—';
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const time = date.toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const day = [
+      String(date.getDate()).padStart(2, '0'),
+      String(date.getMonth() + 1).padStart(2, '0'),
+      date.getFullYear(),
+    ].join('/');
+    return { time, day };
+  } catch {
+    return '';
   }
-  return new Date(value).toLocaleString('vi-VN');
+}
+
+function DateCell({ label, value }) {
+  const formatted = formatDate(value);
+  if (!formatted) {
+    return (
+      <div className="activity-line">
+        <span className="activity-label">{label}</span>
+        <span className="activity-value" />
+      </div>
+    );
+  }
+  return (
+    <div className="activity-line">
+      <span className="activity-label">{label}</span>
+      <span className="activity-value">
+        <strong>{formatted.time}</strong>
+        <em>{formatted.day}</em>
+      </span>
+    </div>
+  );
 }
 
 function statusBadgeClass(status) {
   return status === 1 ? 'badge badge-success' : 'badge badge-danger';
 }
 
-function verificationBadgeClass(status) {
-  if (status === 0) return 'badge badge-warning';
-  if (status === 1) return 'badge badge-info';
-  if (status === 2) return 'badge badge-danger';
-  return 'badge';
+/** Cột cửa hàng: 1 Hoạt động · 2 Chờ duyệt · 3 Bị khóa */
+function shopColumnState(item) {
+  if (!item?.shop) return null;
+  if (item.shop.status === 0) {
+    return { label: 'Bị khóa', className: 'badge badge-danger' };
+  }
+  const verificationStatus = item.verification?.status;
+  if (verificationStatus === 1) {
+    return { label: 'Hoạt động', className: 'badge badge-success' };
+  }
+  if (verificationStatus === 2) {
+    return { label: 'Bị khóa', className: 'badge badge-danger' };
+  }
+  return { label: 'Chờ duyệt', className: 'badge badge-warning' };
+}
+
+function rolePageTitle(role) {
+  if (role === '1') return 'Người mua';
+  if (role === '2') return 'Người bán';
+  return 'Người dùng';
+}
+
+function rolePageSubtitle(role) {
+  if (role === '1') return 'Danh sách tài khoản người mua.';
+  if (role === '2') return 'Danh sách tài khoản người bán.';
+  return 'Quản lý tài khoản người mua và người bán. Tài khoản quản trị không hiển thị ở đây.';
 }
 
 function SkeletonRows() {
@@ -53,14 +110,14 @@ function SkeletonRows() {
     <>
       {Array.from({ length: 6 }).map((_, index) => (
         <tr key={index}>
-          <td><div className="skeleton skeleton-avatar" /></td>
-          <td><div className="skeleton skeleton-line" /></td>
-          <td><div className="skeleton skeleton-line" /></td>
-          <td><div className="skeleton skeleton-line short" /></td>
-          <td><div className="skeleton skeleton-line short" /></td>
-          <td><div className="skeleton skeleton-line short" /></td>
-          <td><div className="skeleton skeleton-line short" /></td>
-          <td><div className="skeleton skeleton-line short" /></td>
+          <td className="col-thumb"><div className="skeleton skeleton-avatar" /></td>
+          <td className="col-account"><div className="skeleton skeleton-line" /></td>
+          <td className="col-contact"><div className="skeleton skeleton-line" /></td>
+          <td className="col-status"><div className="skeleton skeleton-line short" /></td>
+          <td className="col-status"><div className="skeleton skeleton-line short" /></td>
+          <td className="col-shop"><div className="skeleton skeleton-line short" /></td>
+          <td className="col-activity"><div className="skeleton skeleton-line" /></td>
+          <td className="col-actions"><div className="skeleton skeleton-line short" /></td>
         </tr>
       ))}
     </>
@@ -69,6 +126,9 @@ function SkeletonRows() {
 
 export default function AccountsPage() {
   const { getIdToken } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const roleFromUrl = searchParams.get('role') || '';
+
   const [items, setItems] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
@@ -76,11 +136,16 @@ export default function AccountsPage() {
 
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [role, setRole] = useState('');
+  const [role, setRole] = useState(roleFromUrl);
   const [status, setStatus] = useState('');
   const [verificationStatus, setVerificationStatus] = useState('');
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setRole(roleFromUrl);
+    setPage(1);
+  }, [roleFromUrl]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -123,18 +188,20 @@ export default function AccountsPage() {
     setPage(1);
   }
 
+  function handleRoleChange(value) {
+    setRole(value);
+    setPage(1);
+    const next = new URLSearchParams(searchParams);
+    if (value) {
+      next.set('role', value);
+    } else {
+      next.delete('role');
+    }
+    setSearchParams(next, { replace: true });
+  }
+
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Người dùng</h1>
-          <p>Quản lý tài khoản người mua và người bán. Tài khoản quản trị không hiển thị ở đây.</p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
-
       <section className="filter-card">
         <form className="filter-form" onSubmit={handleSearchSubmit}>
           <label className="filter-search">
@@ -151,7 +218,7 @@ export default function AccountsPage() {
         <div className="filter-grid">
           <label>
             Vai trò
-            <select value={role} onChange={(event) => handleFilterChange(setRole, event.target.value)}>
+            <select value={role} onChange={(event) => handleRoleChange(event.target.value)}>
               {ROLE_OPTIONS.map((option) => (
                 <option key={option.value || 'all-role'} value={option.value}>
                   {option.label}
@@ -200,94 +267,82 @@ export default function AccountsPage() {
 
       {error ? <p className="error-banner">{error}</p> : null}
 
-      <div className="account-table-wrap">
-        <table className="account-table">
-          <thead>
-            <tr>
-              <th>Ảnh đại diện</th>
-              <th>Tài khoản</th>
-              <th>Liên hệ</th>
-              <th>Vai trò</th>
-              <th>Trạng thái</th>
-              <th>Cửa hàng</th>
-              <th>Hoạt động</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? <SkeletonRows /> : null}
-            {!loading && items.length === 0 ? (
+      <section className="table-card">
+        <div className="table-scroll">
+          <table className="data-table catalog-table accounts-table">
+            <thead>
               <tr>
-                <td colSpan={8}>
-                  <div className="empty-card">Không tìm thấy người dùng phù hợp.</div>
-                </td>
+                <th className="col-thumb">Ảnh</th>
+                <th className="col-account">Tài khoản</th>
+                <th className="col-contact">Liên hệ</th>
+                <th className="col-status">Vai trò</th>
+                <th className="col-status">Trạng thái</th>
+                <th className="col-shop">Cửa hàng</th>
+                <th className="col-activity">Hoạt động</th>
+                <th className="col-actions">Thao tác</th>
               </tr>
-            ) : null}
-            {!loading
-              ? items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      {item.avatar ? (
-                        <img src={item.avatar} alt="" className="account-avatar" />
-                      ) : (
-                        <div className="account-avatar placeholder">{item.userName?.charAt(0) || 'U'}</div>
-                      )}
-                    </td>
-                    <td>
-                      <div className="account-primary">{item.fullName || '—'}</div>
-                      <div className="account-secondary">@{item.userName}</div>
-                      <div className="account-secondary mono">{item.userId}</div>
-                    </td>
-                    <td>
-                      <div>{item.email || '—'}</div>
-                      <div className="account-secondary">{item.phone || '—'}</div>
-                    </td>
-                    <td>
-                      <span className="badge badge-neutral">{item.roleLabel}</span>
-                    </td>
-                    <td>
-                      <span className={statusBadgeClass(item.status)} title="Trạng thái tài khoản">
-                        {item.statusLabel}
-                      </span>
-                    </td>
-                    <td>
-                      {item.shop ? (
-                        <>
-                          <div>{item.shop.shopName}</div>
-                          <div className="account-secondary">
-                            <span className={statusBadgeClass(item.shop.status)}>{item.shop.statusLabel}</span>
-                            {item.verification ? (
-                              <span
-                                className={verificationBadgeClass(item.verification.status)}
-                                title="Trạng thái xác minh"
-                              >
-                                {item.verification.statusLabel}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="account-secondary">
-                            {item.productCount} sản phẩm • ★ {item.averageRating?.toFixed?.(1) || '0.0'}
-                          </div>
-                        </>
-                      ) : (
-                        <span className="account-secondary">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="account-secondary">Tạo: {formatDate(item.createdAt)}</div>
-                      <div className="account-secondary">Gần nhất: {formatDate(item.lastActiveAt)}</div>
-                    </td>
-                    <td>
-                      <Link to={`/accounts/${item.id}`} className="table-link">
-                        Chi tiết
-                      </Link>
-                    </td>
-                  </tr>
-                ))
-              : null}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {loading ? <SkeletonRows /> : null}
+              {!loading && items.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="table-empty">
+                    Không tìm thấy người dùng phù hợp.
+                  </td>
+                </tr>
+              ) : null}
+              {!loading
+                ? items.map((item) => {
+                    const shopState = shopColumnState(item);
+                    return (
+                      <tr key={item.id}>
+                        <td className="col-thumb">
+                          {item.avatar ? (
+                            <img src={item.avatar} alt="" className="thumb-sm" />
+                          ) : (
+                            <div className="thumb-sm thumb-fallback">
+                              {item.userName?.charAt(0)?.toUpperCase() || 'U'}
+                            </div>
+                          )}
+                        </td>
+                        <td className="col-account">
+                          <div className="cell-title">{item.fullName || ''}</div>
+                          <div className="cell-sub">@{item.userName}</div>
+                        </td>
+                        <td className="col-contact">
+                          <div className="cell-title soft">{item.email || ''}</div>
+                          <div className="cell-sub">{item.phone || ''}</div>
+                        </td>
+                        <td className="col-status">
+                          <span className="badge badge-neutral">{item.roleLabel}</span>
+                        </td>
+                        <td className="col-status">
+                          <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
+                        </td>
+                        <td className="col-shop">
+                          {shopState ? (
+                            <span className={shopState.className}>{shopState.label}</span>
+                          ) : (
+                            <span className="cell-sub" />
+                          )}
+                        </td>
+                        <td className="col-activity">
+                          <DateCell label="Tạo" value={item.createdAt} />
+                          <DateCell label="Gần nhất" value={item.lastActiveAt} />
+                        </td>
+                        <td className="col-actions">
+                          <Link to={`/accounts/${item.id}`} className="detail-btn">
+                            Chi tiết
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })
+                : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <div className="pagination-row">
         <span>

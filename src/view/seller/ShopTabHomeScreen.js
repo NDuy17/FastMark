@@ -3,6 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSelector } from 'react-redux';
 
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
+import { formatPrice } from '../../core/utils/productFormat';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import {
   selectAuthProfile,
@@ -15,22 +16,24 @@ import { getSellerRegisterButtonLabel } from './sellerRegistrationFlow';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
 
 const HUB_ITEMS = [
-  { key: 'scan', label: 'Quét đơn', icon: 'qr-code-outline', action: 'scan' },
-  { key: 'post', label: 'Đăng bài', icon: 'add-circle-outline', action: 'post' },
+  { key: 'stats', label: 'Thống kê', icon: 'stats-chart-outline', action: 'stats' },
+  { key: 'post', label: 'Đăng bài sản phẩm', icon: 'add-circle-outline', action: 'post' },
   { key: 'products', label: 'Sản phẩm', icon: 'cube-outline', action: 'products' },
   { key: 'orders', label: 'Đơn bán', icon: 'receipt-outline', action: 'orders' },
-  { key: 'vouchers', label: 'Voucher', icon: 'pricetag-outline', action: 'vouchers' },
+  { key: 'notifications', label: 'Thông báo', icon: 'notifications-outline', action: 'notifications' },
+  { key: 'pickup-qr', label: 'QR nhận hàng', icon: 'qr-code-outline', action: 'pickup-qr' },
   { key: 'reviews', label: 'Đánh giá', icon: 'star-outline', action: 'reviews' },
   { key: 'settings', label: 'Cài đặt shop', icon: 'storefront-outline', action: 'settings' },
   { key: 'subscription', label: 'Gói bán', icon: 'diamond-outline', action: 'subscription' },
-  { key: 'stats', label: 'Thống kê', icon: 'stats-chart-outline', action: 'stats' },
-  { key: 'preview', label: 'Xem shop', icon: 'eye-outline', action: 'preview' },
+  { key: 'banner', label: 'Banner', icon: 'images-outline', action: 'banner' },
 ];
 
 export default function ShopTabHomeScreen({
   shopSettings = null,
   onStartRegister,
   onOpenHub,
+  onOpenWallet,
+  onOpenWalletTopUp,
 }) {
   const insets = useScreenInsets();
   const profile = useSelector(selectAuthProfile);
@@ -47,8 +50,19 @@ export default function ShopTabHomeScreen({
   const subscriptionActive = Boolean(
     shopSettings?.subscriptionActive || profile?.subscriptionActive
   );
+  const purchasedAt = shopSettings?.ngayMua || profile?.ngayMua || null;
   const expiresAt =
-    shopSettings?.subscriptionExpiresAt || profile?.subscriptionExpiresAt || null;
+    shopSettings?.subscriptionExpiresAt ||
+    shopSettings?.ngayHetHan ||
+    profile?.subscriptionExpiresAt ||
+    null;
+
+  function formatDate(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '—';
+    return date.toLocaleDateString('vi-VN');
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.contentPaddingTop }]}>
@@ -56,7 +70,7 @@ export default function ShopTabHomeScreen({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: Math.max(insets.bottomSpacing, 24) + 88 },
+          { paddingBottom: insets.tabRootScrollPaddingBottom },
         ]}
       >
         <View style={styles.header}>
@@ -69,6 +83,17 @@ export default function ShopTabHomeScreen({
               {showManageHub ? shopName : 'Mở gian hàng và bán hàng trên FastMark'}
             </Text>
           </View>
+          {showManageHub ? (
+            <Pressable
+              onPress={() => onOpenHub?.('preview')}
+              style={({ pressed }) => [styles.headerPreviewBtn, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Xem shop"
+              hitSlop={8}
+            >
+              <Ionicons name="eye-outline" size={18} color="#64748b" />
+            </Pressable>
+          ) : null}
         </View>
 
         {!showManageHub ? (
@@ -102,21 +127,51 @@ export default function ShopTabHomeScreen({
           </View>
         ) : (
           <>
-            <View style={styles.statusCard}>
-              <Text style={styles.statusTitle}>{shopName}</Text>
-              <Text style={styles.statusSub}>
-                {subscriptionActive
-                  ? `Gói còn hạn đến ${
-                      expiresAt ? new Date(expiresAt).toLocaleDateString('vi-VN') : '—'
-                    }`
-                  : 'Chưa có gói — gian hàng đang ẩn công khai'}
-              </Text>
-              <Text style={styles.walletHint}>
-                Ví thanh toán gói / nạp tiền nằm ở tab Tài khoản (dùng chung).
-              </Text>
-            </View>
+            <Pressable
+              style={({ pressed }) => [styles.statusCard, pressed && styles.pressed]}
+              onPress={() => onOpenHub?.('subscription')}
+            >
+              <View style={styles.statusCardHeader}>
+                <Text style={styles.statusTitle}>{shopName}</Text>
+                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+              </View>
+              {subscriptionActive ? (
+                <View style={styles.planMeta}>
+                  <Text style={styles.statusMeta}>Ngày mua: {formatDate(purchasedAt)}</Text>
+                  <Text style={styles.statusMeta}>Hết hạn: {formatDate(expiresAt)}</Text>
+                  <Text style={styles.statusLink}>Xem chi tiết các gói đã mua</Text>
+                </View>
+              ) : (
+                <Text style={styles.statusSub}>
+                  Chưa có gói — gian hàng đang ẩn công khai
+                </Text>
+              )}
+            </Pressable>
 
             <Text style={styles.sectionTitle}>Quản lý gian hàng</Text>
+
+            <Pressable
+              style={({ pressed }) => [styles.walletCard, pressed && styles.pressed]}
+              onPress={() => onOpenWallet?.()}
+            >
+              <View style={styles.walletCardTop}>
+                <Ionicons name="wallet-outline" size={18} color="#fff" />
+                <Text style={styles.walletCardTitle}>Ví FastMark</Text>
+              </View>
+              <Text style={styles.walletCardBalance}>
+                {formatPrice(profile?.walletBalance || 0)}
+              </Text>
+              <Pressable
+                onPress={(event) => {
+                  event?.stopPropagation?.();
+                  onOpenWalletTopUp?.();
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.walletCardCta}>Nạp tiền ngay →</Text>
+              </Pressable>
+            </Pressable>
+
             <View style={styles.hubGrid}>
               {HUB_ITEMS.map((item) => (
                 <Pressable
@@ -167,6 +222,16 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
     minWidth: 0,
+  },
+  headerPreviewBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   title: {
     fontSize: 22,
@@ -230,29 +295,74 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     marginBottom: 18,
   },
+  statusCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
   statusTitle: {
+    flex: 1,
     fontSize: 17,
     fontWeight: '800',
     color: '#0f172a',
+  },
+  planMeta: {
+    marginTop: 6,
+    gap: 2,
   },
   statusSub: {
     marginTop: 6,
     fontSize: 13,
     lineHeight: 18,
     color: t.primaryDark,
+    fontWeight: '700',
+  },
+  statusMeta: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#475569',
     fontWeight: '600',
   },
-  walletHint: {
-    marginTop: 10,
+  statusLink: {
+    marginTop: 8,
     fontSize: 12,
-    color: '#94a3b8',
-    lineHeight: 17,
+    fontWeight: '700',
+    color: t.primary,
   },
   sectionTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 12,
+  },
+  walletCard: {
+    marginBottom: 14,
+    backgroundColor: t.primaryDark,
+    borderRadius: 16,
+    padding: 16,
+  },
+  walletCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  walletCardTitle: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  walletCardBalance: {
+    color: '#ffffff',
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  walletCardCta: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    fontWeight: '700',
   },
   hubGrid: {
     flexDirection: 'row',

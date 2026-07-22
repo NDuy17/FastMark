@@ -162,7 +162,6 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
   const [cccdFront, setCccdFront] = useState(null);
   const [cccdBack, setCccdBack] = useState(null);
   const [selfie, setSelfie] = useState(null);
-  const [address, setAddress] = useState('');
   const [systemAddress, setSystemAddress] = useState('');
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
@@ -219,8 +218,12 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
       return;
     }
 
-    setAddress(initialVerification.address || '');
-    setSystemAddress(initialVerification.DiaChiHeThong || '');
+    setSystemAddress(
+      initialVerification.addressHeThong ||
+        initialVerification.systemAddress ||
+        initialVerification.DiaChiHeThong ||
+        ''
+    );
     setLatitude(
       Number.isFinite(Number(initialVerification.latitude))
         ? Number(initialVerification.latitude)
@@ -310,8 +313,8 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
       return;
     }
 
-    if (!address.trim()) {
-      setError('Vui lòng nhập địa chỉ.');
+    if (!systemAddress.trim()) {
+      setError('Vui lòng chọn vị trí trên bản đồ để lấy địa chỉ hệ thống.');
       return;
     }
 
@@ -381,8 +384,8 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
             selfieImageBase64: selfieImage.base64,
             selfieMimeType: selfieImage.mimeType,
             selfieImageUrl: selfieImage.existingUrl,
-            address: address.trim(),
             systemAddress: systemAddress.trim(),
+            addressHeThong: systemAddress.trim(),
             categoryId: normalizedCategoryId,
             shopDescription: shopDescription.trim(),
             latitude,
@@ -522,19 +525,8 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
           />
         </View>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>Địa chỉ cụ thể</Text>
-          <TextInput
-            value={address}
-            onChangeText={setAddress}
-            placeholder="Số nhà, ngõ, tên đường, phường/xã..."
-            placeholderTextColor="#94a3b8"
-            style={styles.input}
-          />
-        </View>
-
         <View style={styles.locationBox}>
-          <Text style={styles.locationLabel}>Vị trí gian hàng</Text>
+          <Text style={styles.locationLabel}>Địa chỉ gian hàng</Text>
           <Text style={styles.locationValue}>
             {Number.isFinite(latitude) && Number.isFinite(longitude)
               ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
@@ -546,7 +538,11 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
               <Text style={styles.systemAddressLabel}>Địa chỉ hệ thống</Text>
               <Text style={styles.systemAddressText}>{systemAddress}</Text>
             </View>
-          ) : null}
+          ) : (
+            <Text style={styles.systemAddressLabel}>
+              Chọn vị trí trên bản đồ để lấy địa chỉ hệ thống
+            </Text>
+          )}
 
           <View style={styles.locationButtonRow}>
             <Pressable

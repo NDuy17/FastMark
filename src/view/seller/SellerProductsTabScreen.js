@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Pressable,
@@ -10,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { getMyProductsOnBackend } from '../../api/productApi';
+import { getMyProductsOnBackend, setProductPinOnBackend } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { formatPriceRange } from '../../core/utils/productFormat';
 import {
@@ -18,8 +19,9 @@ import {
   resolveIsOutOfStock,
 } from '../../core/utils/productAvailability';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
-import SellerPostTabScreen from './SellerPostTabScreen';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import SellerProductDetailScreen from './SellerProductDetailScreen';
+import SellerBulkPromotionScreen from './SellerBulkPromotionScreen';
 
 function mapApiProductToManageCard(product) {
   const variants = Array.isArray(product.variants) ? product.variants : [];
@@ -48,6 +50,7 @@ function mapApiProductToManageCard(product) {
     isOutOfStock: Boolean(product.isOutOfStock),
     status: product.status,
     isUnavailable: Boolean(product.isUnavailable),
+    pinProduct: Math.max(0, Math.min(2, Number(product.pinProduct) || 0)),
   };
 
   // Chỉ hết hàng khi tổng tồn tất cả biến thể = 0 (giống người mua xem shop).
@@ -55,14 +58,16 @@ function mapApiProductToManageCard(product) {
   return mapped;
 }
 
-function ProductManageCard({ product, onPress }) {
+function ProductManageCard({ product, onPress, onPinPress, pinningId }) {
   const overlayLabel = getProductImageOverlayLabel(product);
+  const pin = Number(product.pinProduct) || 0;
   const metaLine = [
     `${product.variantCount} thẻ`,
     `${product.viewCount} view`,
     `${product.likeCount} lượt thích`,
     `${product.soldCount} đã bán`,
   ].join('  |  ');
+  const isPinning = pinningId === product.id;
 
   return (
     <Pressable
@@ -82,6 +87,12 @@ function ProductManageCard({ product, onPress }) {
             <Text style={styles.soldOutText}>{overlayLabel}</Text>
           </View>
         ) : null}
+        {pin > 0 ? (
+          <View style={styles.pinBadge} pointerEvents="none">
+            <Ionicons name="pin" size={10} color="#ffffff" />
+            <Text style={styles.pinBadgeText}>{pin}</Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.productInfo}>
@@ -95,6 +106,31 @@ function ProductManageCard({ product, onPress }) {
           {metaLine}
         </Text>
       </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.pinButton, pressed && styles.actionChipPressed]}
+        onPress={(event) => {
+          event?.stopPropagation?.();
+          onPinPress?.(product);
+        }}
+        disabled={isPinning}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel={pin > 0 ? `Ghim vị trí ${pin}` : 'Ghim sản phẩm'}
+      >
+        {isPinning ? (
+          <ActivityIndicator size="small" color="#076F32" />
+        ) : (
+          <>
+            <Ionicons
+              name={pin > 0 ? 'pin' : 'pin-outline'}
+              size={12}
+              color="#076F32"
+            />
+            {pin > 0 ? <Text style={styles.pinButtonText}>{pin}</Text> : null}
+          </>
+        )}
+      </Pressable>
     </Pressable>
   );
 }
@@ -109,8 +145,10 @@ export default function SellerProductsTabScreen({
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const [showPost, setShowPost] = useState(false);
   const [productDetailId, setProductDetailId] = useState(null);
+  const [showBulkPromo, setShowBulkPromo] = useState(false);
+  const [bulkPromoTab, setBulkPromoTab] = useState('bulk');
+  const [pinningId, setPinningId] = useState('');
 
   const loadProducts = useCallback(async () => {
     setIsLoading(true);
@@ -135,8 +173,15 @@ export default function SellerProductsTabScreen({
   }, [loadProducts, productRefreshKey]);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(showPost || productDetailId));
-  }, [onNavigationStateChange, productDetailId, showPost]);
+    // Khi mở từ shop/profile đã ẩn tab ở panel cha — chỉ báo nested nếu vẫn được truyền callback.
+    if (!onNavigationStateChange) {
+      return undefined;
+    }
+    onNavigationStateChange?.(Boolean(productDetailId || showBulkPromo));
+    return () => {
+      onNavigationStateChange?.(false);
+    };
+  }, [onNavigationStateChange, productDetailId, showBulkPromo]);
 
   const filteredProducts = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -150,20 +195,60 @@ export default function SellerProductsTabScreen({
     });
   }, [products, search]);
 
-  if (showPost) {
+  async function applyPin(productId, pinProduct) {
+    setPinningId(productId);
+    try {
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) {
+        throw new Error('Phiên đăng nhập đã hết hạn.');
+      }
+      await setProductPinOnBackend({ idToken, productId, pinProduct });
+      await loadProducts();
+      onProductChanged?.();
+    } catch (pinError) {
+      Alert.alert('Lỗi', pinError.message || 'Không ghim được sản phẩm.');
+    } finally {
+      setPinningId('');
+    }
+  }
+
+  function handlePinPress(product) {
+    const current = Number(product.pinProduct) || 0;
+    Alert.alert(
+      'Ghim sản phẩm',
+      'Chỉ ghim tối đa 2 sản phẩm trên gian hàng (vị trí 1 và 2). Ghim đè sẽ thay sản phẩm cũ cùng vị trí.',
+      [
+        {
+          text: 'Vị trí 1',
+          onPress: () => applyPin(product.id, 1),
+        },
+        {
+          text: 'Vị trí 2',
+          onPress: () => applyPin(product.id, 2),
+        },
+        ...(current > 0
+          ? [
+              {
+                text: 'Bỏ ghim',
+                style: 'destructive',
+                onPress: () => applyPin(product.id, 0),
+              },
+            ]
+          : []),
+        { text: 'Hủy', style: 'cancel' },
+      ]
+    );
+  }
+
+  if (showBulkPromo) {
     return (
-      <SellerPostTabScreen
-        onBack={() => setShowPost(false)}
-        onProductCreated={(productId) => {
+      <SellerBulkPromotionScreen
+        initialTab={bulkPromoTab}
+        onBack={() => setShowBulkPromo(false)}
+        onChanged={() => {
           onProductChanged?.();
-          setShowPost(false);
-          if (productId) {
-            setProductDetailId(String(productId));
-          } else {
-            loadProducts();
-          }
+          loadProducts();
         }}
-        onProductChanged={onProductChanged}
       />
     );
   }
@@ -186,13 +271,35 @@ export default function SellerProductsTabScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        {onBack ? (
-          <Pressable onPress={onBack} style={styles.backBtn} hitSlop={8}>
-            <Ionicons name="chevron-back" size={22} color="#0f172a" />
-          </Pressable>
-        ) : null}
-        <Text style={styles.title}>Quản lý sản phẩm</Text>
+      {onBack ? (
+        <SubScreenHeader title="Quản lý sản phẩm" onBack={onBack} />
+      ) : (
+        <View style={styles.header}>
+          <Text style={styles.title}>Quản lý sản phẩm</Text>
+        </View>
+      )}
+
+      <View style={styles.actionRow}>
+        <Pressable
+          style={({ pressed }) => [styles.actionChip, pressed && styles.actionChipPressed]}
+          onPress={() => {
+            setBulkPromoTab('bulk');
+            setShowBulkPromo(true);
+          }}
+        >
+          <Ionicons name="pricetags-outline" size={16} color="#076F32" />
+          <Text style={styles.actionChipText}>Giảm giá hàng loạt</Text>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.actionChip, pressed && styles.actionChipPressed]}
+          onPress={() => {
+            setBulkPromoTab('active');
+            setShowBulkPromo(true);
+          }}
+        >
+          <Ionicons name="flame-outline" size={16} color="#b45309" />
+          <Text style={[styles.actionChipText, { color: '#b45309' }]}>Đang giảm giá</Text>
+        </Pressable>
       </View>
 
       <View style={styles.searchBar}>
@@ -229,28 +336,20 @@ export default function SellerProductsTabScreen({
               <Text style={styles.emptyText}>
                 {search.trim()
                   ? 'Thử từ khóa khác hoặc xóa ô tìm kiếm.'
-                  : 'Nhấn nút Đăng tin ở góc dưới bên phải để tạo sản phẩm đầu tiên.'}
+                  : 'Chưa có sản phẩm nào. Hãy đăng bài từ mục Đăng bài sản phẩm.'}
               </Text>
             </View>
           }
           renderItem={({ item }) => (
             <ProductManageCard
               product={item}
+              pinningId={pinningId}
               onPress={() => setProductDetailId(item.id)}
+              onPinPress={handlePinPress}
             />
           )}
         />
       )}
-
-      <Pressable
-        onPress={() => setShowPost(true)}
-        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-        accessibilityRole="button"
-        accessibilityLabel="Đăng tin"
-      >
-        <Ionicons name="add" size={22} color="#ffffff" />
-        <Text style={styles.fabLabel}>Đăng tin</Text>
-      </Pressable>
     </View>
   );
 }
@@ -285,12 +384,39 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     backgroundColor: '#f1f5f9',
   },
-  listContent: { padding: 16, paddingBottom: 100 },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 4,
+    backgroundColor: '#f1f5f9',
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  actionChipPressed: { opacity: 0.85 },
+  actionChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#076F32',
+  },
+  listContent: { padding: 16, paddingBottom: 32 },
   productCard: {
+    position: 'relative',
     flexDirection: 'row',
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 12,
+    paddingBottom: 28,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -338,7 +464,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
   },
-  productInfo: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  pinBadge: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    zIndex: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#076F32',
+  },
+  pinBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  productInfo: { flex: 1, minWidth: 0, justifyContent: 'center', paddingRight: 4 },
   productName: {
     fontSize: 15,
     fontWeight: '800',
@@ -353,10 +497,30 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   metaLine: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
-    fontWeight: '700',
-    lineHeight: 17,
+    lineHeight: 16,
+  },
+  pinButton: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    minWidth: 28,
+    height: 28,
+    paddingHorizontal: 6,
+    borderRadius: 14,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  pinButtonText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#076F32',
   },
   emptyCard: {
     backgroundColor: '#ffffff',
@@ -378,27 +542,4 @@ const styles = StyleSheet.create({
     backgroundColor: '#076F32',
   },
   retryButtonText: { color: '#ffffff', fontWeight: '800' },
-  fab: {
-    position: 'absolute',
-    right: 18,
-    bottom: 22,
-    minHeight: 44,
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    backgroundColor: '#076F32',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
-  },
-  fabPressed: { opacity: 0.9 },
-  fabLabel: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '800',
-  },
 });

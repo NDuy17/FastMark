@@ -190,13 +190,14 @@ export function mapShopSettingsToProfilePatch(shop) {
     categoryId: cleanText(shop.categoryId),
     categoryName: cleanText(shop.categoryName),
     shopDescription: cleanText(shop.description || shop.shopDescription),
-    shopAvatar: cleanText(shop.avatar || shop.shopAvatar),
+    shopAvatar: cleanText(shop.avatar || shop.shopAvatar || ''),
     shopAddress: cleanText(shop.address),
     shopSystemAddress: cleanText(shop.systemAddress),
     shopPhone: cleanText(shop.shopPhone),
     openTime: cleanText(shop.openTime),
     closeTime: cleanText(shop.closeTime),
     isOpen: Number(shop.isOpen) === 1 ? 1 : 0,
+    pinHours: Boolean(shop.pinHours),
   };
 }
 

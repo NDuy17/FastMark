@@ -1,8 +1,8 @@
 const Reservation = require("../models/Reservation");
 const Product = require("../models/Product");
 const User = require("../models/User");
-const { RESERVATION_STATUS } = require("../constants/reservationStatus");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
+const { RESERVATION_STATUS } = require("../constants");
+const { PRODUCT_STATUS } = require("../constants");
 const { getShopForSeller } = require("./shopSettingsService");
 const { computeTotal } = require("./reservationService");
 
@@ -98,7 +98,9 @@ async function getSellerStats(user, query = {}) {
 
   const completedReservations = await Reservation.find({
     shopId: shop._id,
-    status: RESERVATION_STATUS.COMPLETED,
+    status: {
+      $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED],
+    },
   });
 
   let dailyRevenue = 0;
@@ -140,14 +142,38 @@ async function getSellerStats(user, query = {}) {
     periodCompleted,
     productLikeAgg,
   ] = await Promise.all([
-    Reservation.countDocuments({ shopId: shop._id, status: RESERVATION_STATUS.PENDING }),
-    Reservation.countDocuments({ shopId: shop._id, status: RESERVATION_STATUS.CONFIRMED }),
-    Reservation.countDocuments({ shopId: shop._id, status: RESERVATION_STATUS.CANCELLED }),
-    Reservation.countDocuments({ shopId: shop._id, status: RESERVATION_STATUS.COMPLETED }),
-    Reservation.countDocuments({ ...createdInRange, status: RESERVATION_STATUS.PENDING }),
-    Reservation.countDocuments({ ...createdInRange, status: RESERVATION_STATUS.CONFIRMED }),
-    Reservation.countDocuments({ ...createdInRange, status: RESERVATION_STATUS.CANCELLED }),
-    Reservation.countDocuments({ ...createdInRange, status: RESERVATION_STATUS.COMPLETED }),
+    Reservation.countDocuments({
+      shopId: shop._id,
+      status: RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION,
+    }),
+    Reservation.countDocuments({
+      shopId: shop._id,
+      status: RESERVATION_STATUS.WAITING_PICKUP,
+    }),
+    Reservation.countDocuments({
+      shopId: shop._id,
+      status: { $in: [RESERVATION_STATUS.REJECTED, RESERVATION_STATUS.REFUNDED] },
+    }),
+    Reservation.countDocuments({
+      shopId: shop._id,
+      status: { $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED] },
+    }),
+    Reservation.countDocuments({
+      ...createdInRange,
+      status: RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION,
+    }),
+    Reservation.countDocuments({
+      ...createdInRange,
+      status: RESERVATION_STATUS.WAITING_PICKUP,
+    }),
+    Reservation.countDocuments({
+      ...createdInRange,
+      status: { $in: [RESERVATION_STATUS.REJECTED, RESERVATION_STATUS.REFUNDED] },
+    }),
+    Reservation.countDocuments({
+      ...createdInRange,
+      status: { $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED] },
+    }),
     Product.aggregate([
       {
         $match: {

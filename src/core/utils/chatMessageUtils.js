@@ -33,12 +33,7 @@ function isPendingMessage(message) {
   return String(message?.id || '').startsWith('local-');
 }
 
-export const SENDER_TYPE = {
-  USER: 0,
-  SHOP: 1,
-};
-
-export function applyMessageViewerContext(message, { isSellerMode, userId, shopId } = {}) {
+export function applyMessageViewerContext(message, { userId } = {}) {
   if (!message) {
     return message;
   }
@@ -47,17 +42,9 @@ export function applyMessageViewerContext(message, { isSellerMode, userId, shopI
     return message;
   }
 
-  const senderType = Number(message.senderType ?? SENDER_TYPE.USER);
   const senderId = String(message.senderId || '');
-  let isMine = false;
-
-  if (isSellerMode) {
-    if (senderType === SENDER_TYPE.SHOP) {
-      isMine = shopId ? senderId === String(shopId) : true;
-    }
-  } else if (senderType === SENDER_TYPE.USER) {
-    isMine = userId ? senderId === String(userId) : true;
-  }
+  const viewerId = String(userId || '');
+  const isMine = Boolean(viewerId && senderId && senderId === viewerId);
 
   return {
     ...message,

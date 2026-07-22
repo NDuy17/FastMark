@@ -18,27 +18,22 @@ export async function fetchNearbyRegisteredShops({
     return [];
   }
 
-  try {
-    const normalizedCategoryId = String(shopCategoryId || '').trim();
-    const shops = normalizedCategoryId
-      ? (
-          await fetchSearchShopsFromNode({
-            latitude,
-            longitude,
-            radiusMeters,
-            shopCategoryId: normalizedCategoryId,
-          })
-        ).shops
-      : await fetchNearbyShopsFromNode({ latitude, longitude, radiusMeters });
+  const normalizedCategoryId = String(shopCategoryId || '').trim();
+  const shops = normalizedCategoryId
+    ? (
+        await fetchSearchShopsFromNode({
+          latitude,
+          longitude,
+          radiusMeters,
+          shopCategoryId: normalizedCategoryId,
+        })
+      ).shops
+    : await fetchNearbyShopsFromNode({ latitude, longitude, radiusMeters });
 
-    log.ok('fetchNearbyRegisteredShops', {
-      count: shops.length,
-      radiusMeters,
-      shopCategoryId: normalizedCategoryId || 'all',
-    });
-    return shops.map(normalizeStore);
-  } catch (error) {
-    log.fail('fetchNearbyRegisteredShops:failed', error);
-    return [];
-  }
+  log.ok('fetchNearbyRegisteredShops', {
+    count: shops.length,
+    radiusMeters,
+    shopCategoryId: normalizedCategoryId || 'all',
+  });
+  return shops.map(normalizeStore);
 }

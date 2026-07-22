@@ -11,7 +11,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
-import { formatDateString, parseDateString } from '../../../core/utils/dateFormat';
+import { formatDateString, formatIsoDateString, parseDateString } from '../../../core/utils/dateFormat';
 
 export default function DatePickerField({
   label,
@@ -19,10 +19,18 @@ export default function DatePickerField({
   onChange,
   placeholder = '16/07/2026',
   minimumDate,
+  valueFormat = 'dmy',
+  disabled = false,
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draftDate, setDraftDate] = useState(() => parseDateString(value, new Date()));
-  const displayValue = String(value || '').trim() || placeholder;
+  const formatValue = valueFormat === 'iso' ? formatIsoDateString : formatDateString;
+  const displayPlaceholder =
+    valueFormat === 'iso' && placeholder === '16/07/2026' ? '2026-07-16' : placeholder;
+  const hasValue = Boolean(String(value || '').trim());
+  const displayValue = hasValue
+    ? formatDateString(parseDateString(value, new Date()))
+    : displayPlaceholder;
   const pickerDate = useMemo(() => parseDateString(value, new Date()), [value]);
 
   useEffect(() => {
@@ -32,6 +40,7 @@ export default function DatePickerField({
   }, [showPicker, value]);
 
   function openPicker() {
+    if (disabled) return;
     setDraftDate(parseDateString(value, new Date()));
     setShowPicker(true);
   }
@@ -41,7 +50,7 @@ export default function DatePickerField({
   }
 
   function confirmPicker() {
-    onChange(formatDateString(draftDate));
+    onChange(formatValue(draftDate));
     closePicker();
   }
 
@@ -50,7 +59,7 @@ export default function DatePickerField({
     if (event.type === 'dismissed' || !selectedDate) {
       return;
     }
-    onChange(formatDateString(selectedDate));
+    onChange(formatValue(selectedDate));
   }
 
   function handleIosChange(_event, selectedDate) {
@@ -62,13 +71,14 @@ export default function DatePickerField({
   if (Platform.OS === 'web') {
     return (
       <View style={styles.field}>
-        <Text style={styles.label}>{label}</Text>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
         <TextInput
           value={value}
           onChangeText={onChange}
-          placeholder={placeholder}
+          placeholder={displayPlaceholder}
           placeholderTextColor="#94a3b8"
-          style={styles.webInput}
+          style={[styles.webInput, disabled && styles.disabled]}
+          editable={!disabled}
         />
       </View>
     );
@@ -76,12 +86,19 @@ export default function DatePickerField({
 
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      {label ? <Text style={styles.label}>{label}</Text> : null}
       <Pressable
         onPress={openPicker}
-        style={({ pressed }) => [styles.dateButton, pressed && styles.dateButtonPressed]}
+        disabled={disabled}
+        style={({ pressed }) => [
+          styles.dateButton,
+          disabled && styles.disabled,
+          pressed && !disabled && styles.dateButtonPressed,
+        ]}
       >
-        <Text style={styles.dateValue}>{displayValue}</Text>
+        <Text style={[styles.dateValue, !hasValue && styles.datePlaceholder]}>
+          {displayValue}
+        </Text>
         <View style={styles.dateButtonIconWrap}>
           <Ionicons name="calendar-outline" size={20} color="#076F32" />
         </View>
@@ -105,7 +122,7 @@ export default function DatePickerField({
                 <Pressable onPress={closePicker} hitSlop={8}>
                   <Text style={styles.modalActionText}>Hủy</Text>
                 </Pressable>
-                <Text style={styles.modalTitle}>{label}</Text>
+                <Text style={styles.modalTitle}>{label || 'Chọn ngày'}</Text>
                 <Pressable onPress={confirmPicker} hitSlop={8}>
                   <Text style={[styles.modalActionText, styles.modalActionPrimary]}>Xong</Text>
                 </Pressable>
@@ -154,6 +171,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  datePlaceholder: {
+    color: '#94a3b8',
+    fontWeight: '600',
+  },
+  disabled: {
+    opacity: 0.55,
   },
   dateButtonIconWrap: {
     width: 32,

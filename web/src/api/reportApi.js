@@ -18,18 +18,18 @@ export function getReportDetail(token, reportId) {
   return apiRequest(`/api/admin/reports/${reportId}`, { token });
 }
 
-export function dismissReport(token, reportId) {
+export function dismissReport(token, reportId, replyMessage = '') {
   return apiRequest(`/api/admin/reports/${reportId}/dismiss`, {
     method: 'POST',
     token,
-    body: {},
+    body: { replyMessage },
   });
 }
 
-export function approveReport(token, reportId, action) {
+export function approveReport(token, reportId, action, replyMessage = '') {
   return apiRequest(`/api/admin/reports/${reportId}/approve`, {
     method: 'POST',
     token,
-    body: { action },
+    body: { action, replyMessage },
   });
 }

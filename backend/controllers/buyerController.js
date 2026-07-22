@@ -114,16 +114,22 @@ exports.createReview = async (req, res) => {
   }
 
   const review = await buyerReviewService.createBuyerReview(req.currentUser, {
-    storeId: pickBodyValue(req.body, ["storeId", "store_id"]),
-    storeName: pickBodyValue(req.body, ["storeName", "store_name"]),
-    productName: pickBodyValue(req.body, ["productName", "product_name"]),
-    orderCode: pickBodyValue(req.body, ["orderCode", "order_code"]),
+    productId: pickBodyValue(req.body, ["productId", "product_id"]),
+    reservationId: pickBodyValue(req.body, [
+      "reservationId",
+      "reservation_id",
+      "orderCode",
+      "order_code",
+    ]),
+    shopId: pickBodyValue(req.body, ["shopId", "shop_id", "storeId", "store_id"]),
     rating,
-    comment: pickBodyValue(req.body, ["comment", "message"]),
+    comment: pickBodyValue(req.body, ["comment", "message", "content"]),
+    images: req.body?.images || req.body?.imageUrls || undefined,
     imageUrl: pickBodyValue(req.body, ["imageUrl", "image_url", "imageContent", "imageUri"]),
   });
 
   return success(res, {
+    status: 201,
     message: "Đã gửi đánh giá.",
     data: { review },
   });
@@ -132,7 +138,9 @@ exports.createReview = async (req, res) => {
 exports.updateReview = async (req, res) => {
   const review = await buyerReviewService.updateBuyerReview(req.currentUser, req.params.id, {
     rating: req.body.rating,
-    comment: req.body.comment,
+    comment: req.body.comment ?? req.body.content,
+    images: req.body?.images || req.body?.imageUrls,
+    imageUrl: pickBodyValue(req.body, ["imageUrl", "image_url", "imageContent", "imageUri"]),
   });
   return success(res, {
     message: "Đã cập nhật đánh giá.",
@@ -181,38 +189,49 @@ exports.removeFavorite = async (req, res) => {
 };
 
 exports.followShop = async (req, res) => {
-  const result = await userFollowService.followShop(req.currentUser, {
+  const result = await userFollowService.followUser(req.currentUser, {
+    followedUserId: pickBodyValue(req.body, [
+      "followedUserId",
+      "userId",
+      "sellerUserId",
+      "targetId",
+    ]),
     shopId: pickBodyValue(req.body, ["shopId", "shop_id"]),
-    sellerUserId: pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]),
   });
   return success(res, {
     status: 201,
-    message: "Đã theo dõi gian hàng.",
+    message: "Đã theo dõi.",
     data: result,
   });
 };
 
 exports.unfollowShop = async (req, res) => {
-  const result = await userFollowService.unfollowShop(req.currentUser, {
+  const result = await userFollowService.unfollowUser(req.currentUser, {
+    followedUserId:
+      pickBodyValue(req.params, ["targetId"]) ||
+      pickBodyValue(req.body, ["followedUserId", "userId", "sellerUserId", "targetId"]) ||
+      pickBodyValue(req.query, ["followedUserId", "userId", "sellerUserId"]),
     shopId:
       pickBodyValue(req.params, ["targetId", "shopId"]) ||
       pickBodyValue(req.body, ["shopId", "shop_id"]) ||
       pickBodyValue(req.query, ["shopId", "shop_id"]),
-    sellerUserId:
-      pickBodyValue(req.body, ["sellerUserId", "userId", "followedUserId"]) ||
-      pickBodyValue(req.query, ["sellerUserId", "userId", "followedUserId"]),
     targetId: pickBodyValue(req.params, ["targetId"]),
   });
   return success(res, {
-    message: "Đã bỏ theo dõi gian hàng.",
+    message: "Đã bỏ theo dõi.",
     data: result,
   });
 };
 
 exports.getFollowStatus = async (req, res) => {
   const result = await userFollowService.getFollowStatus(req.currentUser, {
+    followedUserId: pickBodyValue(req.query, [
+      "followedUserId",
+      "userId",
+      "sellerUserId",
+      "targetId",
+    ]),
     shopId: pickBodyValue(req.query, ["shopId", "shop_id"]),
-    sellerUserId: pickBodyValue(req.query, ["sellerUserId", "userId", "followedUserId"]),
   });
   return success(res, { data: result });
 };
@@ -229,8 +248,9 @@ exports.listFollowers = async (req, res) => {
 
 exports.createReport = async (req, res) => {
   const title = pickBodyValue(req.body, ["title", "reason"]);
-  if (!title) {
-    return fail(res, { status: 400, message: "Vui lòng chọn lý do báo cáo." });
+  const content = pickBodyValue(req.body, ["content", "message", "note"]);
+  if (!title && !content) {
+    return fail(res, { status: 400, message: "Vui lòng nhập nội dung tố cáo." });
   }
 
   const report = await reportService.createReport(req.currentUser, {
@@ -239,8 +259,12 @@ exports.createReport = async (req, res) => {
     shopName: pickBodyValue(req.body, ["shopName", "shop_name", "storeName", "store_name"]),
     productId: pickBodyValue(req.body, ["productId", "product_id"]),
     productName: pickBodyValue(req.body, ["productName", "product_name"]),
+    reviewId: pickBodyValue(req.body, ["reviewId", "review_id"]),
+    reviewerName: pickBodyValue(req.body, ["reviewerName", "userName", "user_name"]),
+    targetUserId: pickBodyValue(req.body, ["targetUserId", "target_user_id"]),
     title,
-    content: pickBodyValue(req.body, ["content", "message", "note"]),
+    content,
+    images: req.body.images || req.body.imageUrls || [],
   });
 
   return success(res, {

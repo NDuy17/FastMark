@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import {
   createCategory,
@@ -19,12 +20,12 @@ const emptyForm = {
 
 function formatDate(value) {
   if (!value) {
-    return '—';
+    return '';
   }
   return new Date(value).toLocaleString('vi-VN');
 }
 
-function CategoryPanel({ type, title, subtitle, showIcon = false }) {
+function CategoryPanel({ type, showIcon = false }) {
   const { getIdToken } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -160,16 +161,6 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
 
   return (
     <section className="category-panel">
-      <header className="page-header">
-        <div>
-          <h2>{title}</h2>
-          <p>{subtitle}</p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
-
       {error ? <p className="error-banner">{error}</p> : null}
       {successMessage ? <p className="success-banner">{successMessage}</p> : null}
 
@@ -184,19 +175,34 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
         </div>
 
         <form className="category-form" onSubmit={handleSubmit}>
-          <label>
-            Tên danh mục
-            <input
-              value={form.name}
-              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="VD: Trái cây, Thời trang..."
-            />
-          </label>
+          <div className="category-form-row">
+            <label>
+              Tên danh mục
+              <input
+                value={form.name}
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="VD: Trái cây, Thời trang..."
+              />
+            </label>
+            <label>
+              Trạng thái
+              <select
+                className="category-select"
+                value={String(form.isDeleted)}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, isDeleted: Number(event.target.value) }))
+                }
+              >
+                <option value="1">Hiển thị</option>
+                <option value="0">Ẩn</option>
+              </select>
+            </label>
+          </div>
 
           <label>
             Chi tiết danh mục
             <textarea
-              rows={3}
+              rows={2}
               value={form.description}
               onChange={(event) =>
                 setForm((current) => ({ ...current, description: event.target.value }))
@@ -206,9 +212,9 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
           </label>
 
           {showIcon ? (
-            <>
+            <div className="category-form-row">
               <label>
-                Icon (URL Supabase)
+                Icon (URL)
                 <input
                   value={form.icon}
                   onChange={(event) =>
@@ -217,7 +223,6 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
                   placeholder="https://..."
                 />
               </label>
-
               <label>
                 Upload icon
                 <input
@@ -226,7 +231,6 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
                   onChange={(event) => setIconFile(event.target.files?.[0] || null)}
                 />
               </label>
-
               {(form.icon || iconFile) && (
                 <div className="category-icon-preview">
                   {iconFile ? (
@@ -236,25 +240,14 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
                   )}
                 </div>
               )}
-            </>
+            </div>
           ) : null}
 
-          <label>
-            Trạng thái
-            <select
-              value={String(form.isDeleted)}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, isDeleted: Number(event.target.value) }))
-              }
-            >
-              <option value="1">Hiển thị (Active)</option>
-              <option value="0">Ẩn</option>
-            </select>
-          </label>
-
-          <button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Đang lưu...' : editingId ? 'Cập nhật' : 'Thêm danh mục'}
-          </button>
+          <div className="category-form-actions">
+            <button type="submit" className="primary-btn" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : editingId ? 'Cập nhật' : 'Thêm danh mục'}
+            </button>
+          </div>
         </form>
       </section>
 
@@ -288,14 +281,14 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
                           alt=""
                         />
                       ) : (
-                        '—'
+                        ''
                       )}
                     </td>
                   ) : null}
                   <td>
                     <strong>{item.name || item.categoryName}</strong>
                   </td>
-                  <td className="category-desc-cell">{item.description || '—'}</td>
+                  <td className="category-desc-cell">{item.description || ''}</td>
                   <td>{Number(item.isDeleted ?? item.IsDeleted) === 0 ? 'Ẩn' : 'Active'}</td>
                   <td>{formatDate(item.createdAt)}</td>
                   <td>
@@ -324,48 +317,12 @@ function CategoryPanel({ type, title, subtitle, showIcon = false }) {
 }
 
 export default function CategoriesPage() {
-  const [activeTab, setActiveTab] = useState('products');
+  const [searchParams] = useSearchParams();
+  const type = searchParams.get('type') === 'shops' ? 'shops' : 'products';
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Quản lý danh mục</h1>
-          <p>Danh mục sản phẩm và danh mục cửa hàng được quản lý riêng.</p>
-        </div>
-      </header>
-
-      <div className="category-tabs">
-        <button
-          type="button"
-          className={activeTab === 'products' ? 'tab-btn active' : 'tab-btn'}
-          onClick={() => setActiveTab('products')}
-        >
-          Danh mục sản phẩm
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'shops' ? 'tab-btn active' : 'tab-btn'}
-          onClick={() => setActiveTab('shops')}
-        >
-          Danh mục cửa hàng
-        </button>
-      </div>
-
-      {activeTab === 'products' ? (
-        <CategoryPanel
-          type="products"
-          title="Danh mục sản phẩm"
-          subtitle="Dùng khi người bán đăng bài sản phẩm."
-          showIcon
-        />
-      ) : (
-        <CategoryPanel
-          type="shops"
-          title="Danh mục cửa hàng"
-          subtitle="Dùng khi người bán đăng ký gian hàng."
-        />
-      )}
+      <CategoryPanel type={type} />
     </div>
   );
 }

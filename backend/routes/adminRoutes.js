@@ -8,6 +8,8 @@ const adminReviewController = require("../controllers/adminReviewController");
 const adminNotificationController = require("../controllers/adminNotificationController");
 const adminDashboardController = require("../controllers/adminDashboardController");
 const adminCatalogController = require("../controllers/adminCatalogController");
+const adminReservationController = require("../controllers/adminReservationController");
+const adminInsightController = require("../controllers/adminInsightController");
 
 const router = express.Router();
 
@@ -29,6 +31,30 @@ router.get(
   verifyFirebaseToken,
   requireAdmin,
   asyncHandler(adminAccountController.getAccountDetail)
+);
+router.get(
+  "/accounts/:id/history",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminInsightController.getAccountHistory)
+);
+router.get(
+  "/accounts/:id/finance",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminInsightController.getAccountFinance)
+);
+router.get(
+  "/finance/overview",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminInsightController.getFinanceOverview)
+);
+router.get(
+  "/audit-logs",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminInsightController.listAuditLogs)
 );
 router.post(
   "/accounts/:id/block",
@@ -104,19 +130,43 @@ router.get(
   "/reservations",
   verifyFirebaseToken,
   requireAdmin,
-  asyncHandler(adminCatalogController.listReservations)
+  asyncHandler(adminReservationController.listReservations)
+);
+router.get(
+  "/reservations/disputes",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReservationController.listDisputes)
+);
+router.get(
+  "/reservations/stats",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReservationController.getReservationStats)
 );
 router.get(
   "/reservations/:id",
   verifyFirebaseToken,
   requireAdmin,
-  asyncHandler(adminCatalogController.getReservationDetail)
+  asyncHandler(adminReservationController.getReservationDetail)
+);
+router.post(
+  "/reservations/:id/refund",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReservationController.refundToBuyer)
+);
+router.post(
+  "/reservations/:id/release",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReservationController.releaseToSeller)
 );
 router.post(
   "/reservations/:id/cancel",
   verifyFirebaseToken,
   requireAdmin,
-  asyncHandler(adminCatalogController.cancelReservation)
+  asyncHandler(adminReservationController.cancelReservation)
 );
 
 router.get(
@@ -142,6 +192,27 @@ router.post(
   verifyFirebaseToken,
   requireAdmin,
   asyncHandler(adminReportController.approveReport)
+);
+/** Tranh chấp giữ hàng: hoàn cọc buyer. */
+router.post(
+  "/reports/:id/approve-buyer",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReportController.approveBuyer)
+);
+/** Tranh chấp giữ hàng: giải ngân seller. */
+router.post(
+  "/reports/:id/approve-seller",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReportController.approveSeller)
+);
+/** Tranh chấp giữ hàng: bác bỏ report, ghi log. */
+router.post(
+  "/reports/:id/reject",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminReportController.rejectReservationReport)
 );
 
 router.get(
@@ -175,11 +246,155 @@ router.post(
   requireAdmin,
   asyncHandler(adminNotificationController.sendSystemNotification)
 );
+router.get(
+  "/notifications/history",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminNotificationController.listBroadcastHistory)
+);
 
-const bannerController = require("../controllers/bannerController");
-router.get("/banners", verifyFirebaseToken, requireAdmin, asyncHandler(bannerController.listAdmin));
-router.post("/banners", verifyFirebaseToken, requireAdmin, asyncHandler(bannerController.create));
-router.put("/banners/:id", verifyFirebaseToken, requireAdmin, asyncHandler(bannerController.update));
-router.delete("/banners/:id", verifyFirebaseToken, requireAdmin, asyncHandler(bannerController.remove));
+const sellerPlanController = require("../controllers/sellerPlanController");
+router.get(
+  "/seller-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.listAdminPlans)
+);
+router.post(
+  "/seller-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.createPlan)
+);
+router.put(
+  "/seller-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.updatePlan)
+);
+router.delete(
+  "/seller-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.removePlan)
+);
+router.get(
+  "/seller-subscriptions",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.listSubscriptions)
+);
+
+// Legacy aliases
+router.get(
+  "/subscription-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.listAdminPlans)
+);
+router.post(
+  "/subscription-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.createPlan)
+);
+router.put(
+  "/subscription-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.updatePlan)
+);
+router.delete(
+  "/subscription-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerPlanController.removePlan)
+);
+
+const sellerBannerController = require("../controllers/sellerBannerController");
+router.get(
+  "/banner-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.listAdminPlans)
+);
+router.post(
+  "/banner-plans",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.createPlan)
+);
+router.put(
+  "/banner-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.updatePlan)
+);
+router.delete(
+  "/banner-plans/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.removePlan)
+);
+router.get(
+  "/seller-banners",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.listSellerBanners)
+);
+router.post(
+  "/seller-banners/:id/approve",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.approveSellerBanner)
+);
+router.post(
+  "/seller-banners/:id/reject",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.rejectSellerBanner)
+);
+router.post(
+  "/seller-banners/:id/cancel",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerBannerController.cancelSellerBanner)
+);
+
+const bankController = require("../controllers/bankController");
+router.get("/banks", verifyFirebaseToken, requireAdmin, asyncHandler(bankController.listBanks));
+router.post("/banks", verifyFirebaseToken, requireAdmin, asyncHandler(bankController.createBank));
+router.put(
+  "/banks/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(bankController.updateBank)
+);
+router.delete(
+  "/banks/:id",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(bankController.deleteBank)
+);
+
+const withdrawController = require("../controllers/withdrawController");
+router.get(
+  "/withdraws",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(withdrawController.listAdminWithdraws)
+);
+router.post(
+  "/withdraws/:id/approve",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(withdrawController.approveWithdraw)
+);
+router.post(
+  "/withdraws/:id/reject",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(withdrawController.rejectWithdraw)
+);
 
 module.exports = router;

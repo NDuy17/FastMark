@@ -56,15 +56,15 @@ export default function OrderDetailScreen({
   const showReviewButton = canShowReviewButton(order, reviewedOrderCodes);
   const alreadyReviewed = isOrderAlreadyReviewed(order, reviewedOrderCodes);
 
-  async function handleSubmitReview({ rating, comment, imageUrl }) {
+  async function handleSubmitReview({ rating, comment, images, imageUrl }) {
     try {
       await submitShopReview({
-        storeId: order.storeId,
-        storeName: order.storeName,
-        productName: order.productName,
-        orderCode: order.orderCode || order.id,
+        shopId: order.shopId || order.storeId,
+        productId: order.productId || order.product?.id,
+        reservationId: order.reservationId || order.orderCode || order.id,
         rating,
         comment,
+        images,
         imageUrl,
       });
       setReviewVisible(false);

@@ -25,7 +25,7 @@ const STATUS_OPTIONS = [
 
 function formatDate(value) {
   if (!value) {
-    return '—';
+    return '';
   }
   return new Date(value).toLocaleString('vi-VN');
 }
@@ -207,13 +207,6 @@ export default function ReviewManagement() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Quản lý đánh giá</h1>
-          <p>Theo dõi, lọc và xử lý đánh giá sản phẩm từ người dùng.</p>
-        </div>
-      </header>
-
       <section className="filter-card">
         <form className="filter-form" onSubmit={handleSearchSubmit}>
           <label className="filter-search">
@@ -288,7 +281,7 @@ export default function ReviewManagement() {
                     <div className="account-primary">
                       {review.reviewer.fullName || review.reviewer.userName}
                     </div>
-                    <div className="account-secondary">{review.reviewer.email || '—'}</div>
+                    <div className="account-secondary">{review.reviewer.email || ''}</div>
                   </td>
                   <td>
                     <div className="account-primary">{review.productName}</div>
@@ -297,7 +290,22 @@ export default function ReviewManagement() {
                   <td className="review-content-cell">
                     <StarRating rating={review.rating} />
                     <p className="review-comment">{review.comment}</p>
-                    {review.imageUrl ? (
+                    {Array.isArray(review.images) && review.images.length > 0 ? (
+                      <div className="review-image-row">
+                        {review.images.map((image, index) => {
+                          const src = image.imageUrl || image.ImageUrl || image;
+                          if (!src || typeof src !== 'string') return null;
+                          return (
+                            <img
+                              key={`${review.id}-img-${index}`}
+                              src={src}
+                              alt="Ảnh đánh giá"
+                              className="review-image-thumb"
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : review.imageUrl ? (
                       <img
                         src={review.imageUrl}
                         alt="Ảnh đánh giá"

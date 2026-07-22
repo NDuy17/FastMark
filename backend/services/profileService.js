@@ -42,10 +42,10 @@ async function getShopStatsForUser(userId) {
     averageRating: shop.averageRating || 0,
     responseRate: shop.responseRate || 98,
     shopPhone: shop.phone || '',
-    shopAddress: shop.address || '',
-    shopSystemAddress: shop.DiaChiHeThong || '',
+    shopAddress: shop.addressHeThong || shop.address || '',
+    shopSystemAddress: shop.addressHeThong || shop.DiaChiHeThong || shop.address || '',
     shopDescription: shop.description || '',
-    shopAvatar: shop.avatar || '',
+    shopAvatar: '',
     openTime: shop.openTime || '',
     closeTime: shop.closeTime || '',
     isOpen: Number(shop.isOpen) === 1 ? 1 : 0,
@@ -77,6 +77,8 @@ async function buildPublicUserProfile(user) {
   return {
     ...publicUser,
     ...storefrontStats,
+    // Shop dùng chung avatar với user.
+    shopAvatar: publicUser.avatar || "",
     shopName: publicUser.fullName || '',
     shopUsername: publicUser.userName || '',
     followersCount,

@@ -32,9 +32,16 @@ function toQuery(params = {}) {
   return text ? `?${text}` : '';
 }
 
-export async function getFollowStatusOnBackend(idToken, { shopId } = {}) {
+/** Theo dõi User. Có thể truyền followedUserId hoặc shopId (map → chủ shop). */
+export async function getFollowStatusOnBackend(
+  idToken,
+  { followedUserId, shopId, userId } = {}
+) {
   const response = await apiRequest(
-    `${API_ENDPOINTS.buyerFollowStatus}${toQuery({ shopId })}`,
+    `${API_ENDPOINTS.buyerFollowStatus}${toQuery({
+      followedUserId: followedUserId || userId,
+      shopId,
+    })}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
@@ -42,13 +49,16 @@ export async function getFollowStatusOnBackend(idToken, { shopId } = {}) {
   return payload.data || { isFollowing: false, followersCount: 0 };
 }
 
-export async function followShopOnBackend({ idToken, shopId }) {
+export async function followShopOnBackend({ idToken, shopId, followedUserId, userId }) {
   const response = await apiRequest(
     API_ENDPOINTS.buyerFollows,
     {
       method: 'POST',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({ shopId }),
+      body: JSON.stringify({
+        followedUserId: followedUserId || userId || undefined,
+        shopId: shopId || undefined,
+      }),
     },
     AUTH_TIMEOUT_MS
   );
@@ -56,9 +66,10 @@ export async function followShopOnBackend({ idToken, shopId }) {
   return payload.data;
 }
 
-export async function unfollowShopOnBackend({ idToken, shopId }) {
-  const path = shopId
-    ? API_ENDPOINTS.buyerFollow(shopId)
+export async function unfollowShopOnBackend({ idToken, shopId, followedUserId, userId }) {
+  const targetId = followedUserId || userId || shopId;
+  const path = targetId
+    ? API_ENDPOINTS.buyerFollow(targetId)
     : API_ENDPOINTS.buyerFollows;
 
   const response = await apiRequest(
@@ -66,7 +77,10 @@ export async function unfollowShopOnBackend({ idToken, shopId }) {
     {
       method: 'DELETE',
       headers: await authHeaders(idToken),
-      body: JSON.stringify(shopId ? { shopId } : {}),
+      body: JSON.stringify({
+        followedUserId: followedUserId || userId || undefined,
+        shopId: shopId || undefined,
+      }),
     },
     AUTH_TIMEOUT_MS
   );

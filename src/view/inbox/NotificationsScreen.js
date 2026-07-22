@@ -9,8 +9,13 @@ import {
 } from 'react-native';
 
 import { getMyNotificationsOnBackend } from '../../api/notificationApi';
-import { Ionicons } from '@expo/vector-icons';
-
+import {
+  notificationMatchesAudience,
+  prependUniqueNotification,
+} from '../../core/utils/notificationRealtime';
+import { useNotificationSocket } from '../../hooks/useNotificationSocket';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import NotificationDetailScreen from './NotificationDetailScreen';
 
 function formatNotificationTime(value) {
@@ -59,7 +64,9 @@ export default function NotificationsScreen({
   onNavigationStateChange,
   audience = 'buyer',
   onBack = null,
+  isScreenActive = true,
 }) {
+  const insets = useScreenInsets();
   const [notifications, setNotifications] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -80,13 +87,33 @@ export default function NotificationsScreen({
     }
   }, [audience]);
 
-  useEffect(() => {
-    loadNotifications();
-  }, [loadNotifications]);
+  const handleRealtimeNotification = useCallback(
+    (notification) => {
+      if (!isScreenActive || !notificationMatchesAudience(notification, audience)) {
+        return;
+      }
+
+      setNotifications((current) => prependUniqueNotification(current, notification));
+    },
+    [audience, isScreenActive]
+  );
+
+  useNotificationSocket({
+    enabled: isScreenActive,
+    onNotificationNew: handleRealtimeNotification,
+  });
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(selectedNotification));
-  }, [onNavigationStateChange, selectedNotification]);
+    if (!isScreenActive) {
+      setSelectedNotification(null);
+      return;
+    }
+    loadNotifications();
+  }, [isScreenActive, loadNotifications]);
+
+  useEffect(() => {
+    onNavigationStateChange?.(Boolean(isScreenActive && selectedNotification));
+  }, [isScreenActive, onNavigationStateChange, selectedNotification]);
 
   if (selectedNotification) {
     return (
@@ -115,21 +142,17 @@ export default function NotificationsScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        {onBack ? (
-          <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={22} color="#0f172a" />
-          </Pressable>
-        ) : (
-          <View style={styles.backBtn} />
-        )}
-        <Text style={styles.title}>Thông báo</Text>
-        <View style={styles.backBtn} />
-      </View>
+      {onBack ? (
+        <SubScreenHeader title="Thông báo" onBack={onBack} />
+      ) : (
+        <View style={styles.headerPlain}>
+          <Text style={styles.titlePlain}>Thông báo</Text>
+        </View>
+      )}
 
       {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
 
-      {isLoading ? (
+      {isLoading && notifications.length === 0 ? (
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" />
         </View>
@@ -137,7 +160,14 @@ export default function NotificationsScreen({
         <FlatList
           data={notifications}
           keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            {
+              paddingBottom: onBack
+                ? insets.nestedScrollPaddingBottom
+                : insets.tabRootScrollPaddingBottom,
+            },
+          ]}
           refreshing={isLoading}
           onRefresh={loadNotifications}
           ListEmptyComponent={
@@ -172,25 +202,15 @@ export default function NotificationsScreen({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f8fafc' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  screen: { flex: 1, backgroundColor: '#f1f5f9' },
+  headerPlain: {
     paddingTop: 12,
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f1f5f9',
   },
-  backBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 20,
+  titlePlain: {
+    fontSize: 24,
     fontWeight: '900',
     color: '#0f172a',
   },
@@ -201,7 +221,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  listContent: { paddingHorizontal: 16, paddingBottom: 32, paddingTop: 8 },
+  listContent: { paddingHorizontal: 16, paddingTop: 8 },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',

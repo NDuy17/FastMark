@@ -15,10 +15,16 @@ import {
 } from '../../api/messageApi';
 import { getMyNotificationsOnBackend } from '../../api/notificationApi';
 import { getSellerConversationsOnBackend } from '../../api/sellerOpsApi';
+import {
+  notificationMatchesAudience,
+  prependUniqueNotification,
+} from '../../core/utils/notificationRealtime';
+import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { selectIsSeller } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 import ChatScreen from './ChatScreen';
 import NotificationDetailScreen from './NotificationDetailScreen';
 
@@ -114,6 +120,7 @@ export default function InboxScreen({
   onBack = null,
   onNavigationStateChange,
 }) {
+  const insets = useScreenInsets();
   const isSeller = useSelector(selectIsSeller);
   const showSellerInbox = isSeller && !buyerView;
   const [activeTab, setActiveTab] = useState('messages');
@@ -177,6 +184,22 @@ export default function InboxScreen({
       setIsLoadingNotifications(false);
     }
   }, []);
+
+  const handleRealtimeNotification = useCallback((notification) => {
+    if (messagesOnly || activeTab !== 'notifications') {
+      return;
+    }
+    if (!notificationMatchesAudience(notification, 'buyer')) {
+      return;
+    }
+
+    setNotifications((current) => prependUniqueNotification(current, notification));
+  }, [activeTab, messagesOnly]);
+
+  useNotificationSocket({
+    enabled: !messagesOnly && activeTab === 'notifications',
+    onNotificationNew: handleRealtimeNotification,
+  });
 
   useEffect(() => {
     if (buyerView || messagesOnly || activeTab === 'messages') {
@@ -329,7 +352,10 @@ export default function InboxScreen({
             keyExtractor={(item) =>
               showSellerInbox ? String(item.id) : getConversationKey(item)
             }
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              { paddingBottom: insets.nestedScrollPaddingBottom },
+            ]}
             keyboardShouldPersistTaps="handled"
             ListEmptyComponent={
               <View style={styles.emptyBox}>
@@ -431,7 +457,10 @@ export default function InboxScreen({
         <FlatList
           data={notifications}
           keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: insets.nestedScrollPaddingBottom },
+          ]}
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>
@@ -509,7 +538,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 12,
   },
-  listContent: { paddingHorizontal: 16, paddingBottom: 32 },
+  listContent: { paddingHorizontal: 16 },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',

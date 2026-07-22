@@ -10,20 +10,35 @@ import {
   View,
 } from 'react-native';
 
-import CircularBackButton from '../shared/components/CircularBackButton';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
+import ReservationDisputeModal from '../shared/components/ReservationDisputeModal';
 import {
   cancelBuyerReservationOnBackend,
+  forfeitBuyerDepositOnBackend,
   getBuyerOrdersOnBackend,
+  reportBuyerReservationOnBackend,
 } from '../../api/buyerOpsApi';
-import { RESERVATION_TAB, RESERVATION_STATUS } from '../../constants/sellerOrders';
+import {
+  RESERVATION_STATUS,
+  RESERVATION_STATUS_LABELS,
+  RESERVATION_TAB,
+  getCancelledReservationReason,
+} from '../../constants/sellerOrders';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { formatPrice } from '../../core/utils/productFormat';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { submitShopReview } from '../../core/utils/orderReview';
-import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
 import ShopReviewModal from '../shared/components/ShopReviewModal';
+import MyReviewDetailModal from '../shared/components/MyReviewDetailModal';
 import OrderItemHeader from '../shared/components/OrderItemHeader';
 import BuyerOrderDetailScreen from './BuyerOrderDetailScreen';
+import BuyerShopQrScanScreen from './BuyerShopQrScanScreen';
+import { deleteBuyerReviewOnBackend } from '../../api/reviewApi';
+import {
+  getReviewForOrder,
+  useReviewedOrderCodes,
+} from '../../hooks/useReviewedOrderCodes';
 
 const TABS = [
   { key: RESERVATION_TAB.HOLDING, label: 'Giữ hàng' },
@@ -31,21 +46,53 @@ const TABS = [
   { key: RESERVATION_TAB.CANCELLED, label: 'Đã hủy' },
 ];
 
-const RESERVATION_STATUS_LABELS = {
-  [RESERVATION_STATUS.PENDING]: 'Chờ xác nhận',
-  [RESERVATION_STATUS.CONFIRMED]: 'Đã xác nhận',
-  [RESERVATION_STATUS.COMPLETED]: 'Hoàn thành',
-  [RESERVATION_STATUS.CANCELLED]: 'Đã hủy',
-};
+function isPastPickup(item) {
+  if (!item?.pickupTime) {
+    return true;
+  }
+  const pickup = new Date(item.pickupTime);
+  return !Number.isFinite(pickup.getTime()) || Date.now() >= pickup.getTime();
+}
+
+/** Còn trong 24h sau giờ nhận (chưa tới hạn auto-release). */
+function isWithinDepositDecisionWindow(item) {
+  if (item?.withinDepositDecisionWindow === true) {
+    return true;
+  }
+  if (item?.withinDepositDecisionWindow === false) {
+    return false;
+  }
+  const deadlineRaw = item?.depositDecisionDeadline || item?.autoReleaseAt || item?.reviewDeadlineAt;
+  if (deadlineRaw) {
+    const deadline = new Date(deadlineRaw);
+    return Number.isFinite(deadline.getTime()) && Date.now() < deadline.getTime();
+  }
+  if (!item?.pickupTime) {
+    return false;
+  }
+  const pickup = new Date(item.pickupTime);
+  if (!Number.isFinite(pickup.getTime())) {
+    return false;
+  }
+  return Date.now() < pickup.getTime() + 24 * 60 * 60 * 1000;
+}
 
 function getReservationStatusStyle(status) {
-  if (status === RESERVATION_STATUS.CONFIRMED) {
+  if (status === RESERVATION_STATUS.WAITING_PICKUP) {
     return { badge: styles.statusBadgeSuccess, text: styles.statusBadgeTextSuccess };
   }
-  if (status === RESERVATION_STATUS.COMPLETED) {
-    return { badge: styles.statusBadgeInfo, text: styles.statusBadgeTextInfo };
+  if (
+    status === RESERVATION_STATUS.COMPLETED ||
+    status === RESERVATION_STATUS.AUTO_COMPLETED
+  ) {
+    return { badge: styles.statusBadgeSuccess, text: styles.statusBadgeTextSuccess };
   }
-  if (status === RESERVATION_STATUS.CANCELLED) {
+  if (
+    status === RESERVATION_STATUS.REJECTED ||
+    status === RESERVATION_STATUS.REFUNDED ||
+    status === RESERVATION_STATUS.DISPUTED ||
+    status === RESERVATION_STATUS.DISPUTE_RESOLVED
+  ) {
     return { badge: styles.statusBadgeDanger, text: styles.statusBadgeTextDanger };
   }
   return { badge: styles.statusBadgePending, text: styles.statusBadgeTextPending };
@@ -90,24 +137,41 @@ function normalizeOrderItem(item) {
 }
 
 function ReservationProgress({ status }) {
-  if (status === RESERVATION_STATUS.CANCELLED) {
+  if (
+    status === RESERVATION_STATUS.REJECTED ||
+    status === RESERVATION_STATUS.REFUNDED ||
+    status === RESERVATION_STATUS.DISPUTED ||
+    status === RESERVATION_STATUS.DISPUTE_RESOLVED
+  ) {
+    const label =
+      status === RESERVATION_STATUS.DISPUTED
+        ? 'Đơn tranh chấp'
+        : status === RESERVATION_STATUS.REFUNDED ||
+            status === RESERVATION_STATUS.DISPUTE_RESOLVED
+          ? 'Đã hủy'
+          : 'Đơn đã từ chối';
     return (
       <View style={styles.progressTrack}>
         <View style={[styles.progressDot, styles.progressDotCancelled]} />
-        <Text style={styles.progressCancelled}>Đơn đã hủy</Text>
+        <Text style={styles.progressCancelled}>{label}</Text>
       </View>
     );
   }
 
   const steps = [
-    { label: 'Chờ', done: status >= RESERVATION_STATUS.PENDING },
-    { label: 'Xác nhận', done: status >= RESERVATION_STATUS.CONFIRMED },
-    { label: 'Hoàn thành', done: status >= RESERVATION_STATUS.COMPLETED },
+    { label: 'Chờ', done: status >= RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION },
+    { label: 'Xác nhận', done: status >= RESERVATION_STATUS.WAITING_PICKUP },
+    {
+      label: 'Nhận hàng',
+      done:
+        status === RESERVATION_STATUS.COMPLETED ||
+        status === RESERVATION_STATUS.AUTO_COMPLETED,
+    },
   ];
   const activeIndex =
-    status === RESERVATION_STATUS.PENDING
+    status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION
       ? 0
-      : status === RESERVATION_STATUS.CONFIRMED
+      : status === RESERVATION_STATUS.WAITING_PICKUP
         ? 1
         : 2;
 
@@ -147,16 +211,25 @@ function BuyerOrdersContent({
   activeTab,
   onNavigatePickup,
   onReviewStore,
+  onViewReview,
   onOpenDetail,
+  onOpenShopScan,
   reviewedOrderCodes,
+  reviewsByOrderId,
   refreshKey = 0,
+  embedded = true,
 }) {
+  const insets = useScreenInsets();
+  const listPaddingBottom = embedded
+    ? insets.tabRootScrollPaddingBottom
+    : insets.nestedScrollPaddingBottom;
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [disputeTarget, setDisputeTarget] = useState(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -224,20 +297,114 @@ function BuyerOrdersContent({
     );
   }
 
+  function handleConfirmReceived(reservation) {
+    onOpenShopScan?.(reservation);
+  }
+
+  function handleReportShop(reservation) {
+    setDisputeTarget(reservation);
+  }
+
+  async function handleSubmitDispute(payload) {
+    if (!disputeTarget?.id) {
+      return;
+    }
+    try {
+      const idToken = await getCurrentUserIdToken();
+      await reportBuyerReservationOnBackend(idToken, {
+        reservationId: disputeTarget.id,
+        reason: payload.reason,
+        description: payload.description,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        address: payload.address,
+        images: payload.images,
+      });
+      setDisputeTarget(null);
+      Alert.alert('Đã gửi', 'Khiếu nại đã gửi. Admin sẽ xử lý, cọc tạm giữ.');
+      loadOrders(true);
+    } catch (actionError) {
+      Alert.alert('Lỗi', actionError.message || 'Không gửi được khiếu nại.');
+      throw actionError;
+    }
+  }
+
+  function handleForfeitDeposit(reservation) {
+    Alert.alert(
+      'Đồng ý mất cọc',
+      'Bạn xác nhận không khiếu nại và đồng ý chuyển tiền cọc cho người bán?',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Đồng ý mất cọc',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const idToken = await getCurrentUserIdToken();
+              await forfeitBuyerDepositOnBackend(idToken, reservation.id);
+              Alert.alert('Xong', 'Cọc đã chuyển cho người bán.');
+              loadOrders(true);
+            } catch (actionError) {
+              Alert.alert('Lỗi', actionError.message || 'Không xử lý được mất cọc.');
+            }
+          },
+        },
+      ]
+    );
+  }
+
   function renderReservationItem({ item }) {
     const isHolding = activeTab === RESERVATION_TAB.HOLDING;
     const statusLabel = RESERVATION_STATUS_LABELS[item.status] || 'Không rõ';
     const statusStyle = getReservationStatusStyle(item.status);
+    const pastPickup = isPastPickup(item);
     const canCancel =
-      isHolding && item.status === RESERVATION_STATUS.PENDING && !item.buyerCancelLocked;
-    const canReview =
-      activeTab === RESERVATION_TAB.COMPLETED &&
-      !reviewedOrderCodes?.has(String(item.id));
-    const canNavigate = isHolding && item.status === RESERVATION_STATUS.CONFIRMED;
+      isHolding &&
+      (item.canCancel === true ||
+        item.status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION);
+    const canScanShopQr =
+      isHolding &&
+      (item.canScanShopQr === true ||
+        item.canConfirmReceived === true ||
+        (item.status === RESERVATION_STATUS.WAITING_PICKUP && !pastPickup));
+    const canReport =
+      isHolding &&
+      !item.disputeByBuyer &&
+      (item.canComplaint === true ||
+        item.canReportShop === true ||
+        (item.status === RESERVATION_STATUS.WAITING_PICKUP &&
+          pastPickup &&
+          isWithinDepositDecisionWindow(item)) ||
+        item.status === RESERVATION_STATUS.DISPUTED);
+    const canForfeitDeposit =
+      isHolding &&
+      (item.canForfeitDeposit === true ||
+        (item.status === RESERVATION_STATUS.WAITING_PICKUP &&
+          pastPickup &&
+          isWithinDepositDecisionWindow(item) &&
+          !(
+            Number(item.depositSettleTo) === 1 ||
+            Number(item.depositSettleTo) === 2 ||
+            item.depositSettledAt ||
+            item.depositReleasedAt ||
+            item.depositRefundedAt
+          )));
+    const isCompletedTab = activeTab === RESERVATION_TAB.COMPLETED;
+    const alreadyReviewed = reviewedOrderCodes?.has(String(item.id));
+    const canReview = isCompletedTab && !alreadyReviewed;
+    const canViewReview = isCompletedTab && alreadyReviewed;
+    const existingReview = canViewReview
+      ? getReviewForOrder(item, reviewsByOrderId)
+      : null;
+    const canNavigate =
+      isHolding &&
+      item.status === RESERVATION_STATUS.WAITING_PICKUP &&
+      !pastPickup;
     const storeName = pickStoreName(item.storeName, item.shopUsername, item.shop?.shopName);
     const productName = item.product?.productName || 'Sản phẩm';
     const thumb = item.product?.thumbnail || '';
     const qty = Number(item.quantity) || 0;
+    const cancelReasonText = getCancelledReservationReason(item);
 
     return (
       <View style={styles.card}>
@@ -265,6 +432,11 @@ function BuyerOrdersContent({
             <Text style={styles.infoLineStrong}>
               Tổng tiền: {formatPrice(item.totalAmount)}
             </Text>
+            {Number(item.depositAmount) > 0 ? (
+              <Text style={styles.infoLineMuted}>
+                Cọc: {formatPrice(item.depositAmount)}
+              </Text>
+            ) : null}
             {item.pickupTime ? (
               <Text style={styles.infoLineMuted}>
                 Giờ lấy: {formatOrderTime(item.pickupTime)}
@@ -272,8 +444,20 @@ function BuyerOrdersContent({
             ) : (
               <Text style={styles.infoLineMuted}>Giữ: {formatOrderTime(item.createdAt)}</Text>
             )}
-            {item.status === RESERVATION_STATUS.CANCELLED && item.cancelReason ? (
-              <Text style={styles.infoLineDanger}>Lý do: {item.cancelReason}</Text>
+            {item.status === RESERVATION_STATUS.WAITING_PICKUP && !pastPickup ? (
+              <Text style={styles.infoLineMuted}>
+                Đến shop và quét QR cố định của cửa hàng để hoàn tất.
+              </Text>
+            ) : null}
+            {item.status === RESERVATION_STATUS.WAITING_PICKUP && pastPickup ? (
+              <Text style={styles.infoLineDanger}>
+                {isWithinDepositDecisionWindow(item)
+                  ? 'Đã quá giờ nhận. Trong 24 giờ bạn có thể khiếu nại hoặc đồng ý mất cọc.'
+                  : 'Đã quá 24 giờ sau giờ nhận. Cọc mặc định đã chuyển cho người bán.'}
+              </Text>
+            ) : null}
+            {cancelReasonText ? (
+              <Text style={styles.infoLineDanger}>Lý do: {cancelReasonText}</Text>
             ) : null}
           </OrderItemHeader>
         </Pressable>
@@ -296,6 +480,33 @@ function BuyerOrdersContent({
             </Pressable>
           ) : null}
 
+          {canScanShopQr ? (
+            <Pressable
+              style={[styles.actionButton, styles.actionButtonFlex]}
+              onPress={() => handleConfirmReceived(item)}
+            >
+              <Text style={styles.actionButtonText}>Quét mã Shop</Text>
+            </Pressable>
+          ) : null}
+
+          {canReport ? (
+            <Pressable
+              style={[styles.actionButton, styles.actionButtonDanger, styles.actionButtonFlex]}
+              onPress={() => handleReportShop(item)}
+            >
+              <Text style={styles.actionButtonTextDanger}>Khiếu nại</Text>
+            </Pressable>
+          ) : null}
+
+          {canForfeitDeposit ? (
+            <Pressable
+              style={[styles.actionButton, styles.actionButtonFlex]}
+              onPress={() => handleForfeitDeposit(item)}
+            >
+              <Text style={styles.actionButtonText}>Đồng ý mất cọc</Text>
+            </Pressable>
+          ) : null}
+
           {canCancel ? (
             <Pressable
               style={[styles.actionButton, styles.actionButtonDanger, styles.actionButtonFlex]}
@@ -310,15 +521,39 @@ function BuyerOrdersContent({
               style={[styles.actionButton, styles.actionButtonSecondary, styles.actionButtonFlex]}
               onPress={() =>
                 onReviewStore?.({
+                  shopId: item.shopId ? String(item.shopId) : '',
                   storeId: item.shopId ? String(item.shopId) : '',
                   storeName,
+                  productId: item.product?.id ? String(item.product.id) : '',
                   productName,
+                  reservationId: item.id ? String(item.id) : '',
                   orderCode: item.id ? String(item.id) : '',
                 })
               }
             >
               <Text style={[styles.actionButtonText, styles.actionButtonTextSecondary]}>
                 ⭐ Đánh giá
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {canViewReview ? (
+            <Pressable
+              style={[styles.actionButton, styles.actionButtonSecondary, styles.actionButtonFlex]}
+              onPress={() =>
+                onViewReview?.(
+                  existingReview || {
+                    reservationId: String(item.id || ''),
+                    orderCode: String(item.id || ''),
+                    storeName,
+                    productName,
+                    shopId: item.shopId ? String(item.shopId) : '',
+                  }
+                )
+              }
+            >
+              <Text style={[styles.actionButtonText, styles.actionButtonTextSecondary]}>
+                Xem đánh giá
               </Text>
             </Pressable>
           ) : null}
@@ -355,7 +590,7 @@ function BuyerOrdersContent({
       <FlatList
         data={items}
         keyExtractor={(item) => String(item.id)}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: listPaddingBottom }]}
         renderItem={renderReservationItem}
         refreshControl={
           <RefreshControl refreshing={isRefreshing} onRefresh={() => loadOrders(true)} tintColor="#076F32" />
@@ -367,6 +602,13 @@ function BuyerOrdersContent({
             <Text style={styles.emptyText}>Đơn giữ hàng sẽ hiển thị tại đây.</Text>
           </View>
         }
+      />
+
+      <ReservationDisputeModal
+        visible={Boolean(disputeTarget)}
+        mode="buyer"
+        onClose={() => setDisputeTarget(null)}
+        onSubmit={handleSubmitDispute}
       />
     </View>
   );
@@ -387,17 +629,30 @@ export default function BuyerOrdersScreen({
   onReviewStore,
   initialTab,
   tabRequestKey = 0,
+  isScreenActive = true,
   onNavigationStateChange,
 }) {
   const [activeTab, setActiveTab] = useState(() => resolveInitialTab(initialTab));
   const [reviewTarget, setReviewTarget] = useState(null);
+  const [viewReviewTarget, setViewReviewTarget] = useState(null);
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const [detailTarget, setDetailTarget] = useState(null);
-  const { reviewedOrderCodes, markReviewed } = useReviewedOrderCodes();
+  const [scanTarget, setScanTarget] = useState(null);
+  const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0);
+  const { reviewedOrderCodes, reviewsByOrderId, markReviewed, unmarkReviewed } =
+    useReviewedOrderCodes(reviewsRefreshKey);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(detailTarget));
-  }, [detailTarget, onNavigationStateChange]);
+    onNavigationStateChange?.(Boolean(isScreenActive && (detailTarget || scanTarget)));
+  }, [detailTarget, isScreenActive, scanTarget, onNavigationStateChange]);
+
+  useEffect(() => {
+    if (isScreenActive) {
+      return;
+    }
+    setDetailTarget(null);
+    setScanTarget(null);
+  }, [isScreenActive]);
 
   useEffect(() => {
     if (!initialTab) {
@@ -442,28 +697,51 @@ export default function BuyerOrdersScreen({
           setReviewTarget(target);
           onReviewStore?.(target);
         }}
+        onViewReview={(review) => {
+          const resolved =
+            (review?.id && review) ||
+            getReviewForOrder(
+              {
+                id: review?.reservationId || review?.orderCode,
+                orderCode: review?.reservationId || review?.orderCode,
+              },
+              reviewsByOrderId
+            ) ||
+            review;
+          setViewReviewTarget(resolved);
+        }}
         onOpenDetail={setDetailTarget}
+        onOpenShopScan={(item) => setScanTarget(normalizeOrderItem(item))}
         reviewedOrderCodes={reviewedOrderCodes}
+        reviewsByOrderId={reviewsByOrderId}
         refreshKey={listRefreshKey}
+        embedded={embedded}
       />
       <ShopReviewModal
         visible={Boolean(reviewTarget)}
         storeName={reviewTarget?.storeName}
         productName={reviewTarget?.productName}
         onClose={() => setReviewTarget(null)}
-        onSubmit={async ({ rating, comment, imageUrl }) => {
+        onSubmit={async ({ rating, comment, images, imageUrl }) => {
           if (!reviewTarget) return;
           try {
-            await submitShopReview({
-              storeId: reviewTarget.storeId,
-              storeName: reviewTarget.storeName,
-              productName: reviewTarget.productName,
-              orderCode: reviewTarget.orderCode,
+            const created = await submitShopReview({
+              shopId: reviewTarget.shopId || reviewTarget.storeId,
+              productId: reviewTarget.productId,
+              reservationId: reviewTarget.reservationId || reviewTarget.orderCode,
               rating,
               comment,
+              images,
               imageUrl,
             });
-            markReviewed({ orderCode: reviewTarget.orderCode });
+            markReviewed(
+              {
+                orderCode: reviewTarget.reservationId || reviewTarget.orderCode,
+                id: reviewTarget.reservationId || reviewTarget.orderCode,
+              },
+              created
+            );
+            setReviewsRefreshKey((value) => value + 1);
             setReviewTarget(null);
             Alert.alert('Cảm ơn bạn', 'Đánh giá đã được gửi.');
           } catch (error) {
@@ -471,8 +749,50 @@ export default function BuyerOrdersScreen({
           }
         }}
       />
+      <MyReviewDetailModal
+        visible={Boolean(viewReviewTarget)}
+        review={viewReviewTarget}
+        onClose={() => setViewReviewTarget(null)}
+        onDelete={async (review) => {
+          try {
+            const idToken = await getCurrentUserIdToken();
+            const reviewId = String(review?.id || '').trim();
+            if (!idToken || !reviewId) {
+              throw new Error('Không xác định được đánh giá.');
+            }
+            await deleteBuyerReviewOnBackend(idToken, reviewId);
+            unmarkReviewed({
+              orderCode: review.reservationId || review.orderCode,
+              id: review.reservationId || review.orderCode,
+            });
+            setViewReviewTarget(null);
+            setReviewsRefreshKey((value) => value + 1);
+            Alert.alert('Đã gỡ', 'Đánh giá đã được gỡ bỏ.');
+          } catch (error) {
+            Alert.alert('Lỗi', error.message || 'Không gỡ được đánh giá.');
+          }
+        }}
+      />
     </>
   );
+
+  if (scanTarget) {
+    return (
+      <View style={styles.screen}>
+        <BuyerShopQrScanScreen
+          reservationId={String(scanTarget.id || '')}
+          expectedShopId={String(scanTarget.shopId || '')}
+          storeName={scanTarget.storeName || ''}
+          onBack={() => setScanTarget(null)}
+          onCompleted={() => {
+            setScanTarget(null);
+            setDetailTarget(null);
+            setListRefreshKey((value) => value + 1);
+          }}
+        />
+      </View>
+    );
+  }
 
   if (detailTarget) {
     return (
@@ -482,6 +802,10 @@ export default function BuyerOrdersScreen({
           initialItem={normalizeOrderItem(detailTarget.item)}
           onBack={() => setDetailTarget(null)}
           onChanged={() => setListRefreshKey((value) => value + 1)}
+          onOpenShopScan={(item) => {
+            setDetailTarget(null);
+            setScanTarget(normalizeOrderItem(item || detailTarget.item));
+          }}
           onNavigatePickup={(payload) => {
             setDetailTarget(null);
             onNavigatePickup?.(payload);
@@ -491,28 +815,44 @@ export default function BuyerOrdersScreen({
             setReviewTarget(target);
             onReviewStore?.(target);
           }}
+          onViewReview={(review) => {
+            const resolved =
+              (review?.id && review) ||
+              getReviewForOrder(
+                {
+                  id: review?.reservationId || review?.orderCode,
+                  orderCode: review?.reservationId || review?.orderCode,
+                },
+                reviewsByOrderId
+              ) ||
+              review;
+            setDetailTarget(null);
+            setViewReviewTarget(resolved);
+          }}
           canReview={
             activeTab === RESERVATION_TAB.COMPLETED &&
             !reviewedOrderCodes?.has(String(detailTarget.item?.id))
           }
+          canViewReview={
+            activeTab === RESERVATION_TAB.COMPLETED &&
+            reviewedOrderCodes?.has(String(detailTarget.item?.id))
+          }
+          existingReview={getReviewForOrder(detailTarget.item, reviewsByOrderId)}
         />
       </View>
     );
   }
 
+  const headerTitle = <Text style={styles.title}>Đơn hàng</Text>;
+
   if (embedded) {
     return (
       <View style={styles.screen}>
-        <View style={styles.header}>
-          {onBack ? (
-            <View style={styles.headerRow}>
-              <CircularBackButton onPress={onBack} variant="plain" />
-              <Text style={styles.title}>Đơn hàng</Text>
-            </View>
-          ) : (
-            <Text style={styles.title}>Đơn hàng</Text>
-          )}
-        </View>
+        {onBack ? (
+          <SubScreenHeader title="Đơn hàng" onBack={onBack} />
+        ) : (
+          <View style={styles.header}>{headerTitle}</View>
+        )}
         {tabBar}
         <View style={styles.body}>{body}</View>
       </View>
@@ -521,12 +861,7 @@ export default function BuyerOrdersScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <View style={styles.headerRow}>
-          <CircularBackButton onPress={onBack} variant="plain" />
-          <Text style={styles.title}>Lịch sử giữ hàng</Text>
-        </View>
-      </View>
+      <SubScreenHeader title="Đơn hàng" onBack={onBack} />
       {tabBar}
       <View style={styles.body}>{body}</View>
     </View>
@@ -548,6 +883,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  headerTitleRow: {
+    flex: 1,
   },
   title: {
     fontSize: 24,
@@ -611,7 +949,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    paddingBottom: 24,
   },
   centered: {
     flex: 1,

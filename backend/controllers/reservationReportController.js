@@ -1,0 +1,73 @@
+const reservationDisputeService = require("../services/reservationDisputeService");
+const { success, fail } = require("../utils/apiResponse");
+
+function pickBodyValue(body, keys) {
+  for (const key of keys) {
+    if (body[key] !== undefined && body[key] !== null && String(body[key]).trim() !== "") {
+      return body[key];
+    }
+  }
+  return "";
+}
+
+/** POST /reports/buyer-report-seller */
+exports.buyerReportSeller = async (req, res) => {
+  const reservationId = pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]);
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const data = await reservationDisputeService.buyerReportSeller(req.currentUser, {
+    reservationId: String(reservationId).trim(),
+    description: pickBodyValue(req.body, ["description", "content", "note"]),
+    reason: pickBodyValue(req.body, ["reason"]),
+    latitude: pickBodyValue(req.body, ["latitude", "lat"]),
+    longitude: pickBodyValue(req.body, ["longitude", "lng", "lon"]),
+    address: pickBodyValue(req.body, ["address", "systemAddress", "diaChi"]),
+    images: req.body.images || req.body.imageUrls || [],
+  });
+
+  return success(res, {
+    message: "Đã gửi báo cáo. Đơn chuyển sang tranh chấp, cọc giữ ở ví hệ thống chờ admin.",
+    data,
+  });
+};
+
+/** POST /reports/seller-report-buyer */
+exports.sellerReportBuyer = async (req, res) => {
+  const reservationId = pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]);
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const data = await reservationDisputeService.sellerReportBuyer(req.currentUser, {
+    reservationId: String(reservationId).trim(),
+    title: pickBodyValue(req.body, ["title", "sellerTitle"]),
+    description: pickBodyValue(req.body, ["description", "content", "note", "sellerContent"]),
+    latitude: pickBodyValue(req.body, ["latitude", "lat", "sellerLatitude"]),
+    longitude: pickBodyValue(req.body, ["longitude", "lng", "lon", "sellerLongitude"]),
+    address: pickBodyValue(req.body, ["address", "sellerAddress", "systemAddress", "diaChi"]),
+    images: req.body.images || req.body.imageUrls || [],
+  });
+
+  return success(res, {
+    message: "Đã gửi báo cáo buyer không đến nhận. Đơn chuyển sang tranh chấp.",
+    data,
+  });
+};
+
+/** GET /reports/reservation/:reservationId */
+exports.listReservationReports = async (req, res) => {
+  const reservationId = String(req.params.reservationId || "").trim();
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const data = await reservationDisputeService.listReservationDisputeReports(
+    req.currentUser,
+    reservationId,
+    { isAdmin: Number(req.currentUser?.Role) === 3 }
+  );
+
+  return success(res, { data });
+};

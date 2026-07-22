@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 
 import AdminLayout from './components/AdminLayout';
 import ConfigErrorScreen from './components/ConfigErrorScreen';
+import { ConfirmProvider, ToastProvider } from './components/ui/Feedback';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { configError } from './firebase';
 import LoginPage from './pages/LoginPage';
@@ -17,8 +18,15 @@ import ShopsPage from './pages/ShopsPage';
 import ShopDetailPage from './pages/ShopDetailPage';
 import ProductsPage from './pages/ProductsPage';
 import ReservationsPage from './pages/ReservationsPage';
-import StatsPage from './pages/StatsPage';
-import BannersPage from './pages/BannersPage';
+import ReservationDetailPage from './pages/ReservationDetailPage';
+import SellerPlansPage from './pages/SellerPlansPage';
+import SellerSubscriptionsPage from './pages/SellerSubscriptionsPage';
+import BannerPlansPage from './pages/BannerPlansPage';
+import SellerBannersPage from './pages/SellerBannersPage';
+import BanksPage from './pages/BanksPage';
+import WithdrawalsPage from './pages/WithdrawalsPage';
+import FinancePage from './pages/FinancePage';
+import AuditLogPage from './pages/AuditLogPage';
 
 function ProtectedRoutes() {
   const { user, isAdmin, loading } = useAuth();
@@ -51,11 +59,20 @@ function ProtectedRoutes() {
         <Route path="products" element={<ProductsPage />} />
         <Route path="categories" element={<CategoriesPage />} />
         <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="reservations/:reservationId" element={<ReservationDetailPage />} />
         <Route path="reports" element={<ReportManagement />} />
         <Route path="reviews" element={<ReviewManagement />} />
         <Route path="notifications" element={<SystemNotification />} />
-        <Route path="banners" element={<BannersPage />} />
-        <Route path="stats" element={<StatsPage />} />
+        <Route path="seller-plans" element={<SellerPlansPage />} />
+        <Route path="seller-subscriptions" element={<SellerSubscriptionsPage />} />
+        <Route path="banner-plans" element={<BannerPlansPage />} />
+        <Route path="seller-banners" element={<SellerBannersPage />} />
+        <Route path="finance" element={<FinancePage />} />
+        <Route path="audit-logs" element={<AuditLogPage />} />
+        <Route path="banks" element={<BanksPage />} />
+        <Route path="withdrawals" element={<WithdrawalsPage />} />
+        <Route path="subscription-plans" element={<SellerPlansPage />} />
+        <Route path="banners" element={<Navigate to="/seller-banners" replace />} />
       </Route>
     </Routes>
   );
@@ -68,10 +85,14 @@ function AppRoutes() {
 
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/*" element={<ProtectedRoutes />} />
-      </Routes>
+      <ToastProvider>
+        <ConfirmProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/*" element={<ProtectedRoutes />} />
+          </Routes>
+        </ConfirmProvider>
+      </ToastProvider>
     </AuthProvider>
   );
 }

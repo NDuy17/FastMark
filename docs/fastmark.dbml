@@ -1,0 +1,519 @@
+// FastMark — DBML từ MongoDB models (backend/models)
+// Dán vào: https://dbdiagram.io/d
+// ObjectId → varchar (Mongo _id 24 hex). Enum Number giữ dạng int + note.
+
+// ========== AUTH / USER ==========
+
+Table users {
+  _id varchar [pk, note: 'ObjectId']
+  FirebaseUID varchar [unique, not null, note: 'UID Firebase Auth']
+  UserName varchar [unique, not null, note: 'Tên đăng nhập 3-20']
+  FullName varchar [not null, note: 'Họ tên hiển thị']
+  Email varchar [unique, note: 'sparse unique']
+  Phone varchar [unique, note: 'SĐT 10 số, sparse unique']
+  AuthProvider varchar [not null, note: 'email | google']
+  Avatar varchar [default: '', note: 'URL ảnh đại diện']
+  Role int [default: 1, note: '1=buyer, 2=seller, 3=admin']
+  Status int [default: 1, note: '0=khóa, 1=hoạt động']
+  FollowingCount int [default: 0]
+  FollowersCount int [default: 0]
+  DangHoatDong boolean [default: false, note: 'Online']
+  LanHoatDongCuoi timestamp [note: 'Last active']
+  VerifyAccount boolean [default: false, note: 'Đã OTP email']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Tài khoản người dùng'
+}
+
+Table wallets {
+  _id varchar [pk]
+  userId varchar [unique, not null, note: '1-1 với User']
+  balance float [default: 0, note: 'Số dư VND ≥0']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Ví user — quan hệ 1-1 với users'
+}
+
+Table systemwallets {
+  _id varchar [pk]
+  key varchar [unique, default: 'system', note: 'Singleton key=system']
+  balance float [default: 0, note: 'Tổng cọc escrow đang giữ (cộng dồn mọi đơn)']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Ví hệ thống escrow — 1 bản ghi duy nhất'
+}
+
+Table wallettransactions {
+  _id varchar [pk]
+  userId varchar [not null, note: 'Chủ giao dịch']
+  type int [not null, note: '1=nạp, 2=thanh toán, 3=hoàn, 4=rút, 5=giữ cọc, 6=hoàn cọc, 7=giải phóng cọc']
+  amount float [not null, note: 'Số tiền ≥1']
+  status int [default: 0, note: '0=chờ, 1=thành công, 2=thất bại, 3=hủy']
+  orderCode int [unique, not null, note: 'Mã đối soát nội bộ']
+  paymentLinkId varchar [default: '']
+  checkoutUrl varchar [default: '']
+  description varchar [default: '']
+  balanceBefore float [note: 'Số dư trước GD']
+  balanceAfter float [note: 'Số dư sau GD']
+  reservationId varchar [note: 'Đơn giữ hàng (cọc)']
+  referenceId varchar [note: 'ID tham chiếu']
+  referenceType varchar [default: '', note: 'Reservation|Report|WithdrawRequest|Topup']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Lịch sử giao dịch ví'
+}
+
+Table banks {
+  _id varchar [pk]
+  name varchar [not null]
+  code varchar [unique, not null, note: 'Mã NH UPPER']
+  isActive boolean [default: true]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table withdrawrequests {
+  _id varchar [pk]
+  userId varchar [not null]
+  bankId varchar [not null]
+  bankName varchar [not null, note: 'Snapshot tên NH']
+  bankCode varchar [default: '']
+  accountNumber varchar [not null]
+  accountName varchar [not null]
+  amount float [not null, note: '≥1']
+  status int [default: 0, note: '0=chờ duyệt, 1=đã duyệt, 2=từ chối']
+  walletTransactionId varchar [note: 'GD trừ ví khi rút']
+  refundTransactionId varchar [note: 'GD hoàn khi từ chối']
+  adminNote varchar [default: '']
+  processedBy varchar [note: 'Admin xử lý']
+  processedAt timestamp
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+// ========== SHOP / SELLER ==========
+
+Table shopcategories {
+  _id varchar [pk]
+  name varchar [unique, not null]
+  description varchar
+  IsDeleted int [default: 1, note: '1=đang dùng, 0=xóa mềm']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'collection: shopcategories'
+}
+
+Table shopprofiles {
+  _id varchar [pk]
+  userId varchar [note: 'Chủ shop → User']
+  description varchar [default: '']
+  address varchar [default: '']
+  addressHeThong varchar [default: '', note: 'Địa chỉ geocode']
+  latitude float
+  longitude float
+  categoryId varchar [note: '→ shopcategories']
+  openTime varchar [default: '', note: 'HH:mm']
+  closeTime varchar [default: '', note: 'HH:mm']
+  isOpen int [default: 1, note: '0=đóng, 1=mở']
+  status int [default: 1, note: '0=khóa, 1=hoạt động']
+  isActive boolean [default: false, note: 'Cache gói bán còn hạn']
+  averageRating float [default: 0]
+  totalReviews int [default: 0]
+  totalProducts int [default: 0]
+  soldCount int [default: 0]
+  allowReserve boolean [default: true]
+  cocTien float [default: 0, note: '% cọc 0-100']
+  qrCodeValue varchar [default: '']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table sellerverifications {
+  _id varchar [pk]
+  userId varchar [not null]
+  cccdFrontImage varchar [default: '']
+  cccdBackImage varchar [default: '']
+  selfieImage varchar [default: '']
+  categoryId varchar
+  address varchar [default: '']
+  addressHeThong varchar [default: '']
+  latitude float
+  longitude float
+  status int [default: 0, note: '0=chờ duyệt, 1=đã duyệt, 2=từ chối']
+  LyDoTuChoi varchar [default: '']
+  approvedBy varchar [note: 'Admin duyệt']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table sellerplans {
+  _id varchar [pk]
+  name varchar [not null]
+  description varchar [default: '']
+  durationDays int [not null, note: 'Số ngày ≥1']
+  price float [not null]
+  isActive boolean [default: true]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table sellersubscriptions {
+  _id varchar [pk]
+  sellerId varchar [not null]
+  shopId varchar [not null]
+  planId varchar [not null]
+  planName varchar [default: '', note: 'Snapshot']
+  amount float [not null]
+  startDate timestamp [not null]
+  endDate timestamp [not null]
+  status int [default: 0, note: '0=chờ TT, 1=active, 2=hết hạn, 3=hủy']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table bannerplans {
+  _id varchar [pk]
+  name varchar [not null]
+  durationDays int [not null]
+  price float [not null]
+  isActive boolean [default: true]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table sellerbannerplans {
+  _id varchar [pk]
+  sellerId varchar [not null]
+  shopId varchar [not null]
+  planId varchar [not null]
+  planName varchar [default: '']
+  amount float [not null]
+  ngayMua timestamp
+  startDate timestamp [not null]
+  endDate timestamp [not null]
+  status int [default: 1, note: '1=active, 2=cancelled, 3=admin reject']
+  violationReason varchar [default: '', note: 'Lý do vi phạm khi status=3']
+  title varchar [default: '']
+  image varchar [default: '']
+  description varchar [default: '']
+  targetType int [default: 2, note: '1=SP, 2=shop, 3=DM, 4=KM']
+  targetId varchar [default: '']
+  clickCount int [default: 0, note: 'Lượt click trên Home']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Banner Home = status ACTIVE + còn hạn, random thứ tự'
+}
+
+// ========== PRODUCT ==========
+
+Table categories {
+  _id varchar [pk]
+  name varchar [unique, not null]
+  categoryName varchar [note: 'Alias legacy = name']
+  description varchar
+  icon varchar
+  IsDeleted int [default: 1, note: '1=dùng, 0=xóa mềm']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'ProductCategory — collection: categories'
+}
+
+Table products {
+  _id varchar [pk]
+  ShopId varchar [not null]
+  CategoryId varchar [not null]
+  ProductName varchar [not null]
+  Description varchar [default: '']
+  DonVi varchar [default: '']
+  ViewCount int [default: 0]
+  LikeCount int [default: 0]
+  SoldCount int [default: 0]
+  Status int [default: 1, note: '0=ẩn, 1=đang bán']
+  MinPrice float [default: 0]
+  MaxPrice float [default: 0]
+  OriginalPrice float [default: 0]
+  IsPromotion boolean [default: false]
+  DiscountPercent float [default: 0, note: '% giảm 0-100 (nguồn chính KM)']
+  PromotionPrice float [note: 'Giá sau giảm (suy ra)']
+  PromotionStartDate timestamp
+  PromotionEndDate timestamp
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table productvariants {
+  _id varchar [pk]
+  ProductId varchar [not null]
+  VariantName varchar [not null]
+  Price float [not null]
+  Quantity int [not null, default: 0]
+  SoldCount int [default: 0]
+  ImageUrl varchar [default: '']
+  Status int [default: 1, note: '0=ẩn, 1=bán']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table productimages {
+  _id varchar [pk]
+  ProductId varchar [not null]
+  ImageUrl varchar [not null]
+  Stt int [default: 0, note: '0=cover']
+  UploadedAt timestamp
+}
+
+Table favoriteproducts {
+  _id varchar [pk]
+  userId varchar [not null]
+  productId varchar [not null]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'UK compound (userId, productId)'
+}
+
+// ========== RESERVATION / ORDER ==========
+
+Table reservations {
+  _id varchar [pk]
+  variantId varchar
+  shopId varchar
+  productId varchar
+  userId varchar [note: 'Buyer']
+  quantity int
+  reservedPrice float [note: 'Giá ĐV lúc đặt']
+  pickupTime timestamp
+  note varchar
+  status int [default: 0, note: '0=chờ shop, 1=từ chối, 2=chờ nhận, 3=xong QR, 4=tranh chấp, 5=auto xong, 6=đã hoàn cọc']
+  sellerConfirmedAt timestamp
+  reviewDeadlineAt timestamp
+  autoReleaseAt timestamp [note: 'pickup+24h auto release cọc']
+  completedAt timestamp
+  cancelledAt timestamp
+  cancelReason varchar
+  inventoryHeld boolean [default: false]
+  depositRequired boolean [default: false]
+  depositPercent float [default: 0]
+  depositAmount float [default: 0]
+  depositPaidAt timestamp
+  depositHoldTxnId varchar [note: '→ wallettransactions']
+  depositReleasedAt timestamp
+  depositReleasedTxnId varchar
+  depositRefundedAt timestamp
+  depositRefundTxnId varchar
+  disputeByBuyer boolean [default: false]
+  disputeBySeller boolean [default: false]
+  disputeReason varchar [default: '']
+  disputeDescription varchar [default: '']
+  disputedAt timestamp
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'Đơn giữ hàng + cọc escrow'
+}
+
+Table reservationauditlogs {
+  _id varchar [pk]
+  adminId varchar [not null]
+  reservationId varchar [not null]
+  action varchar [not null, note: 'ADMIN_REFUND_BUYER | ADMIN_RELEASE_SELLER']
+  decision varchar [default: '', note: 'buyer_win | seller_win']
+  note varchar [default: '']
+  CreatedAt timestamp
+}
+
+// ========== REVIEW ==========
+
+Table reviews {
+  _id varchar [pk]
+  userId varchar [not null]
+  shopId varchar [not null]
+  productId varchar [not null]
+  reservationId varchar [not null, note: 'Partial UK khi chưa xóa']
+  rating int [not null, note: '1-5']
+  comment varchar [default: '']
+  isHidden boolean [default: false]
+  isDeleted boolean [default: false]
+  deletedAt timestamp
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table reviewimages {
+  _id varchar [pk]
+  reviewId varchar [not null]
+  ImageUrl varchar [not null]
+  Stt int [default: 0]
+  UploadedAt timestamp
+}
+
+// ========== CHAT ==========
+
+Table conversations {
+  _id varchar [pk]
+  participantA varchar [not null]
+  participantB varchar [not null]
+  contextShopId varchar
+  lastMessage varchar
+  lastMessageAt timestamp
+  nextThuTu int [default: 0]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'UK compound (participantA, participantB)'
+}
+
+Table messages {
+  _id varchar [pk]
+  conversationId varchar
+  senderId varchar
+  senderType int [default: 0, note: '0=buyer/user, 1=shop']
+  ThuTu int [default: 0]
+  messageType int [default: 0, note: '0=text, 1=ảnh, 2=offer']
+  content varchar [default: '']
+  imageUrl varchar [default: '']
+  isRead int [default: 0, note: '0=chưa, 1=đã đọc']
+  messageStatus int [default: 0, note: '0=gửi, 1=tới, 2=xem']
+  DeletedAt timestamp
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+// ========== SOCIAL / INBOX ==========
+
+Table follows {
+  _id varchar [pk]
+  followerId varchar [not null, note: 'Người follow']
+  followedUserId varchar [not null, note: 'Người được follow']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+
+  Note: 'UK compound (followerId, followedUserId)'
+}
+
+Table notifications {
+  _id varchar [pk]
+  userId varchar
+  title varchar
+  content varchar
+  audience varchar [default: 'system', note: 'buyer | seller | system']
+  isRead int [default: 0]
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+// ========== REPORT / DISPUTE ==========
+
+Table reports {
+  _id varchar [pk]
+  userId varchar [note: 'Người gửi']
+  targetUserId varchar
+  productId varchar
+  shopId varchar
+  reservationId varchar [note: 'Đơn giữ hàng (type 5-8)']
+  reviewId varchar [default: '']
+  reportType int [not null, note: '1=review, 2=user, 3=shop, 4=SP, 5=buyer no-show, 6=seller no-show, 7=SP issue, 8=khác']
+  title varchar
+  content varchar
+  description varchar [default: '']
+  latitude float
+  longitude float
+  status int [default: 0, note: '0=chờ, 1=đã xử lý, 2=bác bỏ']
+  processedBy varchar
+  processedAt timestamp
+  adminDecision varchar [default: '']
+  adminNote varchar [default: '']
+  CreatedAt timestamp
+  UpdatedAt timestamp
+}
+
+Table reportimages {
+  _id varchar [pk]
+  reportId varchar
+  imageUrl varchar
+  CreatedAt timestamp
+}
+
+// ========== REFS ==========
+
+// User 1-1 Wallet
+Ref: wallets.userId - users._id
+
+// Wallet / withdraw
+Ref: wallettransactions.userId > users._id
+Ref: wallettransactions.reservationId > reservations._id
+Ref: withdrawrequests.userId > users._id
+Ref: withdrawrequests.bankId > banks._id
+Ref: withdrawrequests.walletTransactionId > wallettransactions._id
+Ref: withdrawrequests.refundTransactionId > wallettransactions._id
+Ref: withdrawrequests.processedBy > users._id
+
+// Shop
+Ref: shopprofiles.userId > users._id
+Ref: shopprofiles.categoryId > shopcategories._id
+Ref: sellerverifications.userId > users._id
+Ref: sellerverifications.categoryId > shopcategories._id
+Ref: sellerverifications.approvedBy > users._id
+
+Ref: sellersubscriptions.sellerId > users._id
+Ref: sellersubscriptions.shopId > shopprofiles._id
+Ref: sellersubscriptions.planId > sellerplans._id
+
+Ref: sellerbannerplans.sellerId > users._id
+Ref: sellerbannerplans.shopId > shopprofiles._id
+Ref: sellerbannerplans.planId > bannerplans._id
+
+// Product
+Ref: products.ShopId > shopprofiles._id
+Ref: products.CategoryId > categories._id
+Ref: productvariants.ProductId > products._id
+Ref: productimages.ProductId > products._id
+Ref: favoriteproducts.userId > users._id
+Ref: favoriteproducts.productId > products._id
+
+// Reservation
+Ref: reservations.userId > users._id
+Ref: reservations.shopId > shopprofiles._id
+Ref: reservations.productId > products._id
+Ref: reservations.variantId > productvariants._id
+Ref: reservations.depositHoldTxnId > wallettransactions._id
+Ref: reservations.depositReleasedTxnId > wallettransactions._id
+Ref: reservations.depositRefundTxnId > wallettransactions._id
+
+Ref: reservationauditlogs.adminId > users._id
+Ref: reservationauditlogs.reservationId > reservations._id
+
+// Review
+Ref: reviews.userId > users._id
+Ref: reviews.shopId > shopprofiles._id
+Ref: reviews.productId > products._id
+Ref: reviews.reservationId > reservations._id
+Ref: reviewimages.reviewId > reviews._id
+
+// Chat
+Ref: conversations.participantA > users._id
+Ref: conversations.participantB > users._id
+Ref: conversations.contextShopId > shopprofiles._id
+Ref: messages.conversationId > conversations._id
+Ref: messages.senderId > users._id
+
+// Social
+Ref: follows.followerId > users._id
+Ref: follows.followedUserId > users._id
+Ref: notifications.userId > users._id
+
+// Report
+Ref: reports.userId > users._id
+Ref: reports.targetUserId > users._id
+Ref: reports.productId > products._id
+Ref: reports.shopId > shopprofiles._id
+Ref: reports.reservationId > reservations._id
+Ref: reports.processedBy > users._id
+Ref: reportimages.reportId > reports._id

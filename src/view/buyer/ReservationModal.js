@@ -13,9 +13,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getCurrentUserIdToken } from '../../repository/authRepository';
-import { createBuyerReservationOnBackend } from '../../api/buyerOpsApi';
-import { formatPrice } from '../../core/utils/productFormat';
+import {
+  createReservationViewModel,
+  loadReservationWalletViewModel,
+} from '../../viewmodel/buyer/reservationViewModel';
+import { saveReservationResume } from '../../viewmodel/buyer/reservationResumeSession';
+import { formatPrice, getPromotionalUnitPrice } from '../../core/utils/productFormat';
 import { formatPickupInputs, parsePickupInputs } from '../../core/utils/pickupDateTime';
 import SelectedVariantCard from './SelectedVariantCard';
 import QuantityStepper from './QuantityStepper';
@@ -43,6 +46,7 @@ export default function ReservationModal({
   initialQuantity = 1,
   onClose,
   onSuccess,
+  onOpenTopUp,
 }) {
   const insets = useSafeAreaInsets();
   const hasPresetVariant = Boolean(preselectedVariantId);
@@ -81,23 +85,25 @@ export default function ReservationModal({
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(null);
 
   const selectedVariant = variants.find((v) => String(v.id) === String(selectedVariantId));
   const maxQty = Math.max(0, Number(selectedVariant?.quantity) || 0);
   const qtyNum = Number(quantity) || 0;
-  const unitPrice = selectedVariant?.price ?? 0;
+  const unitPrice = getPromotionalUnitPrice(product, selectedVariant?.price ?? 0);
   const totalAmount = unitPrice * qtyNum;
   const depositPercent = Math.max(0, Math.min(100, Number(store?.depositPercent) || 0));
-  const allowReserve = store?.allowReserve !== false;
   const depositAmount =
-    allowReserve && depositPercent > 0
-      ? Math.round((unitPrice * qtyNum * depositPercent) / 100)
-      : 0;
+    depositPercent > 0 ? Math.round((unitPrice * qtyNum * depositPercent) / 100) : 0;
   const pickupTime = parsePickupInputs(dateInput, timeInput);
+  const needsTopUp =
+    depositAmount > 0 &&
+    walletBalance != null &&
+    Number(walletBalance) < depositAmount;
 
   const pickupOptions = useMemo(
     () =>
-      [1, 2, 5, 12, 24].map((hours) => ({
+      [1, 2, 5, 12].map((hours) => ({
         label: `Sau ${hours}h`,
         value: addHoursFromNow(hours),
       })),
@@ -116,6 +122,23 @@ export default function ReservationModal({
     const defaults = formatPickupInputs(buildDefaultPickupDate());
     setDateInput(defaults.dateInput);
     setTimeInput(defaults.timeInput);
+
+    let cancelled = false;
+    loadReservationWalletViewModel()
+      .then((result) => {
+        if (!cancelled) {
+          setWalletBalance(result.balance);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWalletBalance(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [visible, variants, preselectedVariantId, initialQuantity]);
 
   useEffect(() => {
@@ -138,9 +161,6 @@ export default function ReservationModal({
   }
 
   function validateForm() {
-    if (!allowReserve) {
-      return 'Cửa hàng không nhận giữ hàng.';
-    }
     if (!selectedVariant) {
       return 'Vui lòng chọn biến thể sản phẩm.';
     }
@@ -165,13 +185,17 @@ export default function ReservationModal({
       setError(validationError);
       return;
     }
+    if (needsTopUp) {
+      setError(
+        `Số dư ví không đủ cọc ${formatPrice(depositAmount)}. Hiện có ${formatPrice(walletBalance)}.`
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     setError('');
     try {
-      const idToken = await getCurrentUserIdToken();
-      const reservation = await createBuyerReservationOnBackend({
-        idToken,
+      const reservation = await createReservationViewModel({
         productId: product.id,
         variantId: selectedVariant.id,
         quantity: qtyNum,
@@ -181,7 +205,11 @@ export default function ReservationModal({
       onSuccess?.(reservation);
       onClose?.();
     } catch (submitError) {
-      setError(submitError.message || 'Không gửi được yêu cầu giữ hàng.');
+      const message = submitError.message || 'Không gửi được yêu cầu giữ hàng.';
+      setError(message);
+      if (String(message).includes('Số dư') || String(message).includes('ví')) {
+        // Keep CTA visible via needsTopUp / onOpenTopUp.
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -264,17 +292,42 @@ export default function ReservationModal({
               <Text style={styles.totalUnderVariant}>Tổng: {formatPrice(totalAmount)}</Text>
             ) : null}
 
-            {!allowReserve ? (
-              <Text style={styles.depositWarn}>Cửa hàng hiện không nhận giữ hàng.</Text>
-            ) : depositAmount > 0 ? (
+            {depositAmount > 0 ? (
               <View style={styles.depositBox}>
-                <Text style={styles.depositTitle}>
-                  Đặt cọc {depositPercent}%: {formatPrice(depositAmount)}
-                </Text>
-                <Text style={styles.depositHint}>
-                  Số tiền sẽ trừ từ Ví FastMark khi gửi yêu cầu. Hủy khi đang chờ duyệt sẽ được hoàn
-                  cọc.
-                </Text>
+                <View style={styles.depositRow}>
+                  <View style={styles.depositInfo}>
+                    <Text style={styles.depositTitle}>
+                      Đặt cọc {depositPercent}%: {formatPrice(depositAmount)}
+                    </Text>
+                    <Text style={styles.walletBalanceText}>
+                      {walletBalance != null
+                        ? `Số dư ví: ${formatPrice(walletBalance)}`
+                        : 'Đang tải số dư ví...'}
+                    </Text>
+                  </View>
+                  {onOpenTopUp ? (
+                    <Pressable
+                      style={styles.topUpBtn}
+                      onPress={async () => {
+                        try {
+                          await saveReservationResume({
+                            productId: product?.id,
+                            variantId: selectedVariant?.id,
+                            quantity: qtyNum,
+                          });
+                        } catch {
+                          // Continue to top-up even if resume save fails.
+                        }
+                        onClose?.();
+                        onOpenTopUp?.();
+                      }}
+                    >
+                      <Text style={styles.topUpBtnText}>
+                        {needsTopUp ? 'Nạp ví' : 'Nạp thêm'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
             ) : (
               <Text style={styles.depositHint}>Shop không yêu cầu đặt cọc.</Text>
@@ -299,6 +352,7 @@ export default function ReservationModal({
                 minimumDate={new Date()}
               />
               <TimePickerField
+                compact
                 label="Giờ"
                 value={timeInput}
                 onChange={setTimeInput}
@@ -494,6 +548,7 @@ const styles = StyleSheet.create({
   },
   datetimeRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     gap: 10,
   },
   timeRow: {
@@ -537,13 +592,24 @@ const styles = StyleSheet.create({
   depositBox: {
     backgroundColor: '#E6F4EC',
     borderRadius: 12,
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#A7D9B8',
   },
+  depositRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  depositInfo: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
   depositTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#076F32',
   },
@@ -551,14 +617,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#64748b',
-    marginTop: 4,
     marginBottom: 8,
   },
-  depositWarn: {
-    fontSize: 13,
+  walletBalanceText: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#b91c1c',
-    marginBottom: 8,
+    color: '#0f172a',
+  },
+  topUpBtn: {
+    backgroundColor: '#076F32',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignSelf: 'center',
+  },
+  topUpBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
   errorBox: {
     marginTop: 12,

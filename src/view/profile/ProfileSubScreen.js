@@ -1,7 +1,7 @@
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 
 export default function ProfileSubScreen({
   title,
@@ -18,26 +18,16 @@ export default function ProfileSubScreen({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={0}
     >
-      <View
-        style={[
-          embedded ? styles.headerPlain : styles.topBar,
-          !embedded && { paddingTop: insets.contentPaddingTop, paddingBottom: 14 },
-        ]}
-      >
-        {embedded ? (
+      {embedded ? (
+        <View style={styles.headerPlain}>
           <Text style={styles.titlePlain}>{title}</Text>
-        ) : (
-          <>
-            <CircularBackButton onPress={onBack} variant="plain" style={styles.backButton} />
-            <Text style={styles.titleWithBack} numberOfLines={1}>
-              {title}
-            </Text>
-          </>
-        )}
-      </View>
+        </View>
+      ) : (
+        <SubScreenHeader title={title} onBack={onBack} />
+      )}
       <ScrollView
         style={styles.body}
-        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottomSpacing + 24 }]}
+        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.nestedScrollPaddingBottom }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -58,28 +48,10 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f1f5f9',
   },
   titlePlain: {
     fontSize: 24,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    backgroundColor: '#ffffff',
-  },
-  backButton: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  titleWithBack: {
-    flex: 1,
-    fontSize: 20,
     fontWeight: '900',
     color: '#0f172a',
   },

@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 
 function formatDate(value) {
   if (!value) {
-    return '—';
+    return '';
   }
 
   return new Date(value).toLocaleString('vi-VN');
@@ -90,16 +90,6 @@ export default function SellerVerificationsPage() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Duyệt đăng ký người bán</h1>
-          <p>Danh sách hồ sơ đang chờ duyệt. Tự động cập nhật mỗi 5 giây.</p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
-
       {error ? <p className="error-banner">{error}</p> : null}
       {successMessage ? <p className="success-banner">{successMessage}</p> : null}
 
@@ -116,8 +106,8 @@ export default function SellerVerificationsPage() {
               <div>
                 <h2>{item.shopName || item.user?.fullName || 'Người dùng'}</h2>
                 <p>
-                  {item.user?.fullName || '—'} • {item.user?.email || '—'} •{' '}
-                  {item.user?.phone || '—'}
+                  {item.user?.fullName || ''} • {item.user?.email || ''} •{' '}
+                  {item.user?.phone || ''}
                 </p>
                 {item.shopUsername ? (
                   <p className="shop-username">@{item.shopUsername}</p>
@@ -129,7 +119,7 @@ export default function SellerVerificationsPage() {
             <div className="verification-grid">
               <div>
                 <strong>Danh mục kinh doanh</strong>
-                <p>{item.categoryName || '—'}</p>
+                <p>{item.categoryName || ''}</p>
               </div>
               <div>
                 <strong>Gửi lúc</strong>
@@ -137,22 +127,33 @@ export default function SellerVerificationsPage() {
               </div>
               <div className="verification-span-2">
                 <strong>Giới thiệu shop</strong>
-                <p>{item.shopDescription || '—'}</p>
+                <p>{item.shopDescription || ''}</p>
               </div>
               <div>
                 <strong>Địa chỉ</strong>
-                <p>{item.address || '—'}</p>
-              </div>
-              <div>
-                <strong>Địa chỉ hệ thống</strong>
-                <p>{item.DiaChiHeThong || '—'}</p>
+                <p>
+                  {item.addressHeThong ||
+                    item.systemAddress ||
+                    item.DiaChiHeThong ||
+                    item.address ||
+                    ''}
+                </p>
               </div>
               <div>
                 <strong>Tọa độ</strong>
                 <p>
-                  {Number.isFinite(item.latitude) && Number.isFinite(item.longitude)
-                    ? `${item.latitude}, ${item.longitude}`
-                    : '—'}
+                  {Number.isFinite(item.latitude) && Number.isFinite(item.longitude) ? (
+                    <a
+                      className="link-btn"
+                      href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {item.latitude}, {item.longitude} — Xem bản đồ
+                    </a>
+                  ) : (
+                    ''
+                  )}
                 </p>
               </div>
             </div>

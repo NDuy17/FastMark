@@ -33,3 +33,34 @@ export function unblockAccount(token, accountId) {
     body: {},
   });
 }
+
+export function getAccountHistory(token, accountId, params = {}) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      searchParams.set(key, String(value));
+    }
+  });
+  const query = searchParams.toString();
+  return apiRequest(
+    `/api/admin/accounts/${accountId}/history${query ? `?${query}` : ''}`,
+    { token }
+  );
+}
+
+export function getAccountFinance(token, accountId) {
+  return apiRequest(`/api/admin/accounts/${accountId}/finance`, { token });
+}
+
+export function getFinanceOverview(token, params = {}) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      searchParams.set(key, String(value));
+    }
+  });
+  const query = searchParams.toString();
+  return apiRequest(`/api/admin/finance/overview${query ? `?${query}` : ''}`, {
+    token,
+  });
+}

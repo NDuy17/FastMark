@@ -1,7 +1,7 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const REPORT_REASONS = [
+const DEFAULT_REPORT_REASONS = [
   'Hàng giả / hàng kém chất lượng',
   'Lừa đảo / gian lận',
   'Ngôn từ xúc phạm',
@@ -10,9 +10,10 @@ const REPORT_REASONS = [
   'Khác',
 ];
 
-export default function ReportSheet({ visible, title, onClose, onSubmit }) {
+export default function ReportSheet({ visible, title, reasons, onClose, onSubmit }) {
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 12);
+  const reasonList = Array.isArray(reasons) && reasons.length > 0 ? reasons : DEFAULT_REPORT_REASONS;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -29,7 +30,7 @@ export default function ReportSheet({ visible, title, onClose, onSubmit }) {
             bounces={false}
             showsVerticalScrollIndicator={false}
           >
-            {REPORT_REASONS.map((reason) => (
+            {reasonList.map((reason) => (
               <Pressable
                 key={reason}
                 style={({ pressed }) => [styles.reasonItem, pressed && styles.reasonItemPressed]}

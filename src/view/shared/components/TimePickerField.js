@@ -18,6 +18,8 @@ export default function TimePickerField({
   value,
   onChange,
   placeholder = '08:00',
+  compact = false,
+  style,
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draftDate, setDraftDate] = useState(() => parseTimeString(value, placeholder));
@@ -63,28 +65,32 @@ export default function TimePickerField({
 
   if (Platform.OS === 'web') {
     return (
-      <View style={styles.field}>
-        <Text style={styles.label}>{label}</Text>
+      <View style={[styles.field, compact && styles.fieldCompact, style]}>
+        {label ? <Text style={[styles.label, compact && styles.labelCompact]}>{label}</Text> : null}
         <TextInput
           value={value}
           onChangeText={onChange}
           placeholder={placeholder}
           placeholderTextColor="#94a3b8"
-          style={styles.webInput}
+          style={[styles.webInput, compact && styles.webInputCompact]}
         />
       </View>
     );
   }
 
   return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+    <View style={[styles.field, compact && styles.fieldCompact, style]}>
+      {label ? <Text style={[styles.label, compact && styles.labelCompact]}>{label}</Text> : null}
       <Pressable
         onPress={openPicker}
-        style={({ pressed }) => [styles.timeButton, pressed && styles.timeButtonPressed]}
+        style={({ pressed }) => [
+          styles.timeButton,
+          compact && styles.timeButtonCompact,
+          pressed && styles.timeButtonPressed,
+        ]}
       >
-        <Text style={styles.timeValue}>{displayValue}</Text>
-        <View style={styles.timeButtonIconWrap}>
+        <Text style={[styles.timeValue, compact && styles.timeValueCompact]}>{displayValue}</Text>
+        <View style={[styles.timeButtonIconWrap, compact && styles.timeButtonIconWrapCompact]}>
           <Ionicons name="time-outline" size={20} color="#076F32" />
         </View>
       </Pressable>
@@ -132,11 +138,19 @@ const styles = StyleSheet.create({
   field: {
     marginBottom: 12,
   },
+  fieldCompact: {
+    flex: 1,
+    marginBottom: 0,
+  },
   label: {
     fontSize: 13,
     fontWeight: '700',
     color: '#475569',
     marginBottom: 6,
+  },
+  labelCompact: {
+    fontSize: 11,
+    color: '#64748b',
   },
   timeButton: {
     minHeight: 52,
@@ -149,6 +163,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  timeButtonCompact: {
+    minHeight: 48,
+    borderWidth: 1,
+  },
   timeButtonPressed: {
     opacity: 0.85,
   },
@@ -158,6 +176,11 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     letterSpacing: 0.5,
   },
+  timeValueCompact: {
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
   timeButtonIconWrap: {
     width: 36,
     height: 36,
@@ -165,6 +188,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#E6F4EC',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  timeButtonIconWrapCompact: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
   },
   webInput: {
     minHeight: 46,
@@ -174,6 +202,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     color: '#0f172a',
     backgroundColor: '#ffffff',
+  },
+  webInputCompact: {
+    minHeight: 48,
+    borderWidth: 1,
   },
   modalBackdrop: {
     flex: 1,

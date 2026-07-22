@@ -23,3 +23,11 @@ exports.sendSystemNotification = async (req, res) => {
     data: result,
   });
 };
+
+exports.listBroadcastHistory = async (req, res) => {
+  const data = await adminNotificationService.listBroadcastHistory({
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  return success(res, { data });
+};

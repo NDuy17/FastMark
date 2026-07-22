@@ -1,6 +1,6 @@
 const User = require("../models/User");
 const ShopProfile = require("../models/ShopProfile");
-const { USER_ROLE } = require("../constants/sellerVerification");
+const { USER_ROLE } = require("../constants");
 
 async function requireSeller(req, res, next) {
   const user = await User.findById(req.currentUser?._id);

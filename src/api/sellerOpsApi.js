@@ -1,4 +1,4 @@
-import { apiRequest, AUTH_TIMEOUT_MS } from './client';
+import { apiRequest, AUTH_TIMEOUT_MS, SELLER_UPLOAD_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
 
 async function parseApiResponse(response) {
@@ -56,27 +56,6 @@ export async function checkSellerShopUsernameAvailabilityOnBackend({ idToken, sh
   );
   const parsed = await parseApiResponse(response);
   return parsed.data || { available: false, message: 'Không kiểm tra được username shop.' };
-}
-
-export async function uploadSellerShopAvatarOnBackend({ idToken, imageBase64, mimeType = 'image/jpeg' }) {
-  if (!imageBase64) {
-    throw new Error('Thiếu dữ liệu ảnh để upload.');
-  }
-
-  const response = await apiRequest(
-    API_ENDPOINTS.sellerShopAvatar,
-    {
-      method: 'POST',
-      headers: await authHeaders(idToken),
-      body: JSON.stringify({
-        imageBase64,
-        mimeType,
-      }),
-    },
-    AUTH_TIMEOUT_MS
-  );
-  const parsed = await parseApiResponse(response);
-  return parsed.data;
 }
 
 export async function getSellerOrdersOnBackend({ idToken, tab }) {
@@ -137,28 +116,56 @@ export async function cancelSellerReservationOnBackend({ idToken, reservationId,
   return payload.data?.reservation;
 }
 
-export async function completeSellerReservationOnBackend(idToken, reservationId) {
+export async function reportBuyerNoShowOnBackend({
+  idToken,
+  reservationId,
+  description,
+  note,
+  title,
+  latitude,
+  longitude,
+  address,
+  images,
+}) {
+  const id = String(reservationId || '').trim();
+  if (!id) {
+    throw new Error('Thiếu reservationId.');
+  }
+  const hasImages = Array.isArray(images) && images.length > 0;
   const response = await apiRequest(
-    API_ENDPOINTS.sellerReservationComplete(reservationId),
-    { method: 'POST', headers: await authHeaders(idToken), body: '{}' },
-    AUTH_TIMEOUT_MS
-  );
-  const payload = await parseApiResponse(response);
-  return payload.data?.reservation;
-}
-
-export async function scanCompleteSellerReservationOnBackend(idToken, code) {
-  const response = await apiRequest(
-    API_ENDPOINTS.sellerReservationScanComplete,
+    API_ENDPOINTS.sellerReservationReportBuyer(id),
     {
       method: 'POST',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({
+        reservationId: id,
+        title: title || 'Người mua không đến nhận hàng',
+        description: description || note || '',
+        note: note || description || '',
+        latitude,
+        longitude,
+        address: address || '',
+        images: images || [],
+      }),
     },
+    hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.reservation || payload.data;
+}
+
+export async function getReservationDisputeReportsOnBackend(idToken, reservationId) {
+  const id = encodeURIComponent(String(reservationId || '').trim());
+  if (!id) {
+    throw new Error('Thiếu reservationId.');
+  }
+  const response = await apiRequest(
+    API_ENDPOINTS.reservationDisputeReports(id),
+    { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
-  return payload.data?.reservation;
+  return payload.data?.reports || [];
 }
 
 export async function getSellerConversationsOnBackend(idToken) {

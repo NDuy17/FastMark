@@ -18,6 +18,18 @@ router.post(
 );
 
 router.post(
+  "/device-token",
+  verifyFirebaseToken,
+  asyncHandler(notificationController.registerDeviceToken)
+);
+
+router.delete(
+  "/device-token",
+  verifyFirebaseToken,
+  asyncHandler(notificationController.removeDeviceToken)
+);
+
+router.post(
   "/:id/read",
   verifyFirebaseToken,
   asyncHandler(notificationController.markAsRead)

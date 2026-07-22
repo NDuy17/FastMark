@@ -1,4 +1,4 @@
-const { USER_ROLE } = require("../constants/sellerVerification");
+const { USER_ROLE } = require("../constants");
 
 function requireAdmin(req, res, next) {
   if (!req.currentUser || req.currentUser.Role !== USER_ROLE.ADMIN) {

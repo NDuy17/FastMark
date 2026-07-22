@@ -1,326 +1,750 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
+import { getProductDetail } from '../api/catalogApi';
 import { getAdminDashboard } from '../api/dashboardApi';
+import DashboardDateRange, { presetDates } from '../components/DashboardDateRange';
 import { useAuth } from '../context/AuthContext';
 
-function formatCompact(value) {
-  const number = Number(value) || 0;
-  return new Intl.NumberFormat('vi-VN').format(number);
+function formatNumber(value) {
+  return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
 }
 
 function formatCurrency(value) {
-  return `${formatCompact(value)} ₫`;
+  return `${formatNumber(value)} ₫`;
 }
 
-function LineChart({ data = [], color = '#076F32', height = 180 }) {
-  const width = 560;
-  const padding = 24;
-  const values = data.map((item) => Number(item.value) || 0);
-  const max = Math.max(...values, 1);
-  const stepX = data.length > 1 ? (width - padding * 2) / (data.length - 1) : 0;
+function formatPercent(value) {
+  return `${new Intl.NumberFormat('vi-VN', {
+    maximumFractionDigits: 1,
+  }).format(Math.abs(value))}%`;
+}
 
-  const points = data.map((item, index) => {
-    const x = padding + index * stepX;
-    const y = height - padding - ((Number(item.value) || 0) / max) * (height - padding * 2);
-    return `${x},${y}`;
-  });
+function TrendBadge({ current, previous }) {
+  const cur = Number(current) || 0;
+  const prev = Number(previous) || 0;
+  // Kỳ trước = 0: quy ước tăng 100% nếu có phát sinh mới.
+  const percent = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
+  if (percent > 0) {
+    return <small className="trend-badge trend-up">+{formatPercent(percent)}</small>;
+  }
+  if (percent < 0) {
+    return <small className="trend-badge trend-down">-{formatPercent(percent)}</small>;
+  }
+  return <small className="trend-badge trend-flat">0%</small>;
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  current,
+  previous,
+  hasTrend = false,
+  active = false,
+  onClick,
+}) {
+  const Tag = onClick ? 'button' : 'article';
+  return (
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={`dashboard-metric${onClick ? ' clickable' : ''}${active ? ' active' : ''}`}
+    >
+      <span>{label}</span>
+      <div className="dashboard-metric-value">
+        <strong>{value}</strong>
+        {hasTrend ? <TrendBadge current={current} previous={previous} /> : null}
+      </div>
+      {detail ? <small>{detail}</small> : null}
+    </Tag>
+  );
+}
+
+function formatChartDate(dateKey) {
+  const [, month, day] = String(dateKey || '').split('-');
+  return month && day ? `${day}-${month}` : dateKey;
+}
+
+function formatCompactNumber(value) {
+  const num = Number(value) || 0;
+  if (Math.abs(num) >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1)}tỷ`;
+  if (Math.abs(num) >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}tr`;
+  if (Math.abs(num) >= 1_000) return `${(num / 1_000).toFixed(0)}k`;
+  return formatNumber(num);
+}
+
+function AreaChart({ data = [], color = '#ee4d2d', isCurrency = false }) {
+  const width = 960;
+  const height = 160;
+  const padLeft = 52;
+  const padRight = 20;
+  const padTop = 16;
+  const padBottom = 34;
+  const [hovered, setHovered] = useState(null);
+
+  const max = Math.max(...data.map((item) => Number(item.value) || 0), 1);
+  const innerW = width - padLeft - padRight;
+  const innerH = height - padTop - padBottom;
+  const stepX = data.length > 1 ? innerW / (data.length - 1) : 0;
+
+  const coords = data.map((item, index) => ({
+    x: padLeft + index * stepX,
+    y: padTop + innerH - ((Number(item.value) || 0) / max) * innerH,
+  }));
+  const linePoints = coords.map((point) => `${point.x},${point.y}`).join(' ');
+  const areaPoints = coords.length
+    ? `${padLeft},${padTop + innerH} ${linePoints} ${coords[coords.length - 1].x},${padTop + innerH}`
+    : '';
+
+  // Nhãn trục X: tối đa ~12 mốc để không dính chữ.
+  const labelStep = Math.max(1, Math.ceil(data.length / 12));
+
+  // Mốc trục Y: với số đếm thì chỉ dùng số nguyên để không bị lặp nhãn (0,1,1,2,2).
+  let yTicks;
+  if (isCurrency) {
+    yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+      ratio,
+      label: formatCompactNumber(max * ratio),
+    }));
+  } else {
+    const step = Math.max(1, Math.ceil(max / 4));
+    yTicks = [];
+    for (let value = 0; value <= max; value += step) {
+      yTicks.push({ ratio: value / max, label: formatNumber(value) });
+    }
+    if (yTicks[yTicks.length - 1].ratio < 1) {
+      yTicks.push({ ratio: 1, label: formatNumber(max) });
+    }
+  }
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="Line chart">
-      <polyline fill="none" stroke={color} strokeWidth="3" points={points.join(' ')} />
-      {data.map((item, index) => {
-        const x = padding + index * stepX;
-        const y = height - padding - ((Number(item.value) || 0) / max) * (height - padding * 2);
-        return <circle key={`${item.date}-${index}`} cx={x} cy={y} r="3.5" fill={color} />;
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="chart-svg"
+      role="img"
+      onMouseLeave={() => setHovered(null)}
+    >
+      {yTicks.map(({ ratio, label }) => {
+        const y = padTop + innerH - ratio * innerH;
+        return (
+          <g key={ratio}>
+            <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="#eef2f7" />
+            <text x={padLeft - 8} y={y + 3} textAnchor="end" fontSize="10" fill="#94a3b8">
+              {label}
+            </text>
+          </g>
+        );
       })}
+      {areaPoints ? <polygon points={areaPoints} fill={color} opacity="0.12" /> : null}
+      <polyline fill="none" stroke={color} strokeWidth="2.5" points={linePoints} />
+      {data.map((item, index) => {
+        const { x, y } = coords[index];
+        return (
+          <g key={`${item.date}-${index}`}>
+            <rect
+              x={x - stepX / 2}
+              y={padTop}
+              width={Math.max(stepX, 8)}
+              height={innerH}
+              fill="transparent"
+              onMouseEnter={() => setHovered(index)}
+            />
+            <circle cx={x} cy={y} r={hovered === index ? 5 : 3} fill={color} />
+            {index % labelStep === 0 || index === data.length - 1 ? (
+              <text x={x} y={height - 10} textAnchor="middle" fontSize="10" fill="#64748b">
+                {formatChartDate(item.date)}
+              </text>
+            ) : null}
+          </g>
+        );
+      })}
+      {hovered != null && coords[hovered] ? (
+        <g>
+          <rect
+            x={Math.min(Math.max(coords[hovered].x - 56, padLeft), width - padRight - 112)}
+            y={Math.max(coords[hovered].y - 42, 2)}
+            width="112"
+            height="34"
+            rx="6"
+            fill="#0f172a"
+            opacity="0.92"
+          />
+          <text
+            x={Math.min(Math.max(coords[hovered].x, padLeft + 56), width - padRight - 56)}
+            y={Math.max(coords[hovered].y - 28, 16)}
+            textAnchor="middle"
+            fontSize="10"
+            fill="#cbd5e1"
+          >
+            {formatChartDate(data[hovered].date)}
+          </text>
+          <text
+            x={Math.min(Math.max(coords[hovered].x, padLeft + 56), width - padRight - 56)}
+            y={Math.max(coords[hovered].y - 14, 30)}
+            textAnchor="middle"
+            fontSize="12"
+            fontWeight="800"
+            fill="#ffffff"
+          >
+            {isCurrency ? formatCurrency(data[hovered].value) : formatNumber(data[hovered].value)}
+          </text>
+        </g>
+      ) : null}
     </svg>
   );
 }
 
-function BarChart({ data = [], color = '#076F32', valueKey = 'value', labelKey = 'label', height = 220 }) {
-  const max = Math.max(...data.map((item) => Number(item[valueKey]) || 0), 1);
+/** Các ô chỉ số có biểu đồ theo ngày — bấm ô nào thì biểu đồ hiển thị chỉ số đó. */
+const METRIC_DEFS = [
+  {
+    key: 'newUsers',
+    label: 'Người dùng mới',
+    isCurrency: false,
+    seriesKey: 'usersOverTime',
+  },
+  {
+    key: 'newSellers',
+    label: 'Seller mới',
+    isCurrency: false,
+    seriesKey: 'sellersOverTime',
+  },
+  {
+    key: 'newProducts',
+    label: 'Sản phẩm mới',
+    isCurrency: false,
+    seriesKey: 'productsOverTime',
+  },
+  {
+    key: 'newReservations',
+    label: 'Đơn giữ hàng mới',
+    isCurrency: false,
+    seriesKey: 'reservationsOverTime',
+  },
+  {
+    key: 'completedReservations',
+    label: 'Đơn hoàn thành',
+    isCurrency: false,
+    seriesKey: 'completedOverTime',
+  },
+  {
+    key: 'cancelledReservations',
+    label: 'Đơn hủy',
+    isCurrency: false,
+    seriesKey: 'cancelledOverTime',
+  },
+  {
+    key: 'disputedReservations',
+    label: 'Đơn tranh chấp',
+    isCurrency: false,
+    seriesKey: 'disputedOverTime',
+  },
+  {
+    key: 'sellerPlanRevenue',
+    label: 'Doanh thu gói Seller',
+    isCurrency: true,
+    seriesKey: 'sellerPlanRevenueOverTime',
+    detail: (metrics) => `${formatNumber(metrics.sellerPlansSold)} lượt mua`,
+  },
+  {
+    key: 'bannerPlanRevenue',
+    label: 'Doanh thu Banner',
+    isCurrency: true,
+    seriesKey: 'bannerPlanRevenueOverTime',
+    detail: (metrics) => `${formatNumber(metrics.bannerPlansSold)} lượt mua`,
+  },
+  {
+    key: 'depositAmount',
+    label: 'Tiền cọc phát sinh',
+    isCurrency: true,
+    seriesKey: 'depositOverTime',
+    detail: (metrics) => `${formatNumber(metrics.depositCount)} lượt cọc`,
+  },
+  {
+    key: 'topupAmount',
+    label: 'Tổng tiền nạp',
+    isCurrency: true,
+    seriesKey: 'topupOverTime',
+    detail: (metrics) => `${formatNumber(metrics.topupCount)} lượt nạp thành công`,
+  },
+  {
+    key: 'withdrawAmount',
+    label: 'Tiền chờ rút',
+    isCurrency: true,
+    seriesKey: 'withdrawOverTime',
+    detail: (metrics) => `${formatNumber(metrics.withdrawCount)} yêu cầu rút`,
+  },
+  {
+    key: 'escrowAmount',
+    label: 'Tiền đang treo',
+    isCurrency: true,
+    seriesKey: 'escrowOverTime',
+    detail: (metrics) => `${formatNumber(metrics.escrowCount)} đơn chưa quyết toán`,
+  },
+  {
+    key: 'sellerVerificationRequests',
+    label: 'Seller chờ duyệt',
+    isCurrency: false,
+    seriesKey: 'sellerVerificationsOverTime',
+  },
+  {
+    key: 'newReports',
+    label: 'Khiếu nại chờ xử lý',
+    isCurrency: false,
+    seriesKey: 'reportsOverTime',
+  },
+  {
+    key: 'reportedShops',
+    label: 'Shop bị báo cáo',
+    isCurrency: false,
+    seriesKey: 'reportedShopsOverTime',
+  },
+  {
+    key: 'newBanners',
+    label: 'Banner đang chạy',
+    isCurrency: false,
+    seriesKey: 'bannersOverTime',
+  },
+];
+
+function formatFullDate(dateKey) {
+  const [year, month, day] = String(dateKey || '').split('-');
+  return year && month && day ? `${day}-${month}-${year}` : dateKey;
+}
+
+const DAILY_PAGE_SIZE = 10;
+
+function DailyPerformanceTable({ charts }) {
+  const [page, setPage] = useState(0);
+
+  // Ghép mọi chuỗi theo ngày thành từng dòng, ngày mới nhất lên đầu.
+  const rows = useMemo(() => {
+    const base = charts.usersOverTime || [];
+    return base
+      .map((item, index) => ({
+        date: item.date,
+        values: METRIC_DEFS.map(
+          (def) => Number((charts[def.seriesKey] || [])[index]?.value) || 0
+        ),
+      }))
+      .reverse();
+  }, [charts]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [charts]);
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / DAILY_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = rows.slice(
+    safePage * DAILY_PAGE_SIZE,
+    safePage * DAILY_PAGE_SIZE + DAILY_PAGE_SIZE
+  );
 
   return (
-    <div className="bar-chart" style={{ minHeight: height }}>
-      {data.map((item, index) => {
-        const value = Number(item[valueKey]) || 0;
-        const percent = Math.max(4, Math.round((value / max) * 100));
-        return (
-          <div key={`${item[labelKey]}-${index}`} className="bar-chart-row">
-            <div className="bar-chart-label">{item[labelKey]}</div>
-            <div className="bar-chart-track">
-              <div className="bar-chart-fill" style={{ width: `${percent}%`, background: color }} />
-            </div>
-            <div className="bar-chart-value">{formatCompact(value)}</div>
-          </div>
-        );
-      })}
-      {data.length === 0 ? <div className="empty-inline">Chưa có dữ liệu</div> : null}
-    </div>
+    <section className="panel daily-perf-panel">
+      <h2>Hiệu suất hàng ngày</h2>
+      <div className="daily-perf-scroll">
+        <table className="daily-perf-table">
+          <thead>
+            <tr>
+              <th>Ngày</th>
+              {METRIC_DEFS.map((def) => (
+                <th key={def.key}>{def.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((row) => (
+              <tr key={row.date}>
+                <td>{formatFullDate(row.date)}</td>
+                {METRIC_DEFS.map((def, index) => (
+                  <td key={def.key}>
+                    {def.isCurrency
+                      ? formatCompactNumber(row.values[index])
+                      : formatNumber(row.values[index])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pageCount > 1 ? (
+        <div className="daily-perf-pager">
+          <button
+            type="button"
+            disabled={safePage === 0}
+            onClick={() => setPage(safePage - 1)}
+          >
+            Trước
+          </button>
+          <span>
+            Trang {safePage + 1}/{pageCount}
+          </span>
+          <button
+            type="button"
+            disabled={safePage >= pageCount - 1}
+            onClick={() => setPage(safePage + 1)}
+          >
+            Sau
+          </button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
-function PieChart({ data = [], size = 180 }) {
-  const total = data.reduce((sum, item) => sum + (Number(item.value) || 0), 0) || 1;
-  const colors = ['#076F32', '#076F32', '#f59e0b', '#ef4444', '#6366f1', '#94a3b8'];
-  let current = 0;
-  const gradients = data.map((item, index) => {
-    const value = Number(item.value) || 0;
-    const start = (current / total) * 100;
-    current += value;
-    const end = (current / total) * 100;
-    return `${colors[index % colors.length]} ${start}% ${end}%`;
-  });
+function RankAvatar({ src, alt, fallback }) {
+  if (src) {
+    return <img className="rank-avatar" src={src} alt={alt} loading="lazy" />;
+  }
+  return <div className="rank-avatar rank-avatar-fallback">{fallback}</div>;
+}
+
+function TopRankPanel({ title, subtitle, rows, renderRow }) {
+  const topRows = rows.slice(0, 10);
 
   return (
-    <div className="pie-wrap">
-      <div
-        className="pie-chart"
-        style={{
-          width: size,
-          height: size,
-          background: `conic-gradient(${gradients.join(', ')})`,
-        }}
+    <section className="panel rank-panel">
+      <div className="rank-panel-head">
+        <h2>{title}</h2>
+        <span>{subtitle}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="rank-empty">Chưa có dữ liệu trong khoảng thời gian này.</p>
+      ) : (
+        <ol className="rank-list">
+          {topRows.map((row, index) => renderRow(row, index))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function rankBadgeClass(index) {
+  if (index === 0) return 'rank-num rank-gold';
+  if (index === 1) return 'rank-num rank-silver';
+  if (index === 2) return 'rank-num rank-bronze';
+  return 'rank-num';
+}
+
+function TrendChartSection({ metricDef, charts }) {
+  return (
+    <section className="panel dashboard-trend-panel">
+      <h2>
+        Xu hướng theo thời gian
+        <span className="trend-panel-metric"> — {metricDef.label}</span>
+      </h2>
+      <AreaChart
+        data={charts[metricDef.seriesKey] || []}
+        color="#076F32"
+        isCurrency={metricDef.isCurrency}
       />
-      <ul className="pie-legend">
-        {data.map((item, index) => (
-          <li key={`${item.label}-${index}`}>
-            <span style={{ background: colors[index % colors.length] }} />
-            {item.label}: {formatCompact(item.value)}
-          </li>
-        ))}
-      </ul>
-    </div>
+    </section>
   );
 }
 
-function SkeletonDashboard() {
-  return (
-    <div className="dashboard-skeleton">
-      {Array.from({ length: 8 }).map((_, index) => (
-        <div key={index} className="skeleton skeleton-card" />
-      ))}
-    </div>
-  );
-}
-
-export default function DashboardPage({
-  title = 'Dashboard',
-  subtitle = 'Theo dõi toàn bộ hoạt động hệ thống theo khoảng thời gian đã chọn.',
-} = {}) {
+export default function DashboardPage() {
   const { getIdToken } = useAuth();
-  const [range, setRange] = useState('month');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const navigate = useNavigate();
+  const today = useMemo(() => presetDates(1), []);
+  const [preset, setPreset] = useState('today');
+  const [from, setFrom] = useState(today.from);
+  const [to, setTo] = useState(today.to);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // null = chưa chọn ô nào, ẩn biểu đồ xu hướng cho gọn.
+  const [selectedMetric, setSelectedMetric] = useState(null);
 
   const loadDashboard = useCallback(async () => {
+    if (!from || !to) return;
     setLoading(true);
     setError('');
     try {
       const token = await getIdToken();
-      const params = range === 'custom' ? { range: 'custom', from, to } : { range };
-      const data = await getAdminDashboard(token, params);
+      const data = await getAdminDashboard(token, { from, to });
       setDashboard(data);
     } catch (loadError) {
-      setDashboard(null);
       setError(loadError.message || 'Không tải được dashboard.');
     } finally {
       setLoading(false);
     }
-  }, [from, getIdToken, range, to]);
+  }, [from, getIdToken, to]);
 
   useEffect(() => {
-    if (range === 'custom' && (!from || !to)) {
-      return;
-    }
     loadDashboard();
-  }, [loadDashboard, from, range, to]);
+  }, [loadDashboard]);
 
   const cards = dashboard?.cards || {};
   const charts = dashboard?.charts || {};
+  const metrics = dashboard?.metrics || {};
+  const previous = dashboard?.previousPeriod || {};
   const rankings = dashboard?.rankings || {};
+  const singleDay = from === to;
+  const mismatch =
+    Number(cards.escrowBalance) !== Number(cards.escrowReservationsAmount);
+  const selectedDef = selectedMetric
+    ? METRIC_DEFS.find((def) => def.key === selectedMetric) || null
+    : null;
 
-  const revenueBars = (charts.revenueByShop || []).map((item) => ({
-    label: item.shopName,
-    value: item.revenue,
-  }));
+  const [productDetail, setProductDetail] = useState(null);
+  const [productDetailLoading, setProductDetailLoading] = useState(false);
 
-  const topFavoriteBars = (rankings.topFavoriteProducts || []).map((item) => ({
-    label: item.name,
-    value: item.likeCount,
-  }));
+  const openProductDetail = async (productId) => {
+    setProductDetailLoading(true);
+    try {
+      const token = await getIdToken();
+      const payload = await getProductDetail(token, productId);
+      setProductDetail(payload.data?.product || null);
+    } catch (detailError) {
+      setError(detailError.message || 'Không tải được chi tiết sản phẩm.');
+    } finally {
+      setProductDetailLoading(false);
+    }
+  };
+
+  const renderMetricCard = (key) => {
+    const def = METRIC_DEFS.find((item) => item.key === key);
+    if (!def) return null;
+    return (
+      <MetricCard
+        key={def.key}
+        label={def.label}
+        value={
+          def.isCurrency
+            ? formatCurrency(metrics[def.key])
+            : formatNumber(metrics[def.key])
+        }
+        detail={def.detail ? def.detail(metrics) : undefined}
+        hasTrend
+        current={metrics[def.key]}
+        previous={previous[def.key]}
+        active={selectedMetric === def.key}
+        onClick={() =>
+          setSelectedMetric((prev) => (prev === def.key ? null : def.key))
+        }
+      />
+    );
+  };
 
   return (
     <div className="page dashboard-page">
-      <div className="page-header">
-        <div>
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
-        </div>
-        <button type="button" onClick={loadDashboard}>
-          Làm mới
-        </button>
-      </div>
+      <section className="dashboard-toolbar">
+        <DashboardDateRange
+          from={from}
+          to={to}
+          preset={preset}
+          onApply={(range) => {
+            setPreset(range.preset);
+            setFrom(range.from);
+            setTo(range.to);
+          }}
+        />
+        <span className="dashboard-updated">
+          Dữ liệu đến {new Date().toLocaleString('vi-VN')}
+        </span>
+      </section>
 
-      <div className="dashboard-filters">
-        <div className="filter-chips">
-          {[
-            { key: 'day', label: '1 ngày' },
-            { key: 'week', label: '7 ngày' },
-            { key: 'month', label: '1 tháng' },
-            { key: 'custom', label: 'Tùy chọn' },
-          ].map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={range === item.key ? 'chip active' : 'chip'}
-              onClick={() => setRange(item.key)}
-            >
-              {item.label}
-            </button>
+      {error ? <div className="error-box">{error}</div> : null}
+      {loading && !dashboard ? (
+        <div className="dashboard-skeleton">
+          {Array.from({ length: 8 }).map((_, index) => (
+            <div key={index} className="skeleton skeleton-card" />
           ))}
         </div>
-        {range === 'custom' ? (
-          <div className="date-range">
-            <label>
-              Từ
-              <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-            </label>
-            <label>
-              Đến
-              <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-            </label>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
-      {loading ? <SkeletonDashboard /> : null}
-      {error ? <div className="error-box">{error}</div> : null}
-
-      {!loading && dashboard ? (
+      {dashboard ? (
         <>
-          <div className="stat-grid">
-            <div className="stat-card">
-              <span>Tổng người dùng</span>
-              <strong>{formatCompact(cards.totalUsers)}</strong>
+          <section>
+            <div className="dashboard-row dashboard-row-4">
+              {[
+                'newUsers',
+                'newSellers',
+                'newProducts',
+                'newReservations',
+                'completedReservations',
+                'cancelledReservations',
+                'disputedReservations',
+                'sellerPlanRevenue',
+                'bannerPlanRevenue',
+                'newBanners',
+                'topupAmount',
+                'withdrawAmount',
+                'depositAmount',
+                'escrowAmount',
+                'sellerVerificationRequests',
+                'newReports',
+                'reportedShops',
+              ].map(renderMetricCard)}
             </div>
-            <div className="stat-card">
-              <span>Tổng người bán</span>
-              <strong>{formatCompact(cards.totalSellers)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Tổng gian hàng</span>
-              <strong>{formatCompact(cards.totalShops)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Tổng sản phẩm</span>
-              <strong>{formatCompact(cards.totalProducts)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Tổng đơn giữ hàng</span>
-              <strong>{formatCompact(cards.totalReservations)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Doanh thu kỳ</span>
-              <strong>{formatCurrency(cards.periodRevenue)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Người mua</span>
-              <strong>{formatCompact(cards.totalBuyers)}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Gian hàng hoạt động</span>
-              <strong>{formatCompact(cards.totalActiveShops)}</strong>
-            </div>
-          </div>
-
-          <div className="dashboard-grid">
-            <section className="panel">
-              <h2>Người dùng theo thời gian</h2>
-              <LineChart data={charts.usersOverTime || []} />
-            </section>
-
-            <section className="panel">
-              <h2>Đơn giữ hàng theo thời gian</h2>
-              <LineChart data={charts.reservationsOverTime || []} color="#f59e0b" />
-            </section>
-
-            <section className="panel">
-              <h2>Phân bố trạng thái đơn</h2>
-              <PieChart data={charts.reservationStatusPie || []} />
-            </section>
-
-            <section className="panel">
-              <h2>Tỷ lệ vai trò</h2>
-              <PieChart data={charts.rolePie || []} />
-            </section>
-
-            <section className="panel panel-wide">
-              <h2>Doanh thu theo cửa hàng</h2>
-              <BarChart data={revenueBars} color="#076F32" />
-            </section>
-
-            <section className="panel panel-wide">
-              <h2>Top sản phẩm được yêu thích</h2>
-              <BarChart data={topFavoriteBars} color="#e11d48" />
-            </section>
-          </div>
-
-          <section className="panel">
-            <h2>Top cửa hàng nổi bật</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Gian hàng</th>
-                    <th>Đánh giá</th>
-                    <th>Người theo dõi</th>
-                    <th>Sản phẩm</th>
-                    <th>Đã bán</th>
-                    <th>Trạng thái</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(rankings.topShops || []).map((shop) => (
-                    <tr key={shop.shopId}>
-                      <td>
-                        <div className="cell-with-avatar">
-                          {shop.logo ? (
-                            <img src={shop.logo} alt="" className="table-avatar" />
-                          ) : (
-                            <div className="table-avatar fallback">
-                              {String(shop.name || 'G').charAt(0)}
-                            </div>
-                          )}
-                          <span>{shop.name}</span>
-                        </div>
-                      </td>
-                      <td>{Number(shop.rating || 0).toFixed(1)}</td>
-                      <td>{formatCompact(shop.followersCount)}</td>
-                      <td>{formatCompact(shop.totalProducts)}</td>
-                      <td>{formatCompact(shop.soldCount)}</td>
-                      <td>
-                        <span className={shop.isOpen ? 'badge badge-success' : 'badge badge-danger'}>
-                          {shop.isOpen ? 'Mở cửa' : 'Đóng cửa'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {(rankings.topShops || []).length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="empty-inline">
-                        Chưa có dữ liệu cửa hàng nổi bật.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+            {mismatch ? (
+              <p className="dashboard-warning">
+                Cảnh báo đối soát: số dư ví hệ thống ({formatCurrency(cards.escrowBalance)}) khác
+                tổng cọc chưa quyết toán ({formatCurrency(cards.escrowReservationsAmount)}).
+              </p>
+            ) : null}
           </section>
+
+          {selectedDef && !singleDay ? (
+            <TrendChartSection metricDef={selectedDef} charts={charts} />
+          ) : null}
+
+          {!singleDay ? <DailyPerformanceTable charts={charts} /> : null}
+
+          <div className="rank-row">
+            <TopRankPanel
+              title="Top 10 shop bán chạy"
+              subtitle="Theo doanh thu đơn hoàn thành trong kỳ"
+              rows={rankings.topSellingShops || []}
+              renderRow={(shop, index) => (
+                <li
+                  key={shop.shopId}
+                  className="rank-item rank-item-click"
+                  title="Xem chi tiết shop"
+                  onClick={() => navigate(`/shops/${shop.shopId}`)}
+                >
+                  <span className={rankBadgeClass(index)}>{index + 1}</span>
+                  <RankAvatar
+                    src={shop.avatar}
+                    alt={shop.shopName}
+                    fallback={(shop.shopName || 'S').charAt(0).toUpperCase()}
+                  />
+                  <div className="rank-info">
+                    <strong>{shop.shopName}</strong>
+                    <small>{formatNumber(shop.orders)} đơn hoàn thành</small>
+                  </div>
+                  <div className="rank-value">
+                    <strong>{formatCurrency(shop.revenue)}</strong>
+                    <small>doanh thu</small>
+                  </div>
+                </li>
+              )}
+            />
+            <TopRankPanel
+              title="Top 10 sản phẩm bán chạy"
+              subtitle="Theo số lượng bán từ đơn hoàn thành trong kỳ"
+              rows={rankings.topSellingProducts || []}
+              renderRow={(product, index) => (
+                <li
+                  key={product.productId}
+                  className="rank-item rank-item-click"
+                  title="Xem chi tiết sản phẩm"
+                  onClick={() => openProductDetail(product.productId)}
+                >
+                  <span className={rankBadgeClass(index)}>{index + 1}</span>
+                  <RankAvatar
+                    src={product.thumbnail}
+                    alt={product.name}
+                    fallback={(product.name || 'P').charAt(0).toUpperCase()}
+                  />
+                  <div className="rank-info">
+                    <strong>{product.name}</strong>
+                    <small>
+                      {product.shopName ? `${product.shopName} · ` : ''}
+                      {formatNumber(product.soldQuantity)} đã bán · {formatNumber(product.orders)} đơn
+                    </small>
+                  </div>
+                  <div className="rank-value">
+                    <strong>{formatCurrency(product.revenue)}</strong>
+                    <small>doanh thu</small>
+                  </div>
+                </li>
+              )}
+            />
+          </div>
         </>
+      ) : null}
+
+      {productDetailLoading ? (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <p>Đang tải chi tiết sản phẩm...</p>
+          </div>
+        </div>
+      ) : null}
+
+      {productDetail ? (
+        <div className="modal-backdrop" onClick={() => setProductDetail(null)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <header className="page-header">
+              <div>
+                <h2>{productDetail.productName}</h2>
+                <p>
+                  {productDetail.shopName} · {productDetail.categoryName || ''}
+                </p>
+              </div>
+              <button type="button" onClick={() => setProductDetail(null)}>
+                Đóng
+              </button>
+            </header>
+            <dl className="detail-list">
+              <div>
+                <dt>Trạng thái</dt>
+                <dd>{productDetail.status === 1 ? 'Đang hiện' : 'Đã ẩn'}</dd>
+              </div>
+              <div>
+                <dt>Đơn vị</dt>
+                <dd>{productDetail.donVi || ''}</dd>
+              </div>
+              <div>
+                <dt>Lượt xem</dt>
+                <dd>{productDetail.viewCount}</dd>
+              </div>
+              <div>
+                <dt>Lượt thích</dt>
+                <dd>{productDetail.likeCount}</dd>
+              </div>
+              <div>
+                <dt>Đã bán</dt>
+                <dd>{productDetail.soldCount}</dd>
+              </div>
+              <div>
+                <dt>Đơn giữ hàng</dt>
+                <dd>
+                  {productDetail.reservationCount ?? 0} (hoàn thành{' '}
+                  {productDetail.completedReservations ?? 0})
+                </dd>
+              </div>
+              <div>
+                <dt>Tỉ lệ chuyển đổi</dt>
+                <dd>{productDetail.conversionRate ?? 0}% (xem → giữ hàng)</dd>
+              </div>
+              <div>
+                <dt>Ngày tạo</dt>
+                <dd>
+                  {productDetail.createdAt
+                    ? new Date(productDetail.createdAt).toLocaleString('vi-VN')
+                    : ''}
+                </dd>
+              </div>
+            </dl>
+            {(productDetail.thumbnails || []).length > 0 ? (
+              <div className="image-grid" style={{ marginTop: 12 }}>
+                {productDetail.thumbnails.slice(0, 6).map((url) => (
+                  <a key={url} href={url} target="_blank" rel="noreferrer">
+                    <img src={url} alt="Ảnh sản phẩm" />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            <p>{productDetail.description || 'Chưa có mô tả.'}</p>
+            <h3>Phân loại</h3>
+            <ul className="report-list">
+              {(productDetail.variants || []).map((variant) => (
+                <li key={variant.id} className="report-item">
+                  <strong>{variant.variantName}</strong>
+                  <p>
+                    {Number(variant.price || 0).toLocaleString('vi-VN')}đ · Tồn{' '}
+                    {variant.quantity} · Đã bán {variant.soldCount}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
       ) : null}
     </div>
   );

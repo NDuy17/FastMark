@@ -6,7 +6,9 @@ import { useSelector } from 'react-redux';
 
 import { getBuyerConversationsOnBackend } from '../../api/messageApi';
 import { getMyNotificationsOnBackend } from '../../api/notificationApi';
+import { notificationMatchesAudience } from '../../core/utils/notificationRealtime';
 import { APP_MODE_BUYER, useAppMode } from '../../hooks/useAppMode';
+import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { usePresence } from '../../hooks/usePresence';
 import { useShopPresence } from '../../hooks/useShopPresence';
 import { useSellerAccessSync } from '../../hooks/useSellerAccessSync';
@@ -38,6 +40,13 @@ const TABS = [
     label: 'Gian hàng',
     icon: 'storefront-outline',
     activeIcon: 'storefront',
+  },
+  {
+    key: 'notifications',
+    label: 'Thông báo',
+    icon: 'notifications-outline',
+    activeIcon: 'notifications',
+    badgeKey: 'notifications',
   },
   { key: 'profile', label: 'Tài khoản', icon: 'person-outline', activeIcon: 'person' },
 ];
@@ -84,11 +93,11 @@ export default function AuthenticatedHome() {
   const [inboxChatRequest, setInboxChatRequest] = useState(null);
   const [openBuyerOrdersRequest, setOpenBuyerOrdersRequest] = useState(null);
   const [nestedTabState, setNestedTabState] = useState({});
-  const [tabInstanceKeys, setTabInstanceKeys] = useState({});
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [buyerOverlay, setBuyerOverlay] = useState(null);
   const [profileNavRequest, setProfileNavRequest] = useState(null);
+  const [resumeReserveRequest, setResumeReserveRequest] = useState(null);
 
   const updateNestedTabState = useCallback((tabKey, isNested) => {
     setNestedTabState((current) => {
@@ -100,26 +109,60 @@ export default function AuthenticatedHome() {
     });
   }, []);
 
+  const reportHomeNested = useCallback(
+    (isNested) => updateNestedTabState('home', isNested),
+    [updateNestedTabState]
+  );
+  const reportMapNested = useCallback(
+    (isNested) => updateNestedTabState('map', isNested),
+    [updateNestedTabState]
+  );
+  const reportOrdersNested = useCallback(
+    (isNested) => updateNestedTabState('orders', isNested),
+    [updateNestedTabState]
+  );
+  const reportShopNested = useCallback(
+    (isNested) => updateNestedTabState('shop', isNested),
+    [updateNestedTabState]
+  );
+  const reportNotificationsNested = useCallback(
+    (isNested) => updateNestedTabState('notifications', isNested),
+    [updateNestedTabState]
+  );
+  const reportProfileNested = useCallback(
+    (isNested) => updateNestedTabState('profile', isNested),
+    [updateNestedTabState]
+  );
+
+  const closeBuyerOverlay = useCallback(() => {
+    setBuyerOverlay(null);
+    setInboxChatRequest(null);
+    setProductsFocusRequest(null);
+  }, []);
+
   const handleSelectTab = useCallback(
     (nextTab) => {
-      if (!nextTab || nextTab === activeTab) {
+      if (!nextTab) {
+        return;
+      }
+
+      // Overlay (Thông báo/Inbox/Sản phẩm) che tab — bấm tab hiện tại cũng phải đóng được.
+      if (buyerOverlay) {
+        closeBuyerOverlay();
+        if (nextTab === activeTab) {
+          updateNestedTabState(activeTab, false);
+          return;
+        }
+      }
+
+      if (nextTab === activeTab) {
         return;
       }
 
       const leavingTab = activeTab;
 
-      setTabInstanceKeys((current) => ({
-        ...current,
-        [leavingTab]: (current[leavingTab] || 0) + 1,
-      }));
-
-      setNestedTabState((current) => {
-        if (!current[leavingTab]) {
-          return current;
-        }
-        return { ...current, [leavingTab]: false };
-      });
-
+      // Đóng overlay / one-shot request khi đổi tab — không remount tab
+      // (remount khiến sellerRegisterRequest / profileNavRequest kích lại → mất bottom nav).
       if (leavingTab === 'profile') {
         setProductDetailId(null);
         setProfileNavRequest(null);
@@ -127,11 +170,21 @@ export default function AuthenticatedHome() {
       if (leavingTab === 'map') {
         setMapFocusRequest(null);
       }
+      if (leavingTab === 'shop') {
+        setSellerRegisterRequest(0);
+      }
 
-      setBuyerOverlay(null);
+      closeBuyerOverlay();
+
+      // Tab gốc luôn hiện bottom nav; panel active sẽ báo lại nếu đang ở màn phụ.
+      setNestedTabState((current) => ({
+        ...current,
+        [leavingTab]: false,
+        [nextTab]: false,
+      }));
       setActiveTab(nextTab);
     },
-    [activeTab]
+    [activeTab, buyerOverlay, closeBuyerOverlay, updateNestedTabState]
   );
 
   const loadUnreadBadges = useCallback(async () => {
@@ -153,6 +206,21 @@ export default function AuthenticatedHome() {
     }
   }, []);
 
+  const handleRealtimeNotification = useCallback((notification) => {
+    if (!notificationMatchesAudience(notification, 'buyer')) {
+      return;
+    }
+
+    if (!notification.isRead) {
+      setUnreadNotificationsCount((current) => current + 1);
+    }
+  }, []);
+
+  useNotificationSocket({
+    enabled: isReady,
+    onNotificationNew: handleRealtimeNotification,
+  });
+
   useSellerAccessSync({
     enabled: true,
   });
@@ -173,10 +241,6 @@ export default function AuthenticatedHome() {
   useEffect(() => {
     if (activeTab === 'favorites' || activeTab === 'products') {
       setActiveTab('orders');
-    }
-    if (activeTab === 'notifications') {
-      setActiveTab('home');
-      setBuyerOverlay('notifications');
     }
     if (activeTab === 'inbox') {
       setActiveTab('home');
@@ -248,17 +312,13 @@ export default function AuthenticatedHome() {
     handleSelectTab('map');
   }
 
-  function handleOpenNotificationsFromHome() {
-    setBuyerOverlay('notifications');
-  }
-
   function handleOpenInbox() {
     setBuyerOverlay('inbox');
   }
 
   function handleCloseBuyerOverlay() {
-    setBuyerOverlay(null);
-    setInboxChatRequest(null);
+    closeBuyerOverlay();
+    updateNestedTabState(activeTab, false);
   }
 
   function handleClearMapFocus() {
@@ -311,21 +371,44 @@ export default function AuthenticatedHome() {
     handleSelectTab('profile');
   }
 
+  function handleContinueReservationAfterTopUp(payload) {
+    if (!payload?.productId) {
+      handleOpenProfileNav('wallet');
+      return;
+    }
+    setProfileNavRequest(null);
+    setProductDetailId(null);
+    setResumeReserveRequest({
+      productId: String(payload.productId),
+      variantId: payload.variantId || null,
+      quantity: Number(payload.quantity) || 1,
+      at: Date.now(),
+    });
+    handleSelectTab('home');
+  }
+
   const tabPanes = useMemo(
     () => ({
       home: (
         <HomeScreen
-          unreadNotificationsCount={unreadNotificationsCount}
           unreadMessagesCount={unreadMessagesCount}
           onOpenMap={handleOpenMapFromHome}
           onOpenProducts={handleOpenProductsFromHome}
-          onOpenNotifications={handleOpenNotificationsFromHome}
+          onOpenSearch={() => handleOpenProductsFromHome({ focusSearch: true, search: '' })}
           onOpenInbox={handleOpenInbox}
           onOpenBuyerOrders={handleOpenBuyerOrders}
           onEditAccount={() => handleOpenProfileNav('edit-account')}
+          onOpenWallet={() => handleOpenProfileNav('wallet')}
+          onOpenFavoriteProducts={() => handleOpenProfileNav('favorite-products')}
+          onOpenReport={() => handleOpenProfileNav('account-report')}
           onStartSellerRegister={handleStartSellerRegister}
           onOpenShop={handleOpenShopNav}
-          onNavigationStateChange={(isNested) => updateNestedTabState('home', isNested)}
+          onOpenWalletTopUp={() => handleOpenProfileNav('wallet-topup')}
+          onOpenChat={handleOpenChat}
+          resumeReserveRequest={resumeReserveRequest}
+          onResumeReserveHandled={() => setResumeReserveRequest(null)}
+          isScreenActive={activeTab === 'home'}
+          onNavigationStateChange={reportHomeNested}
         />
       ),
       map: (
@@ -335,7 +418,8 @@ export default function AuthenticatedHome() {
           onClearFocus={handleClearMapFocus}
           onPickupCompleted={handlePickupCompleted}
           onOpenBuyerOrders={handleOpenBuyerOrders}
-          onNavigationStateChange={(isNested) => updateNestedTabState('map', isNested)}
+          onOpenWalletTopUp={() => handleOpenProfileNav('wallet-topup')}
+          onNavigationStateChange={reportMapNested}
           isScreenActive={activeTab === 'map'}
         />
       ),
@@ -346,7 +430,8 @@ export default function AuthenticatedHome() {
           tabRequestKey={openBuyerOrdersRequest?.at || 0}
           onNavigatePickup={handleNavigatePickup}
           onOpenStore={handleOpenStoreFromProfile}
-          onNavigationStateChange={(isNested) => updateNestedTabState('orders', isNested)}
+          isScreenActive={activeTab === 'orders'}
+          onNavigationStateChange={reportOrdersNested}
         />
       ),
       shop: (
@@ -355,7 +440,14 @@ export default function AuthenticatedHome() {
           sellerRegisterRequest={sellerRegisterRequest}
           productRefreshKey={productRefreshKey}
           onProductChanged={handleProductChanged}
-          onNavigationStateChange={(isNested) => updateNestedTabState('shop', isNested)}
+          onNavigationStateChange={reportShopNested}
+        />
+      ),
+      notifications: (
+        <NotificationsScreen
+          audience="buyer"
+          isScreenActive={activeTab === 'notifications'}
+          onNavigationStateChange={reportNotificationsNested}
         />
       ),
       profile: (
@@ -365,8 +457,8 @@ export default function AuthenticatedHome() {
           onOpenStore={handleOpenStoreFromProfile}
           onNavigateToStore={handleNavigateToStore}
           onOpenInbox={handleOpenInbox}
+          onOpenChat={handleOpenChat}
           onNavigatePickup={handleNavigatePickup}
-          openBuyerOrdersRequest={openBuyerOrdersRequest}
           isProfileVisible={activeTab === 'profile'}
           productDetailId={productDetailId}
           productRefreshKey={productRefreshKey}
@@ -376,7 +468,8 @@ export default function AuthenticatedHome() {
           profileNavRequest={profileNavRequest}
           onStartSellerRegister={handleStartSellerRegister}
           onOpenShopTab={handleOpenShopNav}
-          onNavigationStateChange={(isNested) => updateNestedTabState('profile', isNested)}
+          onContinueReservationAfterTopUp={handleContinueReservationAfterTopUp}
+          onNavigationStateChange={reportProfileNested}
         />
       ),
     }),
@@ -387,11 +480,16 @@ export default function AuthenticatedHome() {
       openBuyerOrdersRequest,
       productDetailId,
       productRefreshKey,
+      resumeReserveRequest,
       profileNavRequest,
+      reportHomeNested,
+      reportMapNested,
+      reportNotificationsNested,
+      reportOrdersNested,
+      reportProfileNested,
+      reportShopNested,
       sellerRegisterRequest,
       unreadMessagesCount,
-      unreadNotificationsCount,
-      updateNestedTabState,
     ]
   );
 
@@ -404,7 +502,7 @@ export default function AuthenticatedHome() {
       <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
         {tabs.map((tab) => (
           <View
-            key={`${tab.key}-${tabInstanceKeys[tab.key] || 0}`}
+            key={tab.key}
             style={[styles.tabPane, activeTab !== tab.key && styles.tabHidden]}
           >
             {tabPanes[tab.key]}
@@ -415,19 +513,16 @@ export default function AuthenticatedHome() {
             <ProductsScreen
               focusRequest={productsFocusRequest}
               onOpenBuyerOrders={handleOpenBuyerOrders}
+              onOpenWalletTopUp={() => handleOpenProfileNav('wallet-topup')}
+              onOpenChat={handleOpenChat}
               onBack={handleCloseBuyerOverlay}
-              onNavigationStateChange={(isNested) => updateNestedTabState('home', isNested)}
             />
-          </View>
-        ) : null}
-        {buyerOverlay === 'notifications' ? (
-          <View style={styles.overlayPane}>
-            <NotificationsScreen audience="buyer" onBack={handleCloseBuyerOverlay} />
           </View>
         ) : null}
         {buyerOverlay === 'inbox' ? (
           <View style={styles.overlayPane}>
             <InboxScreen
+              key={inboxChatRequest?.at || 'inbox'}
               buyerView
               messagesOnly
               chatRequest={inboxChatRequest}
@@ -438,13 +533,13 @@ export default function AuthenticatedHome() {
         ) : null}
       </SafeAreaView>
 
-      {!nestedTabState[activeTab] && !buyerOverlay ? (
+      {/* Bottom nav chỉ ẩn khi overlay phụ hoặc màn nested trong tab. */}
+      {!buyerOverlay && !nestedTabState[activeTab] ? (
         <SafeAreaView style={styles.tabBarSafe} edges={['bottom', 'left', 'right']}>
           <View style={styles.tabBar}>
             {tabs.map((tab) => {
               const isActive = activeTab === tab.key;
               const color = isActive ? ACTIVE_COLOR : INACTIVE_COLOR;
-
               return (
                 <Pressable
                   key={tab.key}
@@ -493,6 +588,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#f8fafb',
     zIndex: 20,
+    elevation: 20,
   },
   tabBarSafe: {
     backgroundColor: '#ffffff',

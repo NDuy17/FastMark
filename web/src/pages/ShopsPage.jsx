@@ -17,7 +17,7 @@ const OPEN_OPTIONS = [
 ];
 
 function formatDate(value) {
-  if (!value) return '—';
+  if (!value) return '';
   return new Date(value).toLocaleString('vi-VN');
 }
 
@@ -79,16 +79,6 @@ export default function ShopsPage() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Gian hàng</h1>
-          <p>Quản lý danh sách gian hàng, khóa/mở khóa và xem chi tiết.</p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
-
       {error ? <p className="error-banner">{error}</p> : null}
       {message ? <p className="success-banner">{message}</p> : null}
 
@@ -158,6 +148,7 @@ export default function ShopsPage() {
               <th>Chủ shop</th>
               <th>Địa chỉ</th>
               <th>Danh mục</th>
+              <th>Đánh giá</th>
               <th>Mở/đóng</th>
               <th>Gói</th>
               <th>Trạng thái</th>
@@ -167,11 +158,11 @@ export default function ShopsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8}>Đang tải...</td>
+                <td colSpan={9}>Đang tải...</td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={8}>Không có gian hàng.</td>
+                <td colSpan={9}>Không có gian hàng.</td>
               </tr>
             ) : (
               items.map((shop) => (
@@ -186,17 +177,21 @@ export default function ShopsPage() {
                         </div>
                       )}
                       <div>
-                        <strong>{shop.shopName || '—'}</strong>
-                        <div className="muted">@{shop.shopUsername || '—'}</div>
+                        <strong>{shop.shopName || ''}</strong>
+                        <div className="muted">@{shop.shopUsername || ''}</div>
                       </div>
                     </div>
                   </td>
                   <td>
-                    {shop.owner?.fullName || '—'}
+                    {shop.owner?.fullName || ''}
                     <div className="muted">{shop.owner?.email || ''}</div>
                   </td>
-                  <td>{shop.address || '—'}</td>
-                  <td>{shop.categoryName || '—'}</td>
+                  <td>{shop.addressHeThong || shop.systemAddress || shop.address || ''}</td>
+                  <td>{shop.categoryName || ''}</td>
+                  <td>
+                    {Number(shop.averageRating) ? `${shop.averageRating} ★` : ''}
+                    <div className="muted">{Number(shop.followersCount) || 0} theo dõi</div>
+                  </td>
                   <td>
                     <span className={shop.isOpen === 1 ? 'badge badge-success' : 'badge'}>
                       {shop.isOpenLabel}
@@ -205,7 +200,7 @@ export default function ShopsPage() {
                   <td>
                     {shop.subscriptionActive ? (
                       <span className="badge badge-success">
-                        {shop.subscriptionPlan ? `${shop.subscriptionPlan} tháng` : 'Active'}
+                        {shop.subscriptionPlan || 'Active'}
                         <div className="muted">{formatDate(shop.subscriptionExpiresAt)}</div>
                       </span>
                     ) : (
@@ -219,7 +214,7 @@ export default function ShopsPage() {
                   </td>
                   <td>
                     <div className="action-row">
-                      <Link className="link-btn" to={`/shops/${shop.id}`}>
+                      <Link className="detail-btn" to={`/shops/${shop.id}`}>
                         Chi tiết
                       </Link>
                       {shop.status === 1 ? (

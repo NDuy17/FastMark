@@ -1,4 +1,4 @@
-import { apiRequest, AUTH_TIMEOUT_MS } from './client';
+import { apiRequest, AUTH_TIMEOUT_MS, SELLER_UPLOAD_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
 
 async function parseApiResponse(response) {
@@ -20,9 +20,14 @@ export async function submitReportOnBackend({
   shopName,
   productId,
   productName,
+  reviewId,
+  reviewerName,
+  targetUserId,
   title,
   content,
+  images,
 }) {
+  const hasImages = Array.isArray(images) && images.length > 0;
   const response = await apiRequest(
     API_ENDPOINTS.buyerReports,
     {
@@ -37,11 +42,15 @@ export async function submitReportOnBackend({
         shopName,
         productId,
         productName,
+        reviewId,
+        reviewerName,
+        targetUserId,
         title,
         content,
+        images: images || [],
       }),
     },
-    AUTH_TIMEOUT_MS
+    hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS
   );
 
   const payload = await parseApiResponse(response);

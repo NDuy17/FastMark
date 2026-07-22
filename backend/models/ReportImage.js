@@ -1,11 +1,16 @@
 const mongoose = require("mongoose");
 
+/**
+ * ReportImage — ảnh minh chứng đính kèm một báo cáo.
+ */
 const ReportImageSchema = new mongoose.Schema({
-    reportId:{type:mongoose.Schema.Types.ObjectId,ref:"Report"},
-    imageUrl:String,
+  // Báo cáo cha (ref Report).
+  reportId: { type: mongoose.Schema.Types.ObjectId, ref: "Report" },
+  // URL ảnh minh chứng.
+  imageUrl: String,
 
-    CreatedAt:{type:Date,default:Date.now},
-    UpdatedAt:{type:Date,default:Date.now}
+  // Thời điểm thêm ảnh.
+  CreatedAt: { type: Date, default: Date.now },
 });
 
-module.exports = mongoose.model("ReportImage",ReportImageSchema);
+module.exports = mongoose.model("ReportImage", ReportImageSchema);

@@ -31,7 +31,9 @@ import {
 } from '../repository/authRepository';
 import { getFirebaseInitConfigError } from '../core/config/firebaseApp';
 import { getStartupDiagnostics, validateGoogleOAuthSetup } from '../core/utils/authDiagnostics';
+import { usePushNotifications } from '../hooks/usePushNotifications';
 import { authLogger as log } from '../core/utils/logger';
+import { startTopupDeepLinkListener } from '../viewmodel/wallet/topupSession';
 
 const WELCOME_DURATION_MS = 1200;
 
@@ -69,9 +71,18 @@ export default function FastmarkApp() {
   const [showWelcome, setShowWelcome] = useState(true);
   const [profileLoadTimedOut, setProfileLoadTimedOut] = useState(false);
 
+  usePushNotifications({
+    enabled: status === 'authenticated',
+  });
+
   useEffect(() => {
     const timer = setTimeout(() => setShowWelcome(false), WELCOME_DURATION_MS);
     return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    // PayOS return: fastmark://wallet/topup-result → emit cho Profile/Shop panel sync.
+    return startTopupDeepLinkListener();
   }, []);
 
   useEffect(() => {
@@ -154,7 +165,7 @@ export default function FastmarkApp() {
         <View style={styles.welcomeScreen}>
           <StatusBar style="light" />
           <Image
-            source={require('../../assets/welcome.png')}
+            source={require('../../assets/welcome.jpg')}
             style={styles.welcomeImage}
             resizeMode="contain"
           />

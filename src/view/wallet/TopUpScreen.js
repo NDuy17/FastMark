@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,22 +9,85 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
+import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatPrice } from '../../core/utils/productFormat';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import { createTopupViewModel, syncTopupViewModel } from '../../viewmodel/wallet/walletViewModel';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import {
+  createTopupViewModel,
+  cancelTopupViewModel,
+  resolveTopupReturnViewModel,
+  syncTopupViewModel,
+} from '../../viewmodel/wallet/walletViewModel';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 
 const PRESETS = [50000, 100000, 200000, 500000];
+const POLL_MS = 2000;
+
+/** Ẩn thanh brand merchant (FASTMARK + payOS) trên trang checkout PayOS nếu DOM cho phép. */
+const HIDE_PAYOS_BRAND_JS = `
+(function () {
+  function hideBrandBar() {
+    try {
+      var nodes = Array.from(document.querySelectorAll('header, nav, div, section'));
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (!el || el.dataset.fmHideBrand === '1') continue;
+        if (el.children && el.children.length > 8) continue;
+        var text = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (!text || text.length > 60) continue;
+        var hasMerchant = /FASTMARK/i.test(text);
+        var hasPayos = /pay\\s*OS/i.test(text);
+        if (hasMerchant && hasPayos) {
+          el.style.setProperty('display', 'none', 'important');
+          el.dataset.fmHideBrand = '1';
+          return true;
+        }
+      }
+      var headers = document.querySelectorAll('header, [class*="header"], [class*="Header"]');
+      for (var j = 0; j < headers.length; j++) {
+        var h = headers[j];
+        if (!h || h.dataset.fmHideBrand === '1') continue;
+        var ht = String(h.innerText || '');
+        if (/FASTMARK/i.test(ht) || /pay\\s*OS/i.test(ht)) {
+          h.style.setProperty('display', 'none', 'important');
+          h.dataset.fmHideBrand = '1';
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
+  hideBrandBar();
+  var obs = new MutationObserver(function () { hideBrandBar(); });
+  if (document.documentElement) {
+    obs.observe(document.documentElement, { childList: true, subtree: true });
+    setTimeout(function () { try { obs.disconnect(); } catch (e) {} }, 10000);
+  }
+})();
+true;
+`;
+
+function isPayosReturnUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return (
+    url.startsWith('fastmark://') ||
+    url.includes('wallet/topup-result') ||
+    url.includes('status=success') ||
+    url.includes('status=cancel')
+  );
+}
 
 export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
   const insets = useScreenInsets();
   const [amount, setAmount] = useState(100000);
   const [customText, setCustomText] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [checkout, setCheckout] = useState(null);
+  const [polling, setPolling] = useState(false);
+  const finishedRef = useRef(false);
+  const handlingReturnRef = useRef(false);
 
   const selectedAmount = useMemo(() => {
     const custom = Math.round(Number(String(customText).replace(/\D/g, '')));
@@ -39,48 +102,96 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
     setCustomText('');
   }
 
-  async function handleConfirm() {
-    if (submitting) {
-      return;
+  const finishSuccess = useCallback(
+    (synced) => {
+      if (finishedRef.current) return false;
+      if (synced?.transaction?.status !== 1) return false;
+      finishedRef.current = true;
+      setPolling(false);
+      setCheckout(null);
+      onSuccess?.({
+        amount: synced.transaction.amount,
+        orderCode: synced.transaction.orderCode,
+        balance: synced.wallet?.balance,
+      });
+      return true;
+    },
+    [onSuccess]
+  );
+
+  const handleReturnUrl = useCallback(
+    async (url) => {
+      if (handlingReturnRef.current || finishedRef.current) return;
+      handlingReturnRef.current = true;
+      try {
+        const resolved = await resolveTopupReturnViewModel(url);
+        if (resolved?.cancelled) {
+          finishedRef.current = true;
+          setPolling(false);
+          setCheckout(null);
+          Alert.alert('Đã hủy', 'Bạn đã hủy thanh toán PayOS.');
+          return;
+        }
+        if (await finishSuccess(resolved)) {
+          return;
+        }
+        // Return URL tới sớm hơn webhook — tiếp tục poll.
+        setPolling(true);
+      } catch (error) {
+        Alert.alert('Lỗi', error.message || 'Không xác nhận được thanh toán.');
+      } finally {
+        handlingReturnRef.current = false;
+      }
+    },
+    [finishSuccess]
+  );
+
+  // Realtime: poll PayOS sync → backend tự cộng tiền khi PAID.
+  useEffect(() => {
+    if (!checkout?.orderCode || finishedRef.current) return undefined;
+
+    let cancelled = false;
+    setPolling(true);
+
+    async function tick() {
+      if (cancelled || finishedRef.current) return;
+      try {
+        const synced = await syncTopupViewModel(checkout.orderCode);
+        if (!cancelled) {
+          finishSuccess(synced);
+        }
+      } catch {
+        // Giữ poll; webhook/lần sau sẽ xử lý.
+      }
     }
+
+    tick();
+    const timer = setInterval(tick, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [checkout?.orderCode, finishSuccess]);
+
+  async function handleConfirm() {
+    if (submitting || checkout) return;
     if (!selectedAmount || selectedAmount < 10000) {
       Alert.alert('Số tiền không hợp lệ', 'Số tiền nạp tối thiểu là 10.000đ.');
       return;
     }
 
+    finishedRef.current = false;
     setSubmitting(true);
     try {
       const result = await createTopupViewModel(selectedAmount);
       if (!result.checkoutUrl) {
         throw new Error('Không nhận được liên kết thanh toán PayOS.');
       }
-
-      await WebBrowser.openBrowserAsync(result.checkoutUrl, {
-        enableBarCollapsing: true,
-        showTitle: true,
+      setCheckout({
+        url: result.checkoutUrl,
+        orderCode: result.orderCode,
+        description: result.description || '',
       });
-
-      if (result.orderCode != null) {
-        try {
-          const synced = await syncTopupViewModel(result.orderCode);
-          if (synced.transaction?.status === 1) {
-            onSuccess?.({
-              amount: synced.transaction.amount,
-              orderCode: synced.transaction.orderCode,
-              balance: synced.wallet?.balance,
-            });
-            return;
-          }
-        } catch {
-          // Stay on screen; user can check history.
-        }
-      }
-
-      Alert.alert(
-        'Đã mở PayOS',
-        'Nếu bạn đã thanh toán xong, số dư sẽ cập nhật sau vài giây. Vào lịch sử ví để kiểm tra.',
-        [{ text: 'OK', onPress: () => onBack?.() }]
-      );
     } catch (error) {
       Alert.alert('Không nạp được', error.message || 'Vui lòng thử lại.');
     } finally {
@@ -88,16 +199,97 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
     }
   }
 
-  return (
-    <View style={[styles.screen, { paddingTop: insets.floatingTop }]}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} />
-        <Text style={styles.headerTitle}>Nạp tiền</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+  function handleCloseCheckout() {
+    Alert.alert(
+      'Hủy nạp tiền?',
+      'Giao dịch sẽ được đánh dấu đã hủy. Nếu bạn đã chuyển khoản, liên hệ hỗ trợ kèm mã giao dịch.',
+      [
+        { text: 'Ở lại', style: 'cancel' },
+        {
+          text: 'Hủy nạp',
+          style: 'destructive',
+          onPress: async () => {
+            const orderCode = checkout?.orderCode;
+            setPolling(false);
+            setCheckout(null);
+            finishedRef.current = true;
+            if (orderCode != null) {
+              try {
+                await cancelTopupViewModel(orderCode);
+              } catch {
+                // Đã đóng UI; lịch sử có thể còn PENDING đến khi sync.
+              }
+            }
+          },
+        },
+      ]
+    );
+  }
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.balanceCard}>
+  if (checkout?.url) {
+    return (
+      <View style={styles.screen}>
+        <SubScreenHeader title="Thanh toán PayOS" onBack={handleCloseCheckout} />
+
+        <View style={styles.checkoutMeta}>
+          <Text style={styles.checkoutMetaText}>
+            Nội dung CK: {checkout.description || 'userId'}
+          </Text>
+          {polling ? (
+            <View style={styles.pollingRow}>
+              <ActivityIndicator size="small" color={t.primaryDark} />
+              <Text style={styles.pollingText}>Đang chờ xác nhận… cộng tiền tự động</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <WebView
+          source={{ uri: checkout.url }}
+          style={styles.webview}
+          startInLoadingState
+          javaScriptEnabled
+          domStorageEnabled
+          originWhitelist={['*', 'http://*', 'https://*', 'fastmark://*']}
+          setSupportMultipleWindows={false}
+          injectedJavaScript={HIDE_PAYOS_BRAND_JS}
+          onShouldStartLoadWithRequest={(request) => {
+            const url = request?.url || '';
+            if (isPayosReturnUrl(url) && url.startsWith('fastmark://')) {
+              handleReturnUrl(url);
+              return false;
+            }
+            return true;
+          }}
+          onNavigationStateChange={(navState) => {
+            const url = navState?.url || '';
+            if (isPayosReturnUrl(url)) {
+              handleReturnUrl(url);
+            }
+          }}
+          renderLoading={() => (
+            <View style={styles.webviewLoading}>
+              <ActivityIndicator color={t.primaryDark} />
+            </View>
+          )}
+        />
+
+        {/* Safe area dưới để nút Huỷ của PayOS không bị thanh home che */}
+        <View style={{ height: Math.max(insets.bottom, 12) }} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.screen}>
+      <SubScreenHeader title="Nạp tiền" onBack={onBack} />
+
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.nestedScrollPaddingBottom + 72 },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >        <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Số dư hiện tại</Text>
           <Text style={styles.balanceValue}>{formatPrice(balance)}</Text>
         </View>
@@ -140,14 +332,18 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
           </View>
           <View style={styles.methodBody}>
             <Text style={styles.methodTitle}>Thanh toán PayOS</Text>
-            <Text style={styles.methodSub}>ATM / Visa / QR trên cổng PayOS</Text>
+            <Text style={styles.methodSub}>Nhúng trong app · nội dung CK = userId</Text>
           </View>
           <Ionicons name="checkmark-circle" size={22} color={t.primary} />
         </View>
       </ScrollView>
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottomSpacing, 12) }]}>
-        <Pressable
+      <View
+        style={[
+          styles.footer,
+          { paddingBottom: Math.max(insets.bottomSpacing, 12) },
+        ]}
+      >        <Pressable
           style={[styles.confirmBtn, submitting && styles.confirmBtnDisabled]}
           onPress={handleConfirm}
           disabled={submitting}
@@ -169,22 +365,38 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: t.background },
-  header: {
+  screen: { flex: 1, backgroundColor: '#f8fafc' },
+  checkoutMeta: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  checkoutMetaText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: t.textMuted,
+  },
+  pollingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 8,
+    gap: 8,
   },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 18,
-    fontWeight: '800',
-    color: t.text,
+  pollingText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: t.primaryDark,
   },
-  headerSpacer: { width: 40 },
-  content: { padding: 20, paddingBottom: 120, gap: 14 },
+  webview: { flex: 1, backgroundColor: '#fff' },
+  webviewLoading: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  content: { padding: 20, gap: 14 },
   balanceCard: {
     backgroundColor: t.primaryDark,
     borderRadius: t.radiusLg,
@@ -255,7 +467,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     paddingTop: 10,
-    backgroundColor: t.background,
+    backgroundColor: '#f8fafc',
     borderTopWidth: 1,
     borderTopColor: t.border,
   },

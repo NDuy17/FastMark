@@ -11,6 +11,16 @@ function pickText(...values) {
 export function normalizeStore(row) {
   const ratingAvg = Number(row.rating_avg ?? row.averageRating ?? 0);
   const isRegisteredShop = Boolean(row.is_registered_shop);
+  const systemAddress = pickText(
+    row.addressHeThong,
+    row.system_address,
+    row.systemAddress,
+    row.DiaChiHeThong,
+    row.DiachiHethong,
+    row.shopSystemAddress
+  );
+  const legacyAddress = pickText(row.address, row.shopAddress);
+  const displayAddress = systemAddress || legacyAddress;
 
   return {
     id: row.id,
@@ -20,15 +30,11 @@ export function normalizeStore(row) {
     type: row.type || 'shop',
     latitude: row.latitude,
     longitude: row.longitude,
-    user_address: pickText(row.address, row.shopAddress),
-    address: pickText(row.address, row.shopAddress),
-    system_address: pickText(
-      row.system_address,
-      row.systemAddress,
-      row.DiaChiHeThong,
-      row.DiachiHethong,
-      row.shopSystemAddress
-    ),
+    user_address: displayAddress,
+    address: displayAddress,
+    addressHeThong: systemAddress,
+    system_address: systemAddress,
+    systemAddress,
     phone: pickText(row.phone, row.shopPhone),
     zalo: pickText(row.zalo, row.phone, row.shopPhone),
     intro: isRegisteredShop
@@ -63,7 +69,6 @@ export function normalizeStore(row) {
     category_name: row.categoryName || row.category_name || '',
     categoryId: row.categoryId || row.category_id || '',
     category_id: row.categoryId || row.category_id || '',
-    allowReserve: row.allowReserve !== false,
     depositPercent: Math.max(0, Math.min(100, Number(row.depositPercent) || 0)),
   };
 }

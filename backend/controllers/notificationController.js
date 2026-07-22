@@ -4,7 +4,11 @@ const {
   markAllNotificationsAsRead,
   NOTIFICATION_AUDIENCE,
 } = require("../services/notificationService");
-const { normalizeNotificationAudience } = require("../constants/notificationAudience");
+const {
+  registerDeviceToken,
+  removeDeviceToken,
+} = require("../services/pushDeviceTokenService");
+const { normalizeNotificationAudience } = require("../constants");
 const { success } = require("../utils/apiResponse");
 
 function resolveAudience(req) {
@@ -41,6 +45,26 @@ exports.markAllAsRead = async (req, res) => {
   const result = await markAllNotificationsAsRead(req.currentUser._id, { audience });
   return success(res, {
     message: "Đã đánh dấu tất cả thông báo là đã đọc.",
+    data: result,
+  });
+};
+
+exports.registerDeviceToken = async (req, res) => {
+  const token = req.body?.token || req.body?.deviceToken || req.body?.fcmToken;
+  const platform = req.body?.platform;
+
+  const data = await registerDeviceToken(req.currentUser._id, { token, platform });
+  return success(res, {
+    message: "Đã lưu device token.",
+    data,
+  });
+};
+
+exports.removeDeviceToken = async (req, res) => {
+  const token = req.body?.token || req.body?.deviceToken || req.body?.fcmToken;
+  const result = await removeDeviceToken(req.currentUser._id, token);
+  return success(res, {
+    message: "Đã xóa device token.",
     data: result,
   });
 };

@@ -1,79 +1,125 @@
-import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSelector } from 'react-redux';
 
+import { selectAuthProfile, selectAuthUser } from '../../../viewmodel/auth/authSelectors';
+import ProfileSideDrawer from './ProfileSideDrawer';
+
+/**
+ * Nút 3 gạch + drawer bên phải (kiểu TikTok).
+ */
 export default function BuyerQuickMenu({
   sellerButtonLabel = 'Đăng ký người bán',
   onEditAccount,
+  onOpenWallet,
+  onOpenFavoriteProducts,
+  onOpenReport,
   onSellerAction,
   onLogout,
   style,
   buttonStyle,
-  dropdownStyle,
   iconColor = '#0f172a',
 }) {
-  const insets = useSafeAreaInsets();
+  const profile = useSelector(selectAuthProfile);
+  const user = useSelector(selectAuthUser);
   const [open, setOpen] = useState(false);
 
-  function closeMenu() {
-    setOpen(false);
-  }
+  const displayName =
+    profile?.fullName || profile?.displayName || user?.displayName || user?.email || 'Tài khoản';
+  const userName = profile?.userName || profile?.username || '';
+  const photoUrl = profile?.photoUrl || profile?.avatarUrl || user?.photoURL || null;
+  const walletBalance = Number(profile?.walletBalance) || 0;
 
-  function closeAndRun(action) {
-    setOpen(false);
-    action?.();
-  }
+  const sections = useMemo(() => {
+    const personalItems = [
+      {
+        key: 'wallet',
+        icon: 'wallet-outline',
+        label: 'Ví FastMark',
+        value: undefined,
+        onPress: onOpenWallet,
+      },
+      {
+        key: 'favorites',
+        icon: 'heart-outline',
+        label: 'Sản phẩm yêu thích',
+        onPress: onOpenFavoriteProducts,
+      },
+      {
+        key: 'edit',
+        icon: 'person-outline',
+        label: 'Chỉnh sửa hồ sơ',
+        onPress: onEditAccount,
+      },
+      {
+        key: 'report',
+        icon: 'flag-outline',
+        label: 'Report',
+        onPress: onOpenReport,
+      },
+    ].filter((item) => typeof item.onPress === 'function');
+
+    const businessItems = sellerButtonLabel
+      ? [
+          {
+            key: 'seller',
+            icon: 'storefront-outline',
+            label: sellerButtonLabel,
+            onPress: onSellerAction,
+          },
+        ]
+      : [];
+
+    const settingsItems = [
+      {
+        key: 'logout',
+        icon: 'log-out-outline',
+        label: 'Đăng xuất',
+        danger: true,
+        onPress: onLogout,
+      },
+    ].filter((item) => typeof item.onPress === 'function');
+
+    return [
+      personalItems.length
+        ? { key: 'personal', title: 'Công cụ cá nhân', items: personalItems }
+        : null,
+      businessItems.length
+        ? { key: 'business', title: 'Bán hàng', items: businessItems }
+        : null,
+      settingsItems.length ? { key: 'settings', title: 'Tài khoản', items: settingsItems } : null,
+    ].filter(Boolean);
+  }, [
+    onEditAccount,
+    onLogout,
+    onOpenFavoriteProducts,
+    onOpenReport,
+    onOpenWallet,
+    onSellerAction,
+    sellerButtonLabel,
+  ]);
 
   return (
     <View style={[styles.wrap, style]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Menu tiện ích"
-        onPress={() => setOpen((current) => !current)}
+        onPress={() => setOpen(true)}
         style={({ pressed }) => [styles.button, buttonStyle, pressed && styles.buttonPressed]}
       >
         <Ionicons name="menu-outline" size={22} color={iconColor} />
       </Pressable>
 
-      <Modal
+      <ProfileSideDrawer
         visible={open}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={closeMenu}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Đóng menu"
-          onPress={closeMenu}
-          style={styles.backdrop}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={[
-              styles.dropdown,
-              dropdownStyle,
-              { top: insets.top + 56, right: 16 },
-            ]}
-          >
-            <Pressable onPress={() => closeAndRun(onEditAccount)} style={styles.menuItem}>
-              <Text style={styles.menuItemText}>Sửa thông tin tài khoản</Text>
-            </Pressable>
-            {sellerButtonLabel ? (
-              <Pressable onPress={() => closeAndRun(onSellerAction)} style={styles.menuItem}>
-                <Text style={styles.menuItemText}>{sellerButtonLabel}</Text>
-              </Pressable>
-            ) : null}
-            <Pressable
-              onPress={() => closeAndRun(onLogout)}
-              style={[styles.menuItem, styles.menuItemLast]}
-            >
-              <Text style={[styles.menuItemText, styles.menuItemDanger]}>Đăng xuất</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setOpen(false)}
+        displayName={displayName}
+        userName={userName}
+        photoUrl={photoUrl}
+        walletBalance={walletBalance}
+        sections={sections}
+      />
     </View>
   );
 }
@@ -98,40 +144,5 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.85,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.25)',
-  },
-  dropdown: {
-    position: 'absolute',
-    minWidth: 220,
-    borderRadius: 12,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    elevation: 12,
-    overflow: 'hidden',
-  },
-  menuItem: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  menuItemLast: {
-    borderBottomWidth: 0,
-  },
-  menuItemText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  menuItemDanger: {
-    color: '#dc2626',
   },
 });

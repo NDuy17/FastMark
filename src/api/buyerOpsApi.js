@@ -1,4 +1,4 @@
-import { apiRequest, AUTH_TIMEOUT_MS } from './client';
+import { apiRequest, AUTH_TIMEOUT_MS, SELLER_UPLOAD_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
 
 async function parseApiResponse(response) {
@@ -77,14 +77,114 @@ export async function cancelBuyerReservationOnBackend(idToken, reservationId) {
   return payload.data?.reservation;
 }
 
-export async function completeBuyerReservationOnBackend(idToken, reservationId) {
-  const id = encodeURIComponent(String(reservationId || '').trim());
+export async function confirmBuyerReceivedOnBackend(idToken, payload) {
+  const reservationId =
+    typeof payload === 'string'
+      ? String(payload || '').trim()
+      : String(payload?.reservationId || '').trim();
+  const scannedShopId =
+    typeof payload === 'string' ? '' : String(payload?.scannedShopId || '').trim();
+
+  if (!reservationId) {
+    throw new Error('Không tìm thấy mã đơn giữ hàng.');
+  }
+  if (!scannedShopId) {
+    throw new Error('Thiếu mã shop đã quét.');
+  }
+
+  const response = await apiRequest(
+    API_ENDPOINTS.buyerReservationConfirmReceived,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({ reservationId, scannedShopId }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payloadRes = await parseApiResponse(response);
+  return payloadRes.data?.reservation;
+}
+
+export async function validateBuyerShopQrOnBackend(
+  idToken,
+  { reservationId, scannedShopId }
+) {
+  const id = String(reservationId || '').trim();
+  const shopId = String(scannedShopId || '').trim();
+  if (!id || !shopId) {
+    throw new Error('Thiếu thông tin quét mã.');
+  }
+  const response = await apiRequest(
+    API_ENDPOINTS.buyerReservationValidateShopQr,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({ reservationId: id, scannedShopId: shopId }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data;
+}
+
+export async function reportBuyerReservationOnBackend(
+  idToken,
+  { reservationId, reason, description, latitude, longitude, address, images }
+) {
+  const id = String(reservationId || '').trim();
   if (!id) {
     throw new Error('Không tìm thấy mã đơn giữ hàng.');
   }
+  const hasImages = Array.isArray(images) && images.length > 0;
   const response = await apiRequest(
-    API_ENDPOINTS.buyerReservationComplete(id),
-    { method: 'POST', headers: await authHeaders(idToken), body: '{}' },
+    API_ENDPOINTS.buyerReportSeller,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({
+        reservationId: id,
+        reason,
+        description: description || '',
+        latitude,
+        longitude,
+        address: address || '',
+        images: images || [],
+      }),
+    },
+    hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.reservation || payload.data;
+}
+
+export async function getReservationDisputeReportsOnBackend(idToken, reservationId) {
+  const id = encodeURIComponent(String(reservationId || '').trim());
+  if (!id) {
+    throw new Error('Thiếu reservationId.');
+  }
+  const response = await apiRequest(
+    API_ENDPOINTS.reservationDisputeReports(id),
+    { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.reports || [];
+}
+
+/** Buyer đồng ý mất cọc sau quá giờ nhận → giải ngân cho seller. */
+export async function forfeitBuyerDepositOnBackend(idToken, reservationId) {
+  const id = String(reservationId || '').trim();
+  if (!id) {
+    throw new Error('Thiếu reservationId.');
+  }
+
+  const response = await apiRequest(
+    API_ENDPOINTS.buyerReservationForfeitDepositById(id),
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({ reservationId: id }),
+    },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);

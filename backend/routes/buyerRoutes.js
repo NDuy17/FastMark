@@ -66,6 +66,21 @@ router.delete("/follows", verifyFirebaseToken, asyncHandler(buyerController.unfo
 
 router.get("/orders", verifyFirebaseToken, asyncHandler(buyerOpsController.listOrders));
 router.post("/reservations", verifyFirebaseToken, asyncHandler(buyerOpsController.createReservation));
+router.post(
+  "/reservations/confirm-received",
+  verifyFirebaseToken,
+  asyncHandler(buyerOpsController.confirmReceived)
+);
+router.post(
+  "/reservations/validate-shop-qr",
+  verifyFirebaseToken,
+  asyncHandler(buyerOpsController.validateShopQrScan)
+);
+router.post(
+  "/reservations/report",
+  verifyFirebaseToken,
+  asyncHandler(buyerOpsController.reportReservation)
+);
 router.get(
   "/reservations/:id",
   verifyFirebaseToken,
@@ -77,17 +92,24 @@ router.post(
   asyncHandler(buyerOpsController.cancelReservation)
 );
 router.post(
-  "/reservations/:id/complete",
+  "/reservations/:id/confirm-received",
   verifyFirebaseToken,
-  asyncHandler(buyerOpsController.completeReservation)
+  asyncHandler(buyerOpsController.confirmReceived)
 );
-
-const voucherController = require("../controllers/voucherController");
-router.get("/vouchers", verifyFirebaseToken, asyncHandler(voucherController.listShopVouchers));
-router.get(
-  "/vouchers/nearby",
+router.post(
+  "/reservations/:id/report",
   verifyFirebaseToken,
-  asyncHandler(voucherController.listNearbyVouchers)
+  asyncHandler(buyerOpsController.reportReservation)
+);
+router.post(
+  "/reservations/:id/forfeit-deposit",
+  verifyFirebaseToken,
+  asyncHandler(buyerOpsController.forfeitDeposit)
+);
+router.post(
+  "/reservations/forfeit-deposit",
+  verifyFirebaseToken,
+  asyncHandler(buyerOpsController.forfeitDeposit)
 );
 
 module.exports = router;

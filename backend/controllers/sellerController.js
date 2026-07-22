@@ -79,7 +79,7 @@ exports.getMyVerification = async (req, res) => {
   return success(res, {
     data: {
       verification: sellerService.toPublicVerification(verification),
-      sellerPhoneVerified: Boolean(user?.SellerPhoneVerified),
+      sellerPhoneVerified: require("../models/User").isPhoneVerified(user),
       hasPhone: Boolean(String(user?.Phone || "").trim()),
       role: user?.Role ?? req.currentUser.Role,
     },

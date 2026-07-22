@@ -21,6 +21,7 @@ async function main() {
     $or: [
       { legacyExternalId: { $regex: /^seed-admin-review/i } },
       { externalId: { $regex: /^seed-admin-review/i } },
+      { comment: { $regex: /seed-admin-review/i } },
     ],
   });
   summary.seedAdminReviews = reviews.deletedCount;
@@ -30,12 +31,18 @@ async function main() {
   });
   summary.seedDemoReports = reports.deletedCount;
 
-  // Legacy user→user follow collection (đã thay bằng shopfollows)
+  // Legacy collections: userfollows / shopfollows (đã thay bằng follows)
   try {
     const userFollows = await db.collection("userfollows").deleteMany({});
     summary.legacyUserFollows = userFollows.deletedCount;
   } catch {
     summary.legacyUserFollows = 0;
+  }
+  try {
+    const shopFollows = await db.collection("shopfollows").deleteMany({});
+    summary.legacyShopFollows = shopFollows.deletedCount;
+  } catch {
+    summary.legacyShopFollows = 0;
   }
 
   // Trường không còn dùng trên ShopProfile

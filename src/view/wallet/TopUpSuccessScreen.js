@@ -1,17 +1,24 @@
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatPrice } from '../../core/utils/productFormat';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import {
+  clearReservationResume,
+  loadReservationResume,
+} from '../../viewmodel/buyer/reservationResumeSession';
 
 export default function TopUpSuccessScreen({
   amount = 0,
   orderCode = null,
   onBackHome,
   onViewHistory,
+  onContinueReservation,
 }) {
   const insets = useScreenInsets();
+  const [resume, setResume] = useState(null);
   const timeLabel = new Date().toLocaleString('vi-VN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -19,6 +26,37 @@ export default function TopUpSuccessScreen({
     month: '2-digit',
     year: 'numeric',
   });
+
+  useEffect(() => {
+    let active = true;
+    loadReservationResume()
+      .then((payload) => {
+        if (active) {
+          setResume(payload);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setResume(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleContinueReservation() {
+    const payload = resume || (await loadReservationResume());
+    await clearReservationResume();
+    onContinueReservation?.(payload);
+  }
+
+  async function handleBackHome() {
+    if (!resume) {
+      await clearReservationResume();
+    }
+    onBackHome?.();
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.floatingTop + 24 }]}>
@@ -50,10 +88,19 @@ export default function TopUpSuccessScreen({
         </View>
       </View>
 
-      <View style={[styles.actions, { paddingBottom: Math.max(insets.bottomSpacing, 16) }]}>
-        <Pressable style={styles.primaryBtn} onPress={onBackHome}>
-          <Text style={styles.primaryText}>Về ví FastMark</Text>
-          <Ionicons name="arrow-forward" size={18} color="#fff" />
+      <View style={[styles.actions, { paddingBottom: insets.nestedScrollPaddingBottom }]}>
+        {resume ? (
+          <Pressable style={styles.primaryBtn} onPress={handleContinueReservation}>
+            <Text style={styles.primaryText}>Tiếp tục giữ hàng</Text>
+            <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </Pressable>
+        ) : null}
+        <Pressable
+          style={resume ? styles.secondaryBtn : styles.primaryBtn}
+          onPress={handleBackHome}
+        >
+          <Text style={resume ? styles.secondaryText : styles.primaryText}>Về ví FastMark</Text>
+          {!resume ? <Ionicons name="arrow-forward" size={18} color="#fff" /> : null}
         </Pressable>
         <Pressable style={styles.secondaryBtn} onPress={onViewHistory}>
           <Text style={styles.secondaryText}>Xem lịch sử giao dịch</Text>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, Text, View, Pressable } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -18,21 +18,27 @@ import SellerPhoneSetupScreen from './SellerPhoneSetupScreen';
 import SellerRegistrationScreen from './SellerRegistrationScreen';
 import SellerVerificationStatusScreen from './SellerVerificationStatusScreen';
 import SellerShopSettingsScreen from './SellerShopSettingsScreen';
-import SellerVouchersScreen from './SellerVouchersScreen';
+import SellerShopQrScreen from './SellerShopQrScreen';
 import SellerReviewsManageScreen from './SellerReviewsManageScreen';
 import SellerOrdersScreen from './SellerOrdersScreen';
 import SellerOrderDetailScreen from './SellerOrderDetailScreen';
 import SellerStatsScreen from './SellerStatsScreen';
 import SellerProductsTabScreen from './SellerProductsTabScreen';
 import SellerSubscriptionScreen from './SellerSubscriptionScreen';
+import SellerBannerScreen from './SellerBannerScreen';
 import SellerPostTabScreen from './SellerPostTabScreen';
-import SellerPickupScanScreen from './SellerPickupScanScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
+import NotificationsScreen from '../inbox/NotificationsScreen';
 import TopUpScreen from '../wallet/TopUpScreen';
 import TopUpSuccessScreen from '../wallet/TopUpSuccessScreen';
+import WalletScreen from '../wallet/WalletScreen';
+import WalletTransactionsScreen from '../wallet/WalletTransactionsScreen';
+import WithdrawScreen from '../wallet/WithdrawScreen';
 import { getSellerRegistrationStep } from './sellerRegistrationFlow';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
 import ShopTabHomeScreen from './ShopTabHomeScreen';
+import { resolveTopupReturnViewModel } from '../../viewmodel/wallet/walletViewModel';
+import { subscribeTopupDeepLink } from '../../viewmodel/wallet/topupSession';
 
 export default function ShopTabPanel({
   isVisible = false,
@@ -55,6 +61,8 @@ export default function ShopTabPanel({
   const [shopSettings, setShopSettings] = useState(null);
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
   const [topUpResult, setTopUpResult] = useState(null);
+  const [topUpReturnNav, setTopUpReturnNav] = useState('subscription');
+  const handledRegisterRequestRef = useRef(0);
 
   const loadShopSettings = useCallback(async () => {
     if (!isVisible || !isSeller) {
@@ -81,6 +89,11 @@ export default function ShopTabPanel({
 
   useEffect(() => {
     if (!isVisible) {
+      // Về hub khi rời tab → bottom nav hiện lại đúng khi quay lại.
+      setShopNav(null);
+      setSellerStep(null);
+      setSelectedReservationId(null);
+      setPhoneChangeReturn(null);
       return;
     }
     dispatch(syncSellerAccess()).catch(() => {});
@@ -106,15 +119,49 @@ export default function ShopTabPanel({
   }
 
   useEffect(() => {
-    if (!sellerRegisterRequest) {
+    if (!isVisible || !sellerRegisterRequest) {
       return;
     }
+    if (handledRegisterRequestRef.current === sellerRegisterRequest) {
+      return;
+    }
+    handledRegisterRequestRef.current = sellerRegisterRequest;
     startSellerRegistration();
-  }, [sellerRegisterRequest]);
+  }, [isVisible, sellerRegisterRequest]);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(sellerStep || shopNav));
-  }, [onNavigationStateChange, sellerStep, shopNav]);
+    // Hub tab gốc: hiện bottom nav. Màn phụ / đăng ký: ẩn.
+    // Chỉ báo nested khi tab đang visible — tránh kẹt true khi ẩn.
+    const nested = Boolean(isVisible && (sellerStep || shopNav));
+    onNavigationStateChange?.(nested);
+  }, [isVisible, onNavigationStateChange, sellerStep, shopNav]);
+
+  useEffect(() => {
+    return subscribeTopupDeepLink(async (parsed) => {
+      if (parsed?.cancelled || !isVisible) {
+        return;
+      }
+      try {
+        const resolved = await resolveTopupReturnViewModel(parsed);
+        if (resolved?.transaction?.status === 1) {
+          setTopUpResult({
+            amount: resolved.transaction.amount,
+            orderCode: resolved.transaction.orderCode,
+            balance: resolved.wallet?.balance,
+          });
+          dispatch(loadUserProfile());
+          setShopNav('wallet-topup-success');
+        }
+      } catch {
+        // Ignore; user can check wallet.
+      }
+    });
+  }, [dispatch, isVisible]);
+
+  function openTopUp(returnNav = 'subscription') {
+    setTopUpReturnNav(returnNav || 'subscription');
+    setShopNav('wallet-topup');
+  }
 
   const openBuyerPreview = useCallback(async () => {
     let shop = shopSettings;
@@ -145,16 +192,19 @@ export default function ShopTabPanel({
 
   function handleOpenHub(action) {
     const map = {
-      scan: 'scan',
+      scan: null,
       post: 'post',
       products: 'products',
       orders: 'orders',
-      vouchers: 'vouchers',
       reviews: 'reviews',
       settings: 'shop-settings',
+      'pickup-qr': 'pickup-qr',
       subscription: 'subscription',
+      banner: 'banner',
+      wallet: 'wallet',
       stats: 'stats',
       preview: 'preview',
+      notifications: 'notifications',
     };
 
     if (action === 'preview') {
@@ -241,15 +291,6 @@ export default function ShopTabPanel({
     );
   }
 
-  if (shopNav === 'scan') {
-    return (
-      <SellerPickupScanScreen
-        onBack={() => setShopNav(null)}
-        onCompleted={() => setOrdersRefreshKey((value) => value + 1)}
-      />
-    );
-  }
-
   if (shopNav === 'post') {
     return (
       <SellerPostTabScreen
@@ -284,8 +325,22 @@ export default function ShopTabPanel({
     );
   }
 
+  if (shopNav === 'pickup-qr') {
+    return <SellerShopQrScreen onBack={() => setShopNav(null)} />;
+  }
+
   if (shopNav === 'reviews') {
     return <SellerReviewsManageScreen onBack={() => setShopNav(null)} />;
+  }
+
+  if (shopNav === 'notifications') {
+    return (
+      <NotificationsScreen
+        audience="seller"
+        onBack={() => setShopNav(null)}
+        isScreenActive
+      />
+    );
   }
 
   if (shopNav === 'orders') {
@@ -315,15 +370,49 @@ export default function ShopTabPanel({
     return <SellerStatsScreen onBack={() => setShopNav(null)} />;
   }
 
-  if (shopNav === 'vouchers') {
-    return <SellerVouchersScreen onBack={() => setShopNav(null)} />;
-  }
-
   if (shopNav === 'subscription') {
     return (
       <SellerSubscriptionScreen
         onBack={() => setShopNav(null)}
-        onOpenWallet={() => setShopNav('wallet-topup')}
+        onOpenWallet={() => openTopUp('subscription')}
+        onOpenBanner={() => setShopNav('banner')}
+      />
+    );
+  }
+
+  if (shopNav === 'banner') {
+    return (
+      <SellerBannerScreen
+        onBack={() => setShopNav(null)}
+        onOpenWallet={() => openTopUp('banner')}
+        onOpenSubscription={() => setShopNav('subscription')}
+      />
+    );
+  }
+
+  if (shopNav === 'wallet') {
+    return (
+      <WalletScreen
+        onBack={() => setShopNav(null)}
+        onTopUp={() => openTopUp('wallet')}
+        onWithdraw={() => setShopNav('wallet-withdraw')}
+        onSeeAllTransactions={() => setShopNav('wallet-transactions')}
+      />
+    );
+  }
+
+  if (shopNav === 'wallet-transactions') {
+    return <WalletTransactionsScreen onBack={() => setShopNav('wallet')} />;
+  }
+
+  if (shopNav === 'wallet-withdraw') {
+    return (
+      <WithdrawScreen
+        balance={Number(profile?.walletBalance) || 0}
+        onBack={() => setShopNav('wallet')}
+        onSuccess={() => {
+          dispatch(loadUserProfile());
+        }}
       />
     );
   }
@@ -332,7 +421,7 @@ export default function ShopTabPanel({
     return (
       <TopUpScreen
         balance={Number(profile?.walletBalance) || 0}
-        onBack={() => setShopNav('subscription')}
+        onBack={() => setShopNav(topUpReturnNav || 'subscription')}
         onSuccess={(result) => {
           setTopUpResult(result || null);
           dispatch(loadUserProfile());
@@ -349,11 +438,11 @@ export default function ShopTabPanel({
         orderCode={topUpResult?.orderCode}
         onBackHome={() => {
           setTopUpResult(null);
-          setShopNav('subscription');
+          setShopNav(topUpReturnNav || 'subscription');
         }}
         onViewHistory={() => {
           setTopUpResult(null);
-          setShopNav('subscription');
+          setShopNav(topUpReturnNav || 'subscription');
         }}
       />
     );
@@ -364,7 +453,6 @@ export default function ShopTabPanel({
       <SellerProductsTabScreen
         productRefreshKey={productRefreshKey}
         onProductChanged={onProductChanged}
-        onNavigationStateChange={onNavigationStateChange}
         onBack={() => setShopNav(null)}
       />
     );
@@ -407,6 +495,8 @@ export default function ShopTabPanel({
       shopSettings={shopSettings}
       onStartRegister={startSellerRegistration}
       onOpenHub={handleOpenHub}
+      onOpenWallet={() => setShopNav('wallet')}
+      onOpenWalletTopUp={() => openTopUp('wallet')}
     />
   );
 }

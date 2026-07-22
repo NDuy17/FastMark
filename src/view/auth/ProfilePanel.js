@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -35,23 +35,28 @@ import SellerVerificationStatusScreen from '../seller/SellerVerificationStatusSc
 import SellerProductDetailScreen from '../seller/SellerProductDetailScreen';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import SellerShopSettingsScreen from '../seller/SellerShopSettingsScreen';
-import SellerVouchersScreen from '../seller/SellerVouchersScreen';
 import SellerReviewsManageScreen from '../seller/SellerReviewsManageScreen';
 import SellerOrdersScreen from '../seller/SellerOrdersScreen';
 import SellerOrderDetailScreen from '../seller/SellerOrderDetailScreen';
 import SellerStatsScreen from '../seller/SellerStatsScreen';
 import SellerProductsTabScreen from '../seller/SellerProductsTabScreen';
 import SellerSubscriptionScreen from '../seller/SellerSubscriptionScreen';
+import SellerBannerScreen from '../seller/SellerBannerScreen';
 import BuyerOrdersScreen from '../buyer/BuyerOrdersScreen';
 import FavoriteProductsScreen from '../buyer/FavoriteProductsScreen';
+import AccountReportScreen from '../profile/AccountReportScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import WalletScreen from '../wallet/WalletScreen';
+import InboxScreen from '../inbox/InboxScreen';
 import TopUpScreen from '../wallet/TopUpScreen';
-import WalletTransactionsScreen from '../wallet/WalletTransactionsScreen';
 import TopUpSuccessScreen from '../wallet/TopUpSuccessScreen';
+import WalletTransactionsScreen from '../wallet/WalletTransactionsScreen';
+import WithdrawScreen from '../wallet/WithdrawScreen';
+import WalletScreen from '../wallet/WalletScreen';
 import { getSellerRegistrationStep } from '../seller/sellerRegistrationFlow';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
+import { resolveTopupReturnViewModel } from '../../viewmodel/wallet/walletViewModel';
+import { subscribeTopupDeepLink } from '../../viewmodel/wallet/topupSession';
 
 export default function ProfilePanel({
   profileMode = 'buyer',
@@ -59,8 +64,8 @@ export default function ProfilePanel({
   onOpenStore,
   onNavigateToStore,
   onOpenInbox,
+  onOpenChat,
   onNavigatePickup,
-  openBuyerOrdersRequest = null,
   sellerRegisterRequest = 0,
   isProfileVisible = false,
   productDetailId = null,
@@ -73,6 +78,7 @@ export default function ProfilePanel({
   profileNavRequest = null,
   onStartSellerRegister,
   onOpenShopTab,
+  onContinueReservationAfterTopUp,
   onNavigationStateChange,
 }) {
   const dispatch = useDispatch();
@@ -89,9 +95,24 @@ export default function ProfilePanel({
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
   const [shopSettings, setShopSettings] = useState(null);
   const [topUpResult, setTopUpResult] = useState(null);
+  const [topUpReturnNav, setTopUpReturnNav] = useState('wallet');
   const [buyerOrdersTab, setBuyerOrdersTab] = useState(RESERVATION_TAB.HOLDING);
   const [buyerOrdersTabKey, setBuyerOrdersTabKey] = useState(0);
   const [productStoreId, setProductStoreId] = useState(null);
+  const [chatOpenRequest, setChatOpenRequest] = useState(null);
+
+  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
+    if (!shopId) {
+      return;
+    }
+    setChatOpenRequest({
+      shopId: String(shopId),
+      shopName: shopName || 'Gian hàng',
+      at: Date.now(),
+    });
+  }, []);
+  const handledProfileNavRef = useRef(0);
+  const handledRegisterRequestRef = useRef(0);
 
   const loadShopSettings = useCallback(async () => {
     if (!isProfileVisible || (!isSeller && !showSellerHub)) {
@@ -146,39 +167,86 @@ export default function ProfilePanel({
   }
 
   useEffect(() => {
-    if (!sellerRegisterRequest) {
+    if (!isProfileVisible) {
+      setProfileNav(null);
+      setSellerStep(null);
+      setSelectedReservationId(null);
+      setPhoneChangeReturn(null);
       return;
     }
+  }, [isProfileVisible]);
+
+  useEffect(() => {
+    if (!isProfileVisible || !sellerRegisterRequest) {
+      return;
+    }
+    if (handledRegisterRequestRef.current === sellerRegisterRequest) {
+      return;
+    }
+    handledRegisterRequestRef.current = sellerRegisterRequest;
     startSellerRegistration();
-  }, [sellerRegisterRequest]);
+  }, [isProfileVisible, sellerRegisterRequest]);
 
   useEffect(() => {
-    if (!openBuyerOrdersRequest || profileMode !== 'buyer') {
+    if (!isProfileVisible || !profileNavRequest?.screen) {
       return;
     }
-    const tab =
-      typeof openBuyerOrdersRequest === 'object' && openBuyerOrdersRequest.tab
-        ? openBuyerOrdersRequest.tab
-        : RESERVATION_TAB.HOLDING;
-    const key =
-      typeof openBuyerOrdersRequest === 'object' && openBuyerOrdersRequest.at
-        ? openBuyerOrdersRequest.at
-        : openBuyerOrdersRequest;
-    setBuyerOrdersTab(tab);
-    setBuyerOrdersTabKey(key);
-    setProfileNav('buyer-orders');
-  }, [openBuyerOrdersRequest, profileMode]);
-
-  useEffect(() => {
-    if (!profileNavRequest?.screen) {
+    const requestAt = profileNavRequest.at || 0;
+    if (handledProfileNavRef.current === requestAt && requestAt) {
       return;
+    }
+    if (requestAt) {
+      handledProfileNavRef.current = requestAt;
+    }
+    if (profileNavRequest.screen === 'wallet-topup') {
+      setTopUpReturnNav('wallet');
     }
     setProfileNav(profileNavRequest.screen);
-  }, [profileNavRequest]);
+  }, [isProfileVisible, profileNavRequest]);
 
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(sellerStep || profileNav || productDetailId));
-  }, [onNavigationStateChange, productDetailId, profileNav, sellerStep]);
+    return subscribeTopupDeepLink(async (parsed) => {
+      if (parsed?.cancelled || !isProfileVisible) {
+        return;
+      }
+      try {
+        const resolved = await resolveTopupReturnViewModel(parsed);
+        if (resolved?.transaction?.status === 1) {
+          setTopUpResult({
+            amount: resolved.transaction.amount,
+            orderCode: resolved.transaction.orderCode,
+            balance: resolved.wallet?.balance,
+          });
+          dispatch(loadUserProfile());
+          setProfileNav('wallet-success');
+        }
+      } catch {
+        // User can sync manually from wallet history.
+      }
+    });
+  }, [dispatch, isProfileVisible]);
+
+  function openTopUp(returnNav = 'wallet') {
+    setTopUpReturnNav(returnNav || 'wallet');
+    setProfileNav('wallet-topup');
+  }
+
+  useEffect(() => {
+    // Hub Tài khoản: hiện bottom nav. Mọi màn phụ: ẩn.
+    const nested = Boolean(
+      isProfileVisible &&
+        (sellerStep || profileNav || productDetailId || productStoreId || chatOpenRequest)
+    );
+    onNavigationStateChange?.(nested);
+  }, [
+    chatOpenRequest,
+    isProfileVisible,
+    onNavigationStateChange,
+    productDetailId,
+    productStoreId,
+    profileNav,
+    sellerStep,
+  ]);
 
   useEffect(() => {
     if (!productDetailId) {
@@ -342,15 +410,22 @@ export default function ProfilePanel({
     return <SellerStatsScreen onBack={() => setProfileNav(null)} />;
   }
 
-  if (profileNav === 'seller-vouchers') {
-    return <SellerVouchersScreen onBack={() => setProfileNav(null)} />;
-  }
-
   if (profileNav === 'seller-subscription') {
     return (
       <SellerSubscriptionScreen
         onBack={() => setProfileNav(null)}
-        onOpenWallet={() => setProfileNav('wallet-topup')}
+        onOpenWallet={() => openTopUp('seller-subscription')}
+        onOpenBanner={() => setProfileNav('seller-banner')}
+      />
+    );
+  }
+
+  if (profileNav === 'seller-banner') {
+    return (
+      <SellerBannerScreen
+        onBack={() => setProfileNav(null)}
+        onOpenWallet={() => openTopUp('seller-banner')}
+        onOpenSubscription={() => setProfileNav('seller-subscription')}
       />
     );
   }
@@ -361,7 +436,6 @@ export default function ProfilePanel({
         <SellerProductsTabScreen
           productRefreshKey={productRefreshKey}
           onProductChanged={onProductChanged}
-          onNavigationStateChange={onNavigationStateChange}
           onBack={() => setProfileNav(null)}
         />
       </View>
@@ -461,12 +535,33 @@ export default function ProfilePanel({
     );
   }
 
+  if (profileNav === 'account-report') {
+    return (
+      <View style={styles.screen}>
+        <AccountReportScreen onBack={() => setProfileNav(null)} />
+      </View>
+    );
+  }
+
   if (profileNav === 'wallet') {
     return (
       <WalletScreen
         onBack={() => setProfileNav(null)}
-        onTopUp={() => setProfileNav('wallet-topup')}
+        onTopUp={() => openTopUp('wallet')}
+        onWithdraw={() => setProfileNav('wallet-withdraw')}
         onSeeAllTransactions={() => setProfileNav('wallet-transactions')}
+      />
+    );
+  }
+
+  if (profileNav === 'wallet-withdraw') {
+    return (
+      <WithdrawScreen
+        balance={Number(profile?.walletBalance) || 0}
+        onBack={() => setProfileNav('wallet')}
+        onSuccess={() => {
+          dispatch(loadUserProfile());
+        }}
       />
     );
   }
@@ -475,7 +570,7 @@ export default function ProfilePanel({
     return (
       <TopUpScreen
         balance={Number(profile?.walletBalance) || 0}
-        onBack={() => setProfileNav('wallet')}
+        onBack={() => setProfileNav(topUpReturnNav || 'wallet')}
         onSuccess={(result) => {
           setTopUpResult(result || null);
           dispatch(loadUserProfile());
@@ -494,9 +589,14 @@ export default function ProfilePanel({
       <TopUpSuccessScreen
         amount={topUpResult?.amount || 0}
         orderCode={topUpResult?.orderCode}
+        onContinueReservation={(payload) => {
+          setTopUpResult(null);
+          setProfileNav(null);
+          onContinueReservationAfterTopUp?.(payload);
+        }}
         onBackHome={() => {
           setTopUpResult(null);
-          setProfileNav('wallet');
+          setProfileNav(topUpReturnNav || 'wallet');
         }}
         onViewHistory={() => {
           setTopUpResult(null);
@@ -529,6 +629,7 @@ export default function ProfilePanel({
             storeId={String(storeId)}
             onBack={() => setProfileNav(null)}
             onNavigateDirections={onNavigateToStore}
+            onOpenChat={handleOpenChatLocal}
             previewMode
           />
         ) : (
@@ -540,6 +641,22 @@ export default function ProfilePanel({
           </View>
         )}
       </View>
+    );
+  }
+
+  if (chatOpenRequest) {
+    return (
+      <InboxScreen
+        buyerView
+        messagesOnly
+        chatRequest={chatOpenRequest}
+        onBack={() => setChatOpenRequest(null)}
+        onViewShop={(shopId) => {
+          setChatOpenRequest(null);
+          setProductStoreId(String(shopId));
+          onOpenStore?.(String(shopId));
+        }}
+      />
     );
   }
 
@@ -555,6 +672,7 @@ export default function ProfilePanel({
               onOpenProductDetail?.(nextProductId);
             }}
             onNavigateDirections={onNavigateToStore}
+            onOpenChat={handleOpenChatLocal}
           />
         );
       }
@@ -567,6 +685,8 @@ export default function ProfilePanel({
             onOpenProductDetail?.(null);
           }}
           onStorePress={(storeId) => setProductStoreId(String(storeId))}
+          onOpenChat={handleOpenChatLocal}
+          onOpenTopUp={() => openTopUp('wallet')}
         />
       );
     }
@@ -599,15 +719,16 @@ export default function ProfilePanel({
           setProfileNav('buyer-orders');
         }}
         onOpenFavoriteProducts={() => setProfileNav('favorite-products')}
+        onOpenReport={() => setProfileNav('account-report')}
         onOpenWallet={() => setProfileNav('wallet')}
-        onOpenWalletTopUp={() => setProfileNav('wallet-topup')}
+        onOpenWalletTopUp={() => openTopUp('wallet')}
         onOpenSellerShopSettings={() => setProfileNav('seller-shop-settings')}
-        onOpenSellerVouchers={() => setProfileNav('seller-vouchers')}
         onOpenSellerReviews={() => setProfileNav('seller-reviews')}
         onOpenSellerOrders={() => setProfileNav('seller-orders')}
         onOpenSellerStats={() => setProfileNav('seller-stats')}
         onOpenSellerProducts={() => setProfileNav('seller-products')}
         onOpenSellerSubscription={() => setProfileNav('seller-subscription')}
+        onOpenSellerBanner={() => setProfileNav('seller-banner')}
         showSellerHub={false}
         onOpenBuyerView={openBuyerPreview}
         onStartSellerRegister={() => {

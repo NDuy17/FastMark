@@ -57,12 +57,6 @@ router.post(
   requireSeller,
   asyncHandler(sellerOpsController.checkShopUsernameAvailability)
 );
-router.post(
-  "/shop/avatar",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.uploadShopAvatar)
-);
 
 router.get("/orders", verifyFirebaseToken, requireSeller, asyncHandler(sellerOpsController.listOrders));
 router.get(
@@ -89,17 +83,17 @@ router.post(
   requireSeller,
   asyncHandler(sellerOpsController.cancelReservation)
 );
+
+/** Alias: seller báo buyer no-show (cùng API /api/reports/seller-report-buyer). */
 router.post(
-  "/reservations/:id/complete",
+  "/reservations/:id/report-buyer",
   verifyFirebaseToken,
   requireSeller,
-  asyncHandler(sellerOpsController.completeReservation)
-);
-router.post(
-  "/reservations/scan-complete",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.completeReservationByScan)
+  asyncHandler(async (req, res) => {
+    const reservationReportController = require("../controllers/reservationReportController");
+    req.body = { ...req.body, reservationId: req.params.id };
+    return reservationReportController.sellerReportBuyer(req, res);
+  })
 );
 
 router.get(
@@ -149,20 +143,24 @@ router.post(
   asyncHandler(sellerSubscriptionController.purchaseSubscription)
 );
 
-const voucherController = require("../controllers/voucherController");
-router.get("/vouchers", verifyFirebaseToken, requireSeller, asyncHandler(voucherController.listSellerVouchers));
-router.post("/vouchers", verifyFirebaseToken, requireSeller, asyncHandler(voucherController.createSellerVoucher));
-router.put(
-  "/vouchers/:id",
+const sellerBannerController = require("../controllers/sellerBannerController");
+router.get(
+  "/banner",
   verifyFirebaseToken,
   requireSeller,
-  asyncHandler(voucherController.updateSellerVoucher)
+  asyncHandler(sellerBannerController.getMyBanner)
 );
-router.delete(
-  "/vouchers/:id",
+router.post(
+  "/banner/purchase",
   verifyFirebaseToken,
   requireSeller,
-  asyncHandler(voucherController.deleteSellerVoucher)
+  asyncHandler(sellerBannerController.purchaseBanner)
+);
+router.put(
+  "/banner/creative",
+  verifyFirebaseToken,
+  requireSeller,
+  asyncHandler(sellerBannerController.updateCreative)
 );
 
 module.exports = router;

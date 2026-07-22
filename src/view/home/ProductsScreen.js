@@ -13,7 +13,7 @@ import {
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 
-import { discoverProductsOnBackend, getProductCategoriesOnBackend } from '../../api/productApi';
+import { discoverProductsOnBackend, getProductCategoriesOnBackend, listPromotionProductsOnBackend } from '../../api/productApi';
 import {
   addFavoriteProductOnBackend,
   getFavoriteProductIdsOnBackend,
@@ -28,7 +28,7 @@ import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { normalizeProduct } from '../../model/productModel';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import ProductCategoriesScreen from './ProductCategoriesScreen';
+import InboxScreen from '../inbox/InboxScreen';
 import ProductCard from '../shared/components/ProductCard';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
@@ -41,28 +41,17 @@ const SEARCH_TABS = [
   { key: 'shops', label: 'Gian hàng' },
 ];
 
-function isRemoteIcon(value) {
-  return /^https?:\/\//i.test(String(value || '').trim());
-}
-
-function CategoryIconChip({ icon, label, active, onPress }) {
-  const iconValue = String(icon || '').trim();
-  const showRemoteImage = isRemoteIcon(iconValue);
-
+function CategoryChip({ label, active, onPress }) {
   return (
     <Pressable
-      style={[styles.categoryIconChip, active && styles.categoryIconChipActive]}
+      style={[styles.categoryChip, active && styles.categoryChipActive]}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      {showRemoteImage ? (
-        <Image source={{ uri: iconValue }} style={styles.categoryIconChipImage} />
-      ) : iconValue ? (
-        <Text style={styles.categoryIconChipEmoji}>{iconValue}</Text>
-      ) : (
-        <Ionicons name="pricetag-outline" size={20} color={active ? '#076F32' : '#64748b'} />
-      )}
+      <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]} numberOfLines={1}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -70,6 +59,8 @@ function CategoryIconChip({ icon, label, active, onPress }) {
 export default function ProductsScreen({
   onNavigationStateChange,
   onOpenBuyerOrders,
+  onOpenWalletTopUp,
+  onOpenChat,
   focusRequest = null,
   onBack = null,
 }) {
@@ -90,18 +81,32 @@ export default function ProductsScreen({
   const [loadError, setLoadError] = useState('');
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState(null);
-  const [showCategoriesScreen, setShowCategoriesScreen] = useState(false);
+  const [chatOpenRequest, setChatOpenRequest] = useState(null);
   const [likedProducts, setLikedProducts] = useState({});
   const [searchTab, setSearchTab] = useState('products');
   const [shops, setShops] = useState([]);
   const [isLoadingShops, setIsLoadingShops] = useState(false);
   const [shopsError, setShopsError] = useState('');
   const [browseNearbyShops, setBrowseNearbyShops] = useState(false);
+  const [autoFocusSearch, setAutoFocusSearch] = useState(false);
+  const searchInputRef = useRef(null);
 
   const isSearching = Boolean(debouncedSearch) || browseNearbyShops;
+
+  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
+    if (!shopId) {
+      return;
+    }
+    setChatOpenRequest({
+      shopId: String(shopId),
+      shopName: shopName || 'Gian hàng',
+      at: Date.now(),
+    });
+  }, []);
+
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(selectedProductId || selectedStoreId || showCategoriesScreen));
-  }, [onNavigationStateChange, selectedProductId, selectedStoreId, showCategoriesScreen]);
+    onNavigationStateChange?.(Boolean(selectedProductId || selectedStoreId || chatOpenRequest));
+  }, [chatOpenRequest, onNavigationStateChange, selectedProductId, selectedStoreId]);
 
   useEffect(() => {
     if (searchTimerRef.current) {
@@ -246,18 +251,51 @@ export default function ProductsScreen({
       setLoadError('');
 
       try {
-        const rows = await discoverProductsOnBackend({
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-          radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : NEARBY_RADIUS_METERS,
-          categoryId: selectedCategoryId,
-          search: debouncedSearch,
-          limit: 200,
+        const [rows, promoRows] = await Promise.all([
+          discoverProductsOnBackend({
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+            radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : NEARBY_RADIUS_METERS,
+            categoryId: selectedCategoryId,
+            search: debouncedSearch,
+            limit: 200,
+          }),
+          listPromotionProductsOnBackend({
+            limit: 80,
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+          }).catch(() => []),
+        ]);
+
+        const promoById = new Map();
+        (Array.isArray(promoRows) ? promoRows : []).forEach((row) => {
+          const promo = normalizeProduct(row);
+          if (promo.id && promo.isPromotion && Number(promo.discountPercent) > 0) {
+            promoById.set(promo.id, promo);
+          }
         });
+
         setProducts(
           Array.isArray(rows)
             ? rows
-                .map((row) => normalizeProduct(row))
+                .map((row) => {
+                  const product = normalizeProduct(row);
+                  const promo = promoById.get(product.id);
+                  if (!promo) {
+                    return product;
+                  }
+                  return {
+                    ...product,
+                    isPromotion: true,
+                    discountPercent: promo.discountPercent,
+                    originalPrice: promo.originalPrice ?? product.minPrice,
+                    originalMaxPrice: promo.originalMaxPrice ?? product.maxPrice,
+                    promotionPrice: promo.promotionPrice,
+                    promotionMinPrice: promo.promotionMinPrice,
+                    promotionMaxPrice: promo.promotionMaxPrice,
+                    displayPrice: promo.displayPrice ?? promo.promotionPrice ?? product.displayPrice,
+                  };
+                })
                 .filter((product) => !product.isOutOfStock && !product.isUnavailable)
             : []
         );
@@ -333,15 +371,26 @@ export default function ProductsScreen({
       return;
     }
 
-    if (focusRequest.search != null) {
+    if (focusRequest.focusSearch) {
       setBrowseNearbyShops(false);
       setSearch(String(focusRequest.search || ''));
       setDebouncedSearch(String(focusRequest.search || '').trim());
+      setSearchTab('products');
+      setAutoFocusSearch(true);
+      setTimeout(() => {
+        searchInputRef.current?.focus?.();
+      }, 250);
+    } else if (focusRequest.search != null) {
+      setBrowseNearbyShops(false);
+      setSearch(String(focusRequest.search || ''));
+      setDebouncedSearch(String(focusRequest.search || '').trim());
+      setAutoFocusSearch(false);
     }
 
     if (focusRequest.categoryId != null) {
       setBrowseNearbyShops(false);
       setSelectedCategoryId(String(focusRequest.categoryId || ''));
+      setAutoFocusSearch(false);
     }
 
     if (focusRequest.focusShops) {
@@ -349,6 +398,7 @@ export default function ProductsScreen({
       setBrowseNearbyShops(true);
       setSearch('');
       setDebouncedSearch('');
+      setAutoFocusSearch(false);
     } else if (focusRequest.focusHot || focusRequest.categoryId || focusRequest.search) {
       setSearchTab('products');
       setBrowseNearbyShops(false);
@@ -361,14 +411,25 @@ export default function ProductsScreen({
     setSelectedCategoryId((current) => (current === categoryId ? '' : categoryId));
   }
 
-  function handleSelectCategoryFromAll(categoryId) {
-    setSelectedCategoryId(categoryId);
-    setShowCategoriesScreen(false);
-  }
-
   function handleOpenProduct(productId) {
     setSelectedStoreId(null);
     setSelectedProductId(productId);
+  }
+
+  if (chatOpenRequest) {
+    return (
+      <InboxScreen
+        buyerView
+        messagesOnly
+        chatRequest={chatOpenRequest}
+        onBack={() => setChatOpenRequest(null)}
+        onViewShop={(shopId) => {
+          setChatOpenRequest(null);
+          setSelectedProductId(null);
+          setSelectedStoreId(String(shopId));
+        }}
+      />
+    );
   }
 
   if (selectedStoreId) {
@@ -380,6 +441,7 @@ export default function ProductsScreen({
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
+        onOpenChat={handleOpenChatLocal}
       />
     );
   }
@@ -390,21 +452,12 @@ export default function ProductsScreen({
         productId={selectedProductId}
         onBack={() => setSelectedProductId(null)}
         onStorePress={(storeId) => setSelectedStoreId(storeId)}
+        onOpenChat={handleOpenChatLocal}
         onOrderSuccess={(tab) => {
           setSelectedProductId(null);
           onOpenBuyerOrders?.(tab);
         }}
-      />
-    );
-  }
-
-  if (showCategoriesScreen) {
-    return (
-      <ProductCategoriesScreen
-        categories={categories}
-        selectedCategoryId={selectedCategoryId}
-        onSelectCategory={handleSelectCategoryFromAll}
-        onBack={() => setShowCategoriesScreen(false)}
+        onOpenTopUp={onOpenWalletTopUp}
       />
     );
   }
@@ -417,7 +470,10 @@ export default function ProductsScreen({
     <ScrollView
       ref={scrollRef}
       style={styles.screen}
-      contentContainerStyle={[styles.content, { paddingTop: insets.headerPaddingTop }]}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: insets.headerPaddingTop, paddingBottom: insets.nestedScrollPaddingBottom },
+      ]}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
       refreshControl={
@@ -441,7 +497,7 @@ export default function ProductsScreen({
             <Ionicons name="arrow-back" size={22} color="#0f172a" />
           </Pressable>
         ) : null}
-        <Text style={styles.pageTitle}>Sản phẩm</Text>
+        <Text style={styles.pageTitle}>{autoFocusSearch || Boolean(search) ? 'Tìm kiếm' : 'Sản phẩm'}</Text>
       </View>
 
       <ClearableSearchField
@@ -449,6 +505,8 @@ export default function ProductsScreen({
         onChangeText={setSearch}
         placeholder="Tìm kiếm sản phẩm, gian hàng...."
         style={styles.searchField}
+        autoFocus={autoFocusSearch}
+        inputRef={searchInputRef}
       />
 
       {isSearching ? (
@@ -576,19 +634,15 @@ export default function ProductsScreen({
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.categoryRow}
           >
-            <Pressable
-              style={styles.allCategoriesChip}
-              onPress={() => setShowCategoriesScreen(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Tất cả danh mục"
-            >
-              <Ionicons name="grid-outline" size={20} color="#076F32" />
-            </Pressable>
+            <CategoryChip
+              label="Tất cả"
+              active={!selectedCategoryId}
+              onPress={() => setSelectedCategoryId('')}
+            />
             {categories.map((category) => (
-              <CategoryIconChip
+              <CategoryChip
                 key={category.id}
                 label={category.categoryName}
-                icon={category.icon || ''}
                 active={selectedCategoryId === category.id}
                 onPress={() => handleSelectCategory(category.id)}
               />
@@ -662,9 +716,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f4f7f6',
   },
-  content: {
-    paddingBottom: 28,
-  },
+  content: {},
   pageTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -771,43 +823,35 @@ const styles = StyleSheet.create({
     color: '#334155',
   },
   categoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingBottom: 10,
-    gap: 10,
-    alignItems: 'center',
+    paddingRight: 16,
+    gap: 8,
   },
-  categoryIconChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+  categoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e5e7eb',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  categoryIconChipActive: {
+  categoryChipActive: {
     borderColor: '#076F32',
     backgroundColor: '#E6F4EC',
   },
-  categoryIconChipImage: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    resizeMode: 'cover',
+  categoryChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
   },
-  categoryIconChipEmoji: {
-    fontSize: 20,
-  },
-  allCategoriesChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#E6F4EC',
-    borderWidth: 1,
-    borderColor: '#076F32',
-    alignItems: 'center',
-    justifyContent: 'center',
+  categoryChipTextActive: {
+    color: '#076F32',
   },
   errorText: {
     color: '#b45309',

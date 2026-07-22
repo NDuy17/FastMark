@@ -1,14 +1,12 @@
 const mongoose = require("mongoose");
 
-const VariantImageSchema = new mongoose.Schema(
-  {
-    ImageUrl: { type: String, required: true },
-    SortOrder: { type: Number, default: 0 },
-  },
-  { _id: true }
-);
-
+/**
+ * ProductVariant — biến thể (size/loại/giá/tồn) của sản phẩm.
+ * Chi tiết biến thể chỉ có đúng 1 ảnh: ImageUrl.
+ * Ảnh đại diện / gallery sản phẩm nằm ở collection ProductImage (theo Stt).
+ */
 const ProductVariantSchema = new mongoose.Schema({
+  // Sản phẩm cha (ref Product).
   ProductId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Product",
@@ -16,15 +14,23 @@ const ProductVariantSchema = new mongoose.Schema({
     index: true,
   },
 
+  // Tên biến thể (vd: "1kg", "Đỏ").
   VariantName: { type: String, required: true, trim: true },
+  // Giá bán (VND).
   Price: { type: Number, required: true, min: 0 },
+  // Tồn kho hiện tại (đơn vị theo Product.DonVi).
   Quantity: { type: Number, required: true, min: 0, default: 0 },
+  // Số lượng đã bán của biến thể này.
   SoldCount: { type: Number, default: 0, min: 0 },
-  Images: { type: [VariantImageSchema], default: [] },
+  // URL ảnh biến thể (1 ảnh).
+  ImageUrl: { type: String, default: "" },
 
+  // Trạng thái: 0 = ẩn, 1 = đang bán.
   Status: { type: Number, default: 1 },
 
+  // Thời điểm tạo biến thể.
   CreatedAt: { type: Date, default: Date.now },
+  // Thời điểm cập nhật gần nhất (auto trong pre-save).
   UpdatedAt: { type: Date, default: Date.now },
 });
 

@@ -17,12 +17,13 @@ import {
   unfollowShopOnBackend,
 } from '../../api/followApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
   const isShop = Boolean(item.shopId || item.shopName);
-  const avatar = item.shopAvatar || item.avatar;
+  const avatar = item.avatar || item.shopAvatar;
   const title = item.shopName || item.fullName || item.userName || (isShop ? 'Gian hàng' : 'Người dùng');
   const subtitle = item.shopUsername
     ? `@${item.shopUsername}`
@@ -80,6 +81,7 @@ export default function FollowConnectionsScreen({
   mode,
   shopId = '',
 }) {
+  const insets = useScreenInsets();
   const resolvedMode = mode || (initialTab === 'followers' ? 'followers' : 'following');
   const [activeTab, setActiveTab] = useState(resolvedMode);
   const [items, setItems] = useState([]);
@@ -180,11 +182,7 @@ export default function FollowConnectionsScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} variant="surface" />
-        <Text style={styles.title}>{title}</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+      <SubScreenHeader title={title} onBack={onBack} />
 
       {tabs.length > 1 ? (
         <View style={styles.tabRow}>
@@ -242,7 +240,11 @@ export default function FollowConnectionsScreen({
         <FlatList
           data={items}
           keyExtractor={(item) => String(item.shopId || item.id)}
-          contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
+          contentContainerStyle={
+            items.length === 0
+              ? styles.emptyList
+              : [styles.listContent, { paddingBottom: insets.nestedScrollPaddingBottom }]
+          }
           refreshControl={
             <RefreshControl refreshing={isRefreshing} onRefresh={() => loadData({ refresh: true })} />
           }

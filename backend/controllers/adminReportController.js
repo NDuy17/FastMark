@@ -29,21 +29,71 @@ exports.getReportDetail = async (req, res) => {
 };
 
 exports.dismissReport = async (req, res) => {
-  const report = await adminReportService.dismissReport(req.currentUser, req.params.id);
+  const replyMessage = pickQueryValue(req.body, ["replyMessage", "message", "adminNote", "note"]);
+  const report = await adminReportService.dismissReport(req.currentUser, req.params.id, {
+    replyMessage,
+  });
   return success(res, {
-    message: "Đã bác bỏ báo cáo vi phạm.",
+    message: "Đã bác bỏ báo cáo và gửi thông báo cho người tố cáo.",
     data: { report },
   });
 };
 
 exports.approveReport = async (req, res) => {
   const action = pickQueryValue(req.body, ["action"]) || "hide";
+  const replyMessage = pickQueryValue(req.body, ["replyMessage", "message", "adminNote", "note"]);
   const report = await adminReportService.approveReport(req.currentUser, req.params.id, {
     action,
+    replyMessage,
   });
 
   return success(res, {
     message: adminReportService.getApproveMessage(report.reportType, action),
     data: { report },
+  });
+};
+
+/** POST /admin/reports/:id/approve-buyer — hoàn cọc cho buyer, đóng dispute. */
+exports.approveBuyer = async (req, res) => {
+  const reservationDisputeService = require("../services/reservationDisputeService");
+  const note = pickQueryValue(req.body, ["note", "adminNote", "reason"]);
+  const data = await reservationDisputeService.adminApproveBuyer(
+    req.currentUser,
+    req.params.id,
+    { note }
+  );
+  return success(res, {
+    message: "Đã hoàn cọc cho buyer và đóng tranh chấp.",
+    data,
+  });
+};
+
+/** POST /admin/reports/:id/approve-seller — giải ngân cọc cho seller, đóng dispute. */
+exports.approveSeller = async (req, res) => {
+  const reservationDisputeService = require("../services/reservationDisputeService");
+  const note = pickQueryValue(req.body, ["note", "adminNote", "reason"]);
+  const data = await reservationDisputeService.adminApproveSeller(
+    req.currentUser,
+    req.params.id,
+    { note }
+  );
+  return success(res, {
+    message: "Đã giải phóng cọc cho seller và đóng tranh chấp.",
+    data,
+  });
+};
+
+/** POST /admin/reports/:id/reject — bác bỏ báo cáo tranh chấp, ghi log. */
+exports.rejectReservationReport = async (req, res) => {
+  const reservationDisputeService = require("../services/reservationDisputeService");
+  const note = pickQueryValue(req.body, ["note", "adminNote", "reason"]);
+  const data = await reservationDisputeService.adminRejectReport(
+    req.currentUser,
+    req.params.id,
+    { note }
+  );
+  return success(res, {
+    message: "Đã bác bỏ báo cáo. Cọc vẫn giữ ở ví hệ thống đến khi admin quyết định.",
+    data,
   });
 };

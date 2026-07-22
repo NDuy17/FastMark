@@ -1,6 +1,6 @@
 const adminCatalogService = require("../services/adminCatalogService");
-const { SHOP_STATUS } = require("../constants/shopStatus");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
+const { SHOP_STATUS } = require("../constants");
+const { PRODUCT_STATUS } = require("../constants");
 const { success } = require("../utils/apiResponse");
 
 function pickQueryValue(query, keys) {

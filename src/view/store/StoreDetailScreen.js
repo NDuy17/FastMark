@@ -30,16 +30,18 @@ import {
 } from '../../api/followApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import { formatPriceRange } from '../../core/utils/productFormat';
+import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { getProductImageOverlayLabel } from '../../core/utils/productAvailability';
 import { formatDistance, calculateDistanceMeters, hasValidLocation } from '../../core/utils/geo';
 import { getAvatarInitial } from '../../core/utils/avatarInitial';
 import { storeLogger as log } from '../../core/utils/logger';
 import CircularBackButton from '../shared/components/CircularBackButton';
+import AvatarBadge from '../shared/components/AvatarBadge';
 import FollowConnectionsScreen from '../profile/FollowConnectionsScreen';
 import ContactActions from './components/ContactActions';
 import StarRating from './components/StarRating';
 import ReportSheet from '../shared/components/ReportSheet';
+import ReportComposeModal from '../shared/components/ReportComposeModal';
 import { useSelector } from 'react-redux';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
 const TABS = [
@@ -128,6 +130,8 @@ export default function StoreDetailScreen({
   const [activeTab, setActiveTab] = useState('products');
   const [loading, setLoading] = useState(true);
   const [reportVisible, setReportVisible] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [composeVisible, setComposeVisible] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
   const [showFollowScreen, setShowFollowScreen] = useState(false);
@@ -434,9 +438,13 @@ export default function StoreDetailScreen({
   const displayLikes =
     productLikesTotal > 0 ? productLikesTotal : Number(store.total_likes) || 0;
 
-  async function handleReportSubmit(reason) {
+  function handleReportReason(reason) {
     setReportVisible(false);
+    setReportReason(reason);
+    setComposeVisible(true);
+  }
 
+  async function handleReportComposeSubmit({ title, content, images }) {
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
@@ -449,17 +457,28 @@ export default function StoreDetailScreen({
         reportType: 3,
         shopId: store.id,
         shopName: store.name,
-        title: reason,
+        title,
+        content,
+        images,
       });
 
-      Alert.alert('Đã gửi báo cáo', `Cảm ơn bạn. Chúng tôi đã ghi nhận: "${reason}".`);
+      setComposeVisible(false);
+      setReportReason('');
+      Alert.alert('Đã gửi báo cáo', 'Cảm ơn bạn. Chúng tôi đã ghi nhận tố cáo.');
     } catch (error) {
       Alert.alert('Không gửi được báo cáo', error.message || 'Vui lòng thử lại sau.');
     }
   }
 
   function handleOpenChat() {
-    onOpenChat?.({ shopId: store.id, shopName: store.name });
+    const shopId = store.id || storeId;
+    if (!shopId) {
+      return;
+    }
+    onOpenChat?.({
+      shopId: String(shopId),
+      shopName: store.shop_name || store.fullName || store.name || 'Gian hàng',
+    });
   }
 
   function handleNavigateDirections() {
@@ -580,8 +599,10 @@ export default function StoreDetailScreen({
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Thông tin liên hệ</Text>
 
-          <InfoRow label="Địa chỉ" value={store.user_address} />
-          <InfoRow label="Địa chỉ hệ thống" value={store.system_address} />
+          <InfoRow
+            label="Địa chỉ"
+            value={store.system_address || store.user_address}
+          />
           {Number.isFinite(distanceMeters) ? (
             <View style={styles.distanceRow}>
               <Text style={styles.infoLine}>
@@ -598,7 +619,6 @@ export default function StoreDetailScreen({
               ) : null}
             </View>
           ) : null}
-          <InfoRow label="Số điện thoại" value={store.phone} />
           <InfoRow label="Giờ đóng - mở cửa" value={hoursText} />
           <InfoRow
             label="Trạng thái"
@@ -627,66 +647,7 @@ export default function StoreDetailScreen({
           })}
         </View>
 
-        {activeTab === 'products' ? (
-          <View style={styles.productsGrid}>
-            {products.length === 0 ? (
-              <Text style={styles.emptyText}>Chưa có sản phẩm nào</Text>
-            ) : (
-              products.map((product) => {
-                const overlayLabel = getProductImageOverlayLabel(product);
-
-                return (
-                <Pressable
-                  key={product.id}
-                  style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}
-                  onPress={() => onProductPress?.(product.id)}
-                >
-                  <View style={styles.productImageWrap}>
-                    <View style={styles.productImage}>
-                      {product.thumbnail ? (
-                        <Image source={{ uri: product.thumbnail }} style={styles.productThumb} />
-                      ) : (
-                        <View style={styles.productEmojiWrap}>
-                          <Text style={styles.productEmoji}>{product.image_emoji}</Text>
-                        </View>
-                      )}
-                      {overlayLabel ? (
-                        <View style={styles.soldOutMask} pointerEvents="none">
-                          <Text style={styles.soldOutText}>{overlayLabel}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Pressable
-                      onPress={() => toggleLikeProduct(product.id)}
-                      hitSlop={8}
-                      style={styles.productLikeBadge}
-                    >
-                      <Ionicons
-                        name={likedProducts[product.id] ? 'heart' : 'heart-outline'}
-                        size={14}
-                        color={likedProducts[product.id] ? '#ef4444' : '#64748b'}
-                      />
-                      <Text style={styles.productLikeCount}>{Number(product.likeCount) || 0}</Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.productInfo}>
-                    <Text style={styles.productName} numberOfLines={2}>
-                      {product.name}
-                    </Text>
-                    <Text style={styles.productPrice} numberOfLines={1}>
-                      {formatPriceRange(
-                        product.minPrice ?? product.price,
-                        product.maxPrice ?? product.price
-                      )}
-                    </Text>
-                    <Text style={styles.productSold}>Đã bán: {product.soldCount || 0}</Text>
-                  </View>
-                </Pressable>
-                );
-              })
-            )}
-          </View>
-        ) : (
+        {activeTab === 'reviews' ? (
           <View style={styles.reviewsList}>
             <View style={styles.reviewsSummary}>
               <Text style={styles.reviewsSummaryScore}>{store.rating_avg.toFixed(1)}</Text>
@@ -704,11 +665,11 @@ export default function StoreDetailScreen({
               reviews.map((review) => (
                 <View key={review.id} style={styles.reviewCard}>
                   <View style={styles.reviewHeader}>
-                    <View style={styles.reviewAvatar}>
-                      <Text style={styles.reviewAvatarText}>
-                        {review.user_name.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
+                    <AvatarBadge
+                      name={review.user_name}
+                      uri={review.avatar || review.photoUrl || ''}
+                      size={36}
+                    />
                     <View style={styles.reviewMeta}>
                       <Text style={styles.reviewName}>{review.user_name}</Text>
                       <StarRating rating={review.rating} size={13} />
@@ -716,7 +677,26 @@ export default function StoreDetailScreen({
                     <Text style={styles.reviewDate}>{formatDate(review.created_at)}</Text>
                   </View>
                   <Text style={styles.reviewComment}>{review.comment}</Text>
-                  {review.imageUrl || review.image_url ? (
+                  {Array.isArray(review.images) && review.images.length > 0 ? (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.reviewImagesRow}
+                    >
+                      {review.images.map((image, index) => {
+                        const uri = image.imageUrl || image.ImageUrl || image;
+                        if (!uri || typeof uri !== 'string') return null;
+                        return (
+                          <Image
+                            key={`${review.id}-img-${index}`}
+                            source={{ uri }}
+                            style={styles.reviewImage}
+                            resizeMode="cover"
+                          />
+                        );
+                      })}
+                    </ScrollView>
+                  ) : review.imageUrl || review.image_url ? (
                     <Image
                       source={{ uri: review.imageUrl || review.image_url }}
                       style={styles.reviewImage}
@@ -727,6 +707,93 @@ export default function StoreDetailScreen({
               ))
             )}
           </View>
+        ) : (
+          <View style={styles.productsGrid}>
+            {products.length === 0 ? (
+              <Text style={styles.emptyText}>Chưa có sản phẩm nào</Text>
+            ) : (
+              products.map((product) => {
+                const overlayLabel = getProductImageOverlayLabel(product);
+                const isPromotion =
+                  Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
+                const promoLabels = isPromotion ? getProductPromoPriceLabels(product) : null;
+
+                return (
+                  <Pressable
+                    key={product.id}
+                    style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}
+                    onPress={() => onProductPress?.(product.id)}
+                  >
+                    <View style={styles.productImageWrap}>
+                      <View style={styles.productImage}>
+                        {product.thumbnail ? (
+                          <Image source={{ uri: product.thumbnail }} style={styles.productThumb} />
+                        ) : (
+                          <View style={styles.productEmojiWrap}>
+                            <Text style={styles.productEmoji}>{product.image_emoji}</Text>
+                          </View>
+                        )}
+                        {overlayLabel ? (
+                          <View style={styles.soldOutMask} pointerEvents="none">
+                            <Text style={styles.soldOutText}>{overlayLabel}</Text>
+                          </View>
+                        ) : null}
+                        {isPromotion ? (
+                          <View style={styles.promoBadge}>
+                            <Text style={styles.promoBadgeText}>-{product.discountPercent}%</Text>
+                          </View>
+                        ) : null}
+                        {Number(product.pinProduct) > 0 ? (
+                          <View style={styles.pinBadge}>
+                            <Ionicons name="pin" size={11} color="#ffffff" />
+                            <Text style={styles.pinBadgeText}>{Number(product.pinProduct)}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Pressable
+                        onPress={() => toggleLikeProduct(product.id)}
+                        hitSlop={8}
+                        style={styles.productLikeBadge}
+                      >
+                        <Ionicons
+                          name={likedProducts[product.id] ? 'heart' : 'heart-outline'}
+                          size={18}
+                          color={likedProducts[product.id] ? '#ef4444' : '#64748b'}
+                        />
+                        <Text style={styles.productLikeCount}>{Number(product.likeCount) || 0}</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.productInfo}>
+                      <Text style={styles.productName} numberOfLines={2}>
+                        {product.name}
+                      </Text>
+                      {isPromotion && promoLabels ? (
+                        <>
+                          <Text style={styles.productOriginalPrice} numberOfLines={1}>
+                            {promoLabels.originalLabel}
+                          </Text>
+                          <Text
+                            style={[styles.productPrice, styles.productPromoPrice]}
+                            numberOfLines={1}
+                          >
+                            {promoLabels.saleLabel}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={styles.productPrice} numberOfLines={1}>
+                          {formatPriceRange(
+                            product.minPrice ?? product.price,
+                            product.maxPrice ?? product.price
+                          )}
+                        </Text>
+                      )}
+                      <Text style={styles.productSold}>Đã bán: {product.soldCount || 0}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
         )}
       </ScrollView>
 
@@ -734,7 +801,17 @@ export default function StoreDetailScreen({
         visible={reportVisible}
         title="Báo cáo gian hàng"
         onClose={() => setReportVisible(false)}
-        onSubmit={handleReportSubmit}
+        onSubmit={handleReportReason}
+      />
+      <ReportComposeModal
+        visible={composeVisible}
+        headerTitle="Chi tiết tố cáo gian hàng"
+        reasonTitle={reportReason}
+        onClose={() => {
+          setComposeVisible(false);
+          setReportReason('');
+        }}
+        onSubmit={handleReportComposeSubmit}
       />
     </View>
   );
@@ -939,12 +1016,12 @@ const styles = StyleSheet.create({
   sectionCard: {
     backgroundColor: '#ffffff',
     marginHorizontal: 16,
-    marginBottom: 12,
-    borderRadius: 16,
-    padding: 16,
+    marginBottom: 10,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    gap: 12,
+    gap: 6,
   },
   messageButton: {
     minHeight: 44,
@@ -959,17 +1036,17 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   infoRow: {
-    marginBottom: 10,
+    marginBottom: 4,
   },
   infoLine: {
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 12,
+    lineHeight: 17,
   },
   infoLabelInline: {
     color: '#64748b',
@@ -980,19 +1057,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   contactActions: {
-    marginTop: 4,
-    gap: 10,
+    marginTop: 2,
+    gap: 8,
   },
   distanceRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   directionsChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 999,
     backgroundColor: '#E6F4EC',
     borderWidth: 1,
@@ -1000,7 +1077,7 @@ const styles = StyleSheet.create({
   },
   directionsChipText: {
     color: '#076F32',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   tabBar: {
@@ -1091,28 +1168,23 @@ const styles = StyleSheet.create({
   },
   productLikeBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    bottom: 6,
+    right: 6,
     zIndex: 6,
     elevation: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
+    minHeight: 30,
     backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 999,
+    borderRadius: 15,
     paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    justifyContent: 'center',
   },
   productLikeCount: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
+    fontWeight: '800',
+    color: '#0f172a',
   },
   productEmoji: {
     fontSize: 40,
@@ -1133,6 +1205,49 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#076F32',
     marginBottom: 3,
+  },
+  productPromoPrice: {
+    color: '#dc2626',
+  },
+  productOriginalPrice: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+    marginBottom: 2,
+  },
+  promoBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    zIndex: 4,
+    backgroundColor: '#dc2626',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  promoBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  pinBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    zIndex: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#076F32',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  pinBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
   },
   productSold: {
     fontSize: 11,
@@ -1175,20 +1290,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
-  },
-  reviewAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#076F32',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  reviewAvatarText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 16,
+    gap: 10,
   },
   reviewMeta: {
     flex: 1,
@@ -1208,10 +1310,14 @@ const styles = StyleSheet.create({
     color: '#475569',
     lineHeight: 20,
   },
-  reviewImage: {
+  reviewImagesRow: {
     marginTop: 10,
-    width: '100%',
-    height: 180,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  reviewImage: {
+    width: 120,
+    height: 120,
     borderRadius: 10,
     backgroundColor: '#e2e8f0',
   },

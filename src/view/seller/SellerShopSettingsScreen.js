@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
+  Image,
+  Linking,
   Pressable,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -10,7 +13,6 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
-import { Ionicons } from '@expo/vector-icons';
 import { useDispatch, useSelector } from 'react-redux';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import {
@@ -32,7 +34,6 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   const [isLocating, setIsLocating] = useState(false);
   const [isPickingLocation, setIsPickingLocation] = useState(false);
 
-  const [address, setAddress] = useState('');
   const [systemAddress, setSystemAddress] = useState('');
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
@@ -40,26 +41,33 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   const [openTime, setOpenTime] = useState('');
   const [closeTime, setCloseTime] = useState('');
   const [isOpen, setIsOpen] = useState(true);
-  const [allowReserve, setAllowReserve] = useState(true);
   const [depositPercent, setDepositPercent] = useState(0);
   const [pinHours, setPinHours] = useState(false);
+  const [qrPayload, setQrPayload] = useState('');
+  const [qrCodeValue, setQrCodeValue] = useState('');
+  const [shopId, setShopId] = useState('');
 
   const loadSettings = useCallback(async () => {
     setIsLoading(true);
     try {
       const idToken = await getCurrentUserIdToken();
       const shop = await getSellerShopSettingsOnBackend(idToken);
-      setAddress(shop.address || '');
-      setSystemAddress(shop.systemAddress || '');
+      setSystemAddress(shop.systemAddress || shop.addressHeThong || '');
       setLatitude(Number.isFinite(Number(shop.latitude)) ? Number(shop.latitude) : null);
       setLongitude(Number.isFinite(Number(shop.longitude)) ? Number(shop.longitude) : null);
       setDescription(shop.description || '');
-      setOpenTime(shop.openTime || '');
-      setCloseTime(shop.closeTime || '');
+      setOpenTime(shop.openTime || '08:00');
+      setCloseTime(shop.closeTime || '21:00');
       setIsOpen(Number(shop.isOpen) === 1);
-      setAllowReserve(shop.allowReserve !== false);
       setDepositPercent(Math.max(0, Math.min(100, Number(shop.depositPercent) || 0)));
       setPinHours(Boolean(shop.pinHours));
+      const nextShopId = String(shop.shopId || shop.id || '');
+      setShopId(nextShopId);
+      setQrCodeValue(String(shop.qrCodeValue || nextShopId));
+      setQrPayload(
+        shop.qrPayload ||
+          JSON.stringify({ shopId: String(shop.qrCodeValue || nextShopId) })
+      );
       dispatch(applyShopSettingsToProfile(shop));
     } catch (loadError) {
       Alert.alert('Lỗi', loadError.message || 'Không tải được cài đặt cửa hàng.');
@@ -106,8 +114,8 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   }
 
   async function handleSave() {
-    if (!address.trim()) {
-      Alert.alert('Lỗi', 'Vui lòng nhập địa chỉ cửa hàng.');
+    if (!systemAddress.trim()) {
+      Alert.alert('Lỗi', 'Vui lòng chọn vị trí cửa hàng để lấy địa chỉ hệ thống.');
       return;
     }
 
@@ -123,18 +131,20 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
         idToken,
         payload: {
           description: description.trim(),
-          address: address.trim(),
           systemAddress: systemAddress.trim(),
+          addressHeThong: systemAddress.trim(),
           latitude,
           longitude,
-          openTime,
-          closeTime,
+          openTime: String(openTime || '').trim() || '08:00',
+          closeTime: String(closeTime || '').trim() || '21:00',
           isOpen: isOpen ? 1 : 0,
-          allowReserve,
           depositPercent: Math.max(0, Math.min(100, Number(depositPercent) || 0)),
           pinHours,
         },
       });
+      setOpenTime(updated.openTime || '08:00');
+      setCloseTime(updated.closeTime || '21:00');
+      setPinHours(Boolean(updated.pinHours));
       dispatch(applyShopSettingsToProfile(updated));
       await dispatch(syncSellerAccess());
       onSaved?.(updated);
@@ -173,50 +183,23 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   }
 
   const displayPhone = profile?.shopPhone || profile?.phone || 'Chưa cập nhật';
-  const phoneVerified = Boolean(profile?.sellerPhoneVerified);
 
   return (
     <View style={styles.screenWrap}>
       <ProfileSubScreen title="Cài đặt cửa hàng" onBack={onBack}>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Thông tin gian hàng</Text>
-          <Text style={styles.hintText}>Tên & username lấy từ tài khoản</Text>
-          <Text style={styles.readOnlyValue}>
-            {profile?.fullName || 'Chưa có họ tên'} · @{profile?.userName || '—'}
-          </Text>
-          <Text style={[styles.hintText, { marginBottom: 12 }]}>
-            Đổi họ tên / username ở tab Tài khoản. Shop chỉ quản lý bio, giờ mở cửa và địa chỉ.
-          </Text>
+          <Text style={styles.sectionTitle}>SĐT</Text>
+          <Text style={styles.readOnlyValue}>{displayPhone}</Text>
+          <Pressable
+            onPress={onChangePhone}
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.secondaryButtonText}>Đổi SĐT</Text>
+          </Pressable>
         </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Số điện thoại</Text>
-        <Text style={styles.readOnlyValue}>{displayPhone}</Text>
-        <Text style={styles.hintText}>
-          Số điện thoại liên hệ được quản lý ở tài khoản và phải xác minh bằng mã OTP.
-        </Text>
-        {phoneVerified ? (
-          <Text style={styles.verifiedText}>Đã xác minh</Text>
-        ) : (
-          <Text style={styles.unverifiedText}>Chưa xác minh</Text>
-        )}
-        <Pressable
-          onPress={onChangePhone}
-          style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.secondaryButtonText}>Đổi số điện thoại</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.card}>
         <Text style={styles.sectionTitle}>Địa chỉ</Text>
-        <Field
-          label="Địa chỉ người dùng nhập"
-          value={address}
-          onChangeText={setAddress}
-          placeholder="Số nhà, ngõ, tên đường, phường/xã..."
-          multiline
-        />
 
         <View style={styles.locationBox}>
           <Text style={styles.locationLabel}>Vị trí cửa hàng</Text>
@@ -310,39 +293,86 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Giữ hàng & đặt cọc</Text>
-        <View style={styles.switchRow}>
-          <View style={styles.switchInfo}>
-            <Text style={styles.switchLabel}>Cho phép giữ hàng</Text>
-            <Text style={styles.switchHint}>Buyer có thể gửi yêu cầu giữ sản phẩm</Text>
-          </View>
-          <Switch
-            value={allowReserve}
-            onValueChange={setAllowReserve}
-            trackColor={{ false: '#cbd5e1', true: '#7dd3c7' }}
-            thumbColor={allowReserve ? '#076F32' : '#f8fafc'}
-          />
+        <Text style={styles.label}>Phần trăm đặt cọc (0 = không cọc)</Text>
+        <View style={styles.depositChipRow}>
+          {[0, 10, 30, 50].map((pct) => {
+            const active = depositPercent === pct;
+            return (
+              <Pressable
+                key={pct}
+                onPress={() => setDepositPercent(pct)}
+                style={[styles.depositChip, active && styles.depositChipActive]}
+              >
+                <Text style={[styles.depositChipText, active && styles.depositChipTextActive]}>
+                  {pct}%
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
-        {allowReserve ? (
-          <>
-            <Text style={styles.label}>Phần trăm đặt cọc (0 = không cọc)</Text>
-            <View style={styles.depositChipRow}>
-              {[0, 10, 30, 50].map((pct) => {
-                const active = depositPercent === pct;
-                return (
-                  <Pressable
-                    key={pct}
-                    onPress={() => setDepositPercent(pct)}
-                    style={[styles.depositChip, active && styles.depositChipActive]}
-                  >
-                    <Text style={[styles.depositChipText, active && styles.depositChipTextActive]}>
-                      {pct}%
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </>
-        ) : null}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>My Shop QR</Text>
+        <Text style={styles.switchHint}>
+          QR cố định của gian hàng. Khách quét mã này khi nhận hàng để hoàn tất đơn giữ.
+        </Text>
+        {qrPayload ? (
+          <Image
+            source={{
+              uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(
+                qrPayload
+              )}`,
+            }}
+            style={styles.qrImage}
+          />
+        ) : (
+          <Text style={styles.switchHint}>Đang tạo mã QR…</Text>
+        )}
+        <Text style={styles.qrValue}>{qrCodeValue || shopId || '—'}</Text>
+        <View style={styles.qrActions}>
+          <Pressable
+            style={styles.qrActionBtn}
+            onPress={() => {
+              if (!qrPayload) return;
+              Alert.alert('QR gian hàng', `Nội dung QR:\n${qrPayload}`);
+            }}
+          >
+            <Text style={styles.qrActionText}>Xem QR</Text>
+          </Pressable>
+          <Pressable
+            style={styles.qrActionBtn}
+            onPress={async () => {
+              if (!qrPayload) return;
+              const url = `https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=8&data=${encodeURIComponent(
+                qrPayload
+              )}`;
+              try {
+                await Linking.openURL(url);
+              } catch {
+                Alert.alert('Lỗi', 'Không mở được liên kết tải QR.');
+              }
+            }}
+          >
+            <Text style={styles.qrActionText}>Tải QR</Text>
+          </Pressable>
+          <Pressable
+            style={styles.qrActionBtn}
+            onPress={async () => {
+              if (!qrPayload) return;
+              try {
+                await Share.share({
+                  message: `FastMark Shop QR\n${qrPayload}`,
+                  title: 'Chia sẻ QR gian hàng',
+                });
+              } catch {
+                Alert.alert('Lỗi', 'Không chia sẻ được QR.');
+              }
+            }}
+          >
+            <Text style={styles.qrActionText}>Chia sẻ</Text>
+          </Pressable>
+        </View>
       </View>
 
       <Pressable
@@ -406,10 +436,38 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', marginBottom: 8 },
+  qrImage: {
+    width: 220,
+    height: 220,
+    alignSelf: 'center',
+    marginVertical: 12,
+    backgroundColor: '#f8fafc',
+  },
+  qrValue: {
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 10,
+  },
+  qrActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  qrActionBtn: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 10,
+    backgroundColor: '#E6F4EC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrActionText: {
+    color: '#076F32',
+    fontWeight: '800',
+    fontSize: 12,
+  },
   readOnlyValue: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  hintText: { fontSize: 13, color: '#64748b', lineHeight: 20, marginTop: 6 },
-  verifiedText: { color: '#076F32', fontWeight: '700', fontSize: 13, marginTop: 6 },
-  unverifiedText: { color: '#b45309', fontWeight: '700', fontSize: 13, marginTop: 6 },
   secondaryButton: {
     marginTop: 12,
     minHeight: 42,

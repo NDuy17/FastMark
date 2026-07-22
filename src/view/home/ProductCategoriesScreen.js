@@ -1,17 +1,9 @@
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import CircularBackButton from '../shared/components/CircularBackButton';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
-function isRemoteIcon(value) {
-  return /^https?:\/\//i.test(String(value || '').trim());
-}
-
-function CategoryTile({ label, icon, active, onPress, showGridIcon = false }) {
-  const iconValue = String(icon || '').trim();
-  const showRemoteImage = isRemoteIcon(iconValue);
-
+function CategoryTile({ label, active, onPress }) {
   return (
     <Pressable
       style={({ pressed }) => [
@@ -21,17 +13,6 @@ function CategoryTile({ label, icon, active, onPress, showGridIcon = false }) {
       ]}
       onPress={onPress}
     >
-      <View style={[styles.categoryIconBox, active && styles.categoryIconBoxActive]}>
-        {showGridIcon ? (
-          <Ionicons name="grid-outline" size={24} color={active ? '#076F32' : '#64748b'} />
-        ) : showRemoteImage ? (
-          <Image source={{ uri: iconValue }} style={styles.categoryIconImage} />
-        ) : iconValue ? (
-          <Text style={styles.categoryIconEmoji}>{iconValue}</Text>
-        ) : (
-          <Ionicons name="pricetag-outline" size={22} color="#64748b" />
-        )}
-      </View>
       <Text style={[styles.categoryTileName, active && styles.categoryTileNameActive]} numberOfLines={2}>
         {label}
       </Text>
@@ -62,7 +43,6 @@ export default function ProductCategoriesScreen({
         <View style={styles.grid}>
           <CategoryTile
             label="Tất cả sản phẩm"
-            showGridIcon
             active={!selectedCategoryId}
             onPress={() => onSelectCategory('')}
           />
@@ -70,7 +50,6 @@ export default function ProductCategoriesScreen({
             <CategoryTile
               key={category.id}
               label={category.categoryName}
-              icon={category.icon || ''}
               active={selectedCategoryId === category.id}
               onPress={() => onSelectCategory(category.id)}
             />
@@ -116,10 +95,13 @@ const styles = StyleSheet.create({
     width: '47%',
     backgroundColor: '#ffffff',
     borderRadius: 14,
-    padding: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 56,
   },
   categoryTileActive: {
     borderColor: '#076F32',
@@ -127,27 +109,6 @@ const styles = StyleSheet.create({
   },
   categoryTilePressed: {
     opacity: 0.9,
-  },
-  categoryIconBox: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  categoryIconBoxActive: {
-    backgroundColor: '#d1fae5',
-  },
-  categoryIconImage: {
-    width: 30,
-    height: 30,
-    borderRadius: 6,
-    resizeMode: 'cover',
-  },
-  categoryIconEmoji: {
-    fontSize: 24,
   },
   categoryTileName: {
     fontSize: 13,

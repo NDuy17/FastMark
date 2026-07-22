@@ -13,9 +13,17 @@ connectDB();
 const { startReservationExpiryJob } = require("./jobs/reservationExpiryJob");
 startReservationExpiryJob();
 
+const { startSellerPlanExpiryJob } = require("./jobs/sellerPlanExpiryJob");
+startSellerPlanExpiryJob();
+
+const { startPromotionExpiryJob } = require("./jobs/promotionExpiryJob");
+startPromotionExpiryJob();
+
 const server = http.createServer(app);
 initSocket(server);
 
 server.listen(port, '0.0.0.0', () => {
+  const { isPayosConfigured } = require('./services/payosClient');
   console.log(`Server running on port ${port}`);
+  console.log(`PayOS: ${isPayosConfigured() ? 'configured' : 'NOT configured (check FastMark/.env)'}`);
 });

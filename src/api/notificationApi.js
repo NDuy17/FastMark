@@ -76,3 +76,54 @@ export async function markAllNotificationsReadOnBackend(audience = 'buyer') {
     return payload.data;
   });
 }
+
+export async function registerDevicePushTokenOnBackend({ token, platform }) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) {
+    throw new Error('Thiếu device token.');
+  }
+
+  return callWithAuthToken(async (idToken) => {
+    const response = await apiRequest(
+      API_ENDPOINTS.notificationDeviceToken,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token: normalizedToken,
+          platform: String(platform || 'unknown'),
+        }),
+      },
+      AUTH_TIMEOUT_MS
+    );
+    const payload = await parseApiResponse(response);
+    return payload.data;
+  });
+}
+
+export async function removeDevicePushTokenOnBackend(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) {
+    return { removed: 0 };
+  }
+
+  return callWithAuthToken(async (idToken) => {
+    const response = await apiRequest(
+      API_ENDPOINTS.notificationDeviceToken,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ token: normalizedToken }),
+      },
+      AUTH_TIMEOUT_MS
+    );
+    const payload = await parseApiResponse(response);
+    return payload.data;
+  });
+}

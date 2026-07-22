@@ -22,7 +22,7 @@ async function buildDefaultUserAvatarBuffer(displayName) {
   const initial = escapeXml(getAvatarInitial(displayName));
   const fontSize = Math.floor(AVATAR_SIZE * 0.42);
   const svg = `<svg width="${AVATAR_SIZE}" height="${AVATAR_SIZE}" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="${AVATAR_SIZE / 2}" cy="${AVATAR_SIZE / 2}" r="${AVATAR_SIZE / 2}" fill="${AVATAR_BG}" />
+  <rect width="${AVATAR_SIZE}" height="${AVATAR_SIZE}" fill="${AVATAR_BG}" />
   <text
     x="50%"
     y="50%"
@@ -64,14 +64,17 @@ function isGoogleHostedAvatar(url) {
   );
 }
 
-function hasSystemOrUploadedAvatar(user) {
+function isSystemDefaultAvatar(url) {
+  return pickString(url).includes("-default-");
+}
+
+function hasCustomUploadedAvatar(user) {
   const avatar = pickString(user?.Avatar);
   if (!avatar) {
     return false;
   }
-
-  // Avatar Google cũ không được giữ — luôn thay bằng avatar hệ thống.
-  return !isGoogleHostedAvatar(avatar);
+  // Giữ avatar user tự upload; Google + default hệ thống sẽ được thay.
+  return !isGoogleHostedAvatar(avatar) && !isSystemDefaultAvatar(avatar);
 }
 
 async function ensureDefaultUserAvatar(user) {
@@ -79,7 +82,7 @@ async function ensureDefaultUserAvatar(user) {
     return "";
   }
 
-  if (hasSystemOrUploadedAvatar(user)) {
+  if (hasCustomUploadedAvatar(user)) {
     return user.Avatar;
   }
 

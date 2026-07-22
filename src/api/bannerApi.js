@@ -22,3 +22,15 @@ export async function listActiveBannersOnBackend({ limit = 8 } = {}) {
   const payload = await parseApiResponse(response);
   return payload.data?.banners || [];
 }
+
+export async function recordBannerClickOnBackend(bannerId) {
+  const id = String(bannerId || '').trim();
+  if (!id) return null;
+  const response = await apiRequest(
+    `${API_ENDPOINTS.bannerClick}/${encodeURIComponent(id)}/click`,
+    { method: 'POST' },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data || null;
+}

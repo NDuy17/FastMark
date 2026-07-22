@@ -4,7 +4,7 @@ const DEFAULT_LOCATION = {
 };
 
 const MAP_EVENT_SOURCE = 'fastmark-map';
-export const LEAFLET_HTML_REVISION = 16;
+export const LEAFLET_HTML_REVISION = 17;
 
 function safeJson(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
@@ -121,28 +121,42 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       }
 
       .shop-marker-avt {
+        position: relative;
         flex-shrink: 0;
-        width: 28px;
-        height: 28px;
-        border-radius: 8px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
         overflow: hidden;
-        background: #2563eb;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        background-color: #076F32;
+        box-shadow: inset 0 0 0 1.5px rgba(226, 232, 240, 0.95);
       }
 
       .shop-marker-avt img {
-        width: 100%;
-        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 34px;
+        height: 34px;
+        max-width: none;
+        max-height: none;
         object-fit: cover;
+        object-position: center center;
         display: block;
+        border: 0;
       }
 
       .shop-marker-avt-fallback {
-        width: 16px;
-        height: 16px;
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         color: #ffffff;
+        font-size: 14px;
+        font-weight: 800;
+        font-family: sans-serif;
+        line-height: 1;
+        background: #076F32;
       }
 
       .shop-marker-meta {
@@ -195,9 +209,9 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         height: 10px;
         margin-top: -5px;
         border-radius: 999px;
-        background: #2563eb;
+        background: #076F32;
         border: 2px solid #ffffff;
-        box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+        box-shadow: 0 2px 6px rgba(7, 111, 50, 0.35);
       }
 
       .fastmark-restaurant-icon {
@@ -660,14 +674,12 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         return isRemoteIconUrl(avatarUrl) ? avatarUrl : '';
       }
 
-      function getShopFallbackIconHtml() {
+      function getShopFallbackIconHtml(restaurant) {
+        const initial = escapeHtmlAttr(getShopNameInitial(restaurant || {}));
         return (
-          '<svg class="shop-marker-avt-fallback" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-          '<path d="M4 9.5L5.2 4.8A1.5 1.5 0 0 1 6.66 3.7h10.68a1.5 1.5 0 0 1 1.46 1.1L20 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
-          '<path d="M4 9.5h16v2.2a2.2 2.2 0 0 1-2.2 2.2H6.2A2.2 2.2 0 0 1 4 11.7V9.5z" fill="currentColor" opacity="0.22"/>' +
-          '<path d="M6.2 13.9V19a1 1 0 0 0 1 1h9.6a1 1 0 0 0 1-1v-5.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
-          '<path d="M10 20v-4.2h4V20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
-          '</svg>'
+          '<div class="shop-marker-avt-fallback" aria-hidden="true">' +
+          initial +
+          '</div>'
         );
       }
 
@@ -686,7 +698,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
             'x="1.15" y="0.15" width="21.7" height="21.7" ' +
             'preserveAspectRatio="xMidYMid slice"/>' +
             '</g>'
-          : '<circle cx="12" cy="11" r="10.85" fill="#0a5c5f"/>' +
+          : '<circle cx="12" cy="11" r="10.85" fill="#076F32"/>' +
             '<text x="12" y="11.5" text-anchor="middle" dominant-baseline="central" ' +
             'fill="#ffffff" font-size="12" font-weight="800" font-family="sans-serif">' +
             initial +
@@ -709,8 +721,10 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         const category = escapeHtmlAttr(getShopCategoryLabel(restaurant));
 
         const avatarHtml = imageUrl
-          ? '<img src="' + escapeHtmlAttr(imageUrl) + '" alt="" />'
-          : getShopFallbackIconHtml();
+          ? '<div class="shop-marker-avt"><img src="' +
+            escapeHtmlAttr(imageUrl) +
+            '" alt="" /></div>'
+          : '<div class="shop-marker-avt">' + getShopFallbackIconHtml(restaurant) + '</div>';
 
         const categoryHtml = category
           ? '<div class="shop-marker-cat">' + category + '</div>'
@@ -719,7 +733,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         return (
           '<div class="shop-marker-card">' +
           '<div class="shop-marker-card-inner">' +
-          '<div class="shop-marker-avt">' + avatarHtml + '</div>' +
+          avatarHtml +
           '<div class="shop-marker-meta">' +
           '<div class="shop-marker-name">' + name + '</div>' +
           '<div class="shop-marker-rating"><span class="shop-marker-star">★</span>' + rating + '</div>' +

@@ -1,7 +1,7 @@
 const ProductCategory = require("../models/ProductCategory");
 const Product = require("../models/Product");
 const { normalizeCategoryId, isValidCategoryId } = require("../utils/categoryId");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
+const { PRODUCT_STATUS } = require("../constants");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
 
 const CATEGORY_SORT = { CreatedAt: 1, _id: 1 };

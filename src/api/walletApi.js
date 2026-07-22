@@ -47,6 +47,21 @@ export async function getWalletTransactionsOnBackend(idToken, { limit = 30 } = {
   return (payload.data?.transactions || []).map(normalizeWalletTransaction);
 }
 
+export async function getWalletTransactionOnBackend(idToken, transactionId) {
+  const id = encodeURIComponent(String(transactionId || '').trim());
+  if (!id) {
+    throw new Error('Thiếu mã giao dịch.');
+  }
+
+  const response = await apiRequest(
+    API_ENDPOINTS.walletTransaction(id),
+    { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return normalizeWalletTransaction(payload.data?.transaction || {});
+}
+
 export async function createWalletTopupOnBackend(idToken, amount) {
   const response = await apiRequest(
     API_ENDPOINTS.walletTopup,
@@ -63,6 +78,7 @@ export async function createWalletTopupOnBackend(idToken, amount) {
     checkoutUrl: payload.data?.checkoutUrl || '',
     orderCode: payload.data?.orderCode ?? null,
     paymentLinkId: payload.data?.paymentLinkId || '',
+    description: payload.data?.description || '',
   };
 }
 
@@ -81,4 +97,58 @@ export async function syncWalletTopupOnBackend(idToken, orderCode) {
     transaction: normalizeWalletTransaction(payload.data?.transaction || {}),
     wallet: normalizeWallet(payload.data?.wallet || {}),
   };
+}
+
+export async function cancelWalletTopupOnBackend(idToken, orderCode) {
+  const response = await apiRequest(
+    API_ENDPOINTS.walletTopupCancel,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({ orderCode }),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return {
+    transaction: normalizeWalletTransaction(payload.data?.transaction || {}),
+    wallet: normalizeWallet(payload.data?.wallet || {}),
+  };
+}
+
+export async function listWalletBanksOnBackend(idToken) {
+  const response = await apiRequest(
+    API_ENDPOINTS.walletBanks,
+    { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.banks || [];
+}
+
+export async function createWalletWithdrawOnBackend(idToken, body) {
+  const response = await apiRequest(
+    API_ENDPOINTS.walletWithdraw,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify(body),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return {
+    withdraw: payload.data?.withdraw || null,
+    wallet: normalizeWallet(payload.data?.wallet || {}),
+  };
+}
+
+export async function listWalletWithdrawsOnBackend(idToken, { limit = 30 } = {}) {
+  const response = await apiRequest(
+    `${API_ENDPOINTS.walletWithdraws}?limit=${limit}`,
+    { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.withdraws || [];
 }

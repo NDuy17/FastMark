@@ -1,14 +1,21 @@
 const SellerVerification = require("../models/SellerVerification");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
-const { SELLER_VERIFICATION_STATUS, USER_ROLE } = require("../constants/sellerVerification");
+const { SELLER_VERIFICATION_STATUS, USER_ROLE } = require("../constants");
 const { assertCategoryExists } = require("./categoryService");
 const { normalizeCategoryId } = require("../utils/categoryId");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
-const { ensureDefaultShopAvatar } = require("./defaultShopAvatarService");
+const { ensureDefaultUserAvatar } = require("./defaultUserAvatarService");
+const {
+  OTP_PURPOSE,
+  getOtpSession,
+  setOtpSession,
+  clearOtpSession,
+  bumpOtpFailCount,
+} = require("./otpSessionStore");
 
 const PHONE_VERIFY_TTL_MS = 5 * 60 * 1000;
-const PHONE_RESEND_COOLDOWN_MS = 3 * 60 * 1000;
+const PHONE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
 const PHONE_VERIFY_MAX_ATTEMPTS = 5;
 const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
 
@@ -49,6 +56,7 @@ function normalizeSellerRegistrationPayload(body = {}) {
   const address = pickPayloadValue(body, ["address", "Address"]);
   const systemAddress = pickPayloadValue(body, [
     "systemAddress",
+    "addressHeThong",
     "DiaChiHeThong",
     "DiachiHethong",
   ]);
@@ -59,8 +67,9 @@ function normalizeSellerRegistrationPayload(body = {}) {
     shopUsername: shopUsername ?? body.shopUsername,
     shopDescription: shopDescription ?? body.shopDescription,
     categoryId: normalizeCategoryId(categoryId ?? body.categoryId),
-    address: address ?? body.address,
-    systemAddress: systemAddress ?? body.systemAddress ?? body.DiaChiHeThong,
+    // Client may still send `address` — treat as addressHeThong.
+    systemAddress:
+      systemAddress ?? body.systemAddress ?? body.addressHeThong ?? body.DiaChiHeThong ?? address ?? body.address,
     latitude: body.latitude ?? body.lat,
     longitude: body.longitude ?? body.lng,
   };
@@ -170,40 +179,52 @@ function generatePhoneVerifyCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function encodePhoneVerifyPayload(phone, code) {
-  return `${phone}|${code}`;
+function getPhoneResendWaitSeconds(session) {
+  if (!session?.resendAt) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    Math.ceil((new Date(session.resendAt).getTime() + PHONE_RESEND_COOLDOWN_MS - Date.now()) / 1000)
+  );
 }
 
-function decodePhoneVerifyPayload(payload) {
-  const text = String(payload || "");
-  const separator = text.lastIndexOf("|");
-  if (separator <= 0 || separator === text.length - 1) {
-    return { phone: "", code: "" };
-  }
+function issuePhoneOtpSession(userId, targetPhone, { applyResendCooldown = true } = {}) {
+  const now = Date.now();
+  const code = generatePhoneVerifyCode();
+  const session = setOtpSession(OTP_PURPOSE.PHONE_VERIFY, userId, {
+    target: targetPhone,
+    code,
+    expiresAt: new Date(now + PHONE_VERIFY_TTL_MS),
+    resendAt: applyResendCooldown ? new Date(now) : null,
+    failCount: 0,
+  });
+  return { code, session };
+}
+
+function toPhoneOtpResponse(phone, session, code) {
+  const resendWait = getPhoneResendWaitSeconds(session);
   return {
-    phone: text.slice(0, separator),
-    code: text.slice(separator + 1),
+    phone,
+    verificationCode: code,
+    expiresAt: session.expiresAt,
+    expiresInSeconds: PHONE_VERIFY_TTL_MS / 1000,
+    resendAvailableAt:
+      resendWait > 0
+        ? new Date(Date.now() + resendWait * 1000)
+        : session.resendAt
+          ? new Date(new Date(session.resendAt).getTime() + PHONE_RESEND_COOLDOWN_MS)
+          : null,
+    resendCooldownSeconds: resendWait || PHONE_RESEND_COOLDOWN_MS / 1000,
   };
 }
 
-function getResendWaitSeconds(user) {
-  if (!user.SellerPhoneVerifyResendAt) {
-    return 0;
-  }
-  return Math.max(0, Math.ceil((new Date(user.SellerPhoneVerifyResendAt).getTime() - Date.now()) / 1000));
-}
-
-function clearPhoneVerifySession(user) {
-  user.SellerPhoneVerifyCode = null;
-  user.SellerPhoneVerifyCodeExpiresAt = null;
-  user.SellerPhoneVerifyFailCount = 0;
-}
-
+/** Gửi / gửi lại mã SĐT. Gửi lại: chặn 2 phút, hủy mã cũ, phát mã mới. */
 async function requestSellerPhoneCode(user, phoneInput) {
   const targetPhone = await assertPhoneAvailable(phoneInput, user._id);
-
   const currentPhone = normalizePhone(user.Phone);
-  if (user.SellerPhoneVerified && currentPhone && currentPhone === targetPhone) {
+
+  if (User.isPhoneVerified(user) && currentPhone && currentPhone === targetPhone) {
     return {
       phone: targetPhone,
       alreadyVerified: true,
@@ -214,37 +235,32 @@ async function requestSellerPhoneCode(user, phoneInput) {
     };
   }
 
-  const resendWaitSeconds = getResendWaitSeconds(user);
+  const existing = getOtpSession(OTP_PURPOSE.PHONE_VERIFY, user._id);
+  const resendWaitSeconds = getPhoneResendWaitSeconds(existing);
   if (resendWaitSeconds > 0) {
     const error = createServiceError(
       `Vui lòng đợi ${resendWaitSeconds} giây trước khi gửi lại mã.`,
       429
     );
     error.data = {
-      resendAvailableAt: user.SellerPhoneVerifyResendAt,
+      resendAvailableAt: new Date(Date.now() + resendWaitSeconds * 1000),
       resendCooldownSeconds: resendWaitSeconds,
     };
     throw error;
   }
 
-  const code = generatePhoneVerifyCode();
-  const now = Date.now();
-  user.SellerPhoneVerifyCode = encodePhoneVerifyPayload(targetPhone, code);
-  user.SellerPhoneVerifyCodeExpiresAt = new Date(now + PHONE_VERIFY_TTL_MS);
-  user.SellerPhoneVerifyResendAt = new Date(now + PHONE_RESEND_COOLDOWN_MS);
-  user.SellerPhoneVerifyFailCount = 0;
-  await user.save();
-
-  return {
-    phone: targetPhone,
-    verificationCode: code,
-    expiresAt: user.SellerPhoneVerifyCodeExpiresAt,
-    expiresInSeconds: PHONE_VERIFY_TTL_MS / 1000,
-    resendAvailableAt: user.SellerPhoneVerifyResendAt,
-    resendCooldownSeconds: PHONE_RESEND_COOLDOWN_MS / 1000,
-  };
+  // Hủy mã cũ (nếu có) → phát mã mới + khóa gửi lại 2 phút.
+  const { code, session } = issuePhoneOtpSession(user._id, targetPhone, {
+    applyResendCooldown: true,
+  });
+  return toPhoneOtpResponse(targetPhone, session, code);
 }
 
+/**
+ * Nhập đúng → lưu Phone (đã xác thực).
+ * Sai < 5 lần → báo còn lại.
+ * Sai đủ 5 lần → hệ thống tự gửi mã mới, bắt nhập mã mới.
+ */
 async function confirmSellerPhoneCode(user, code, phoneInput) {
   const phone = await assertPhoneAvailable(phoneInput, user._id);
   const normalizedCode = String(code || "").trim();
@@ -253,64 +269,47 @@ async function confirmSellerPhoneCode(user, code, phoneInput) {
     throw createServiceError("Thiếu mã xác minh.");
   }
 
-  if ((Number(user.SellerPhoneVerifyFailCount) || 0) >= PHONE_VERIFY_MAX_ATTEMPTS) {
-    clearPhoneVerifySession(user);
-    user.SellerPhoneVerifyResendAt = null;
-    await user.save();
-    const error = createServiceError(
-      "Bạn đã nhập sai quá 5 lần. Phiên xác minh đã bị hủy.",
-      429
-    );
-    error.data = { lockedOut: true };
-    throw error;
+  let session = getOtpSession(OTP_PURPOSE.PHONE_VERIFY, user._id);
+  if (!session?.code) {
+    throw createServiceError("Chưa có mã xác minh. Vui lòng gửi mã trước.");
   }
 
-  if (!user.SellerPhoneVerifyCode) {
-    throw createServiceError("Chưa có mã xác minh. Vui lòng gửi mã mới.");
-  }
-
-  if (
-    !user.SellerPhoneVerifyCodeExpiresAt ||
-    new Date() > user.SellerPhoneVerifyCodeExpiresAt
-  ) {
+  if (!session.expiresAt || new Date() > new Date(session.expiresAt)) {
+    clearOtpSession(OTP_PURPOSE.PHONE_VERIFY, user._id);
     throw createServiceError("Mã xác minh đã hết hạn. Vui lòng gửi lại mã mới.");
   }
 
-  const stored = decodePhoneVerifyPayload(user.SellerPhoneVerifyCode);
-  if (stored.phone !== phone || stored.code !== normalizedCode) {
-    const failCount = (Number(user.SellerPhoneVerifyFailCount) || 0) + 1;
-    user.SellerPhoneVerifyFailCount = failCount;
+  if (session.target !== phone) {
+    throw createServiceError("Số điện thoại không khớp phiên xác minh. Vui lòng gửi lại mã.");
+  }
+
+  if (session.code !== normalizedCode) {
+    session = bumpOtpFailCount(OTP_PURPOSE.PHONE_VERIFY, user._id) || session;
+    const failCount = Number(session.failCount) || 0;
 
     if (failCount >= PHONE_VERIFY_MAX_ATTEMPTS) {
-      clearPhoneVerifySession(user);
-      user.SellerPhoneVerifyResendAt = null;
-      await user.save();
+      // Sai 5 lần → hủy mã cũ, gửi mã mới + khóa gửi lại 2 phút (như vừa gửi mã).
+      const issued = issuePhoneOtpSession(user._id, phone, { applyResendCooldown: true });
       const error = createServiceError(
-        "Bạn đã nhập sai quá 5 lần. Phiên xác minh đã bị hủy.",
-        429
+        "Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới. Có thể gửi lại sau 2 phút.",
+        400
       );
-      error.data = { lockedOut: true };
+      error.data = {
+        mustUseNewCode: true,
+        ...toPhoneOtpResponse(phone, issued.session, issued.code),
+      };
       throw error;
     }
 
-    await user.save();
     throw createServiceError(
       `Mã xác minh không đúng. Còn ${PHONE_VERIFY_MAX_ATTEMPTS - failCount} lần thử.`
     );
   }
 
+  // Đúng → chỉ lúc này mới lưu Phone (= đã xác thực).
   user.Phone = phone;
-  clearPhoneVerifySession(user);
-  user.SellerPhoneVerifyResendAt = null;
-  user.SellerPhoneVerified = true;
   await user.save();
-
-  const shop = await ShopProfile.findOne({ userId: user._id }).sort({ CreatedAt: -1 });
-  if (shop) {
-    shop.phone = phone;
-    shop.UpdatedAt = new Date();
-    await shop.save();
-  }
+  clearOtpSession(OTP_PURPOSE.PHONE_VERIFY, user._id);
 
   return { verified: true, phone };
 }
@@ -383,10 +382,8 @@ async function reloadVerificationById(verificationId) {
 
 async function promoteUserToSeller(user, verification, approvedById = null) {
   verification.status = SELLER_VERIFICATION_STATUS.APPROVED;
-  verification.approvedAt = new Date();
   verification.approvedBy = approvedById;
   verification.LyDoTuChoi = "";
-  verification.rejectedAt = null;
   verification.UpdatedAt = new Date();
   await verification.save();
 
@@ -397,42 +394,45 @@ async function promoteUserToSeller(user, verification, approvedById = null) {
 
   const existingShop = await ShopProfile.findOne({ userId: user._id });
   let shop = existingShop;
-  const identityName = String(user.FullName || user.UserName || "").trim();
-  const identityUsername = String(user.UserName || "").trim().toLowerCase();
   if (!existingShop) {
     shop = await ShopProfile.create({
       userId: user._id,
-      shopUsername: identityUsername,
-      shopName: identityName,
       categoryId,
-      description: verification.shopDescription || "",
-      avatar: "",
-      address: verification.address,
-      DiaChiHeThong: verification.DiaChiHeThong || "",
+      description: verification.shopDescription || verification.description || "",
+      addressHeThong:
+        verification.addressHeThong ||
+        verification.DiaChiHeThong ||
+        verification.address ||
+        "",
       latitude: verification.latitude,
       longitude: verification.longitude,
-      phone: user.Phone,
     });
+    // QR cố định = shopId (gán sau create vì cần _id).
+    shop.qrCodeValue = String(shop._id);
+    await shop.save();
   } else {
-    existingShop.shopUsername = identityUsername || existingShop.shopUsername || "";
-    existingShop.shopName = identityName || existingShop.shopName || "";
     if (categoryId) {
       existingShop.categoryId = categoryId;
     }
-    if (verification.shopDescription) {
-      existingShop.description = verification.shopDescription;
+    if (verification.shopDescription || verification.description) {
+      existingShop.description = verification.shopDescription || verification.description;
     }
-    existingShop.address = verification.address;
-    existingShop.DiaChiHeThong = verification.DiaChiHeThong || "";
+    existingShop.addressHeThong =
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "";
     existingShop.latitude = verification.latitude;
     existingShop.longitude = verification.longitude;
-    existingShop.phone = user.Phone;
+    if (!existingShop.qrCodeValue) {
+      existingShop.qrCodeValue = String(existingShop._id);
+    }
     existingShop.UpdatedAt = new Date();
     await existingShop.save();
     shop = existingShop;
   }
 
-  await ensureDefaultShopAvatar(shop, user);
+  await ensureDefaultUserAvatar(user);
 
   return verification;
 }
@@ -448,10 +448,7 @@ async function syncSellerRoleFromVerification(user) {
     if (user.Role !== USER_ROLE.SELLER) {
       await promoteUserToSeller(user, verification);
     } else {
-      const shop = await ShopProfile.findOne({ userId: user._id }).sort({ CreatedAt: -1 });
-      if (shop) {
-        await ensureDefaultShopAvatar(shop, user);
-      }
+      await ensureDefaultUserAvatar(user);
     }
     return verification;
   }
@@ -467,7 +464,7 @@ async function syncSellerRoleFromVerification(user) {
 async function submitSellerVerification(user, payload) {
   const normalizedPayload = normalizeSellerRegistrationPayload(payload);
 
-  if (!user.SellerPhoneVerified) {
+  if (!User.isPhoneVerified(user)) {
     throw createServiceError("Bạn cần xác minh số điện thoại trước khi đăng ký người bán.");
   }
 
@@ -481,12 +478,11 @@ async function submitSellerVerification(user, payload) {
     throw createServiceError("Tài khoản đã được duyệt người bán.");
   }
 
-  const address = String(normalizedPayload.address || "").trim();
   const systemAddress = String(normalizedPayload.systemAddress || "").trim();
   const latitude = Number(normalizedPayload.latitude);
   const longitude = Number(normalizedPayload.longitude);
 
-  if (!address) {
+  if (!systemAddress) {
     throw createServiceError("Vui lòng nhập địa chỉ.");
   }
 
@@ -541,18 +537,12 @@ async function submitSellerVerification(user, payload) {
     cccdFrontImage,
     cccdBackImage,
     selfieImage,
-    shopUsername,
-    shopName,
     categoryId: category._id,
-    shopDescription,
-    address,
-    DiaChiHeThong: systemAddress,
+    addressHeThong: systemAddress,
     latitude,
     longitude,
     status: SELLER_VERIFICATION_STATUS.PENDING,
     LyDoTuChoi: "",
-    rejectedAt: null,
-    approvedAt: null,
     approvedBy: null,
     UpdatedAt: new Date(),
   };
@@ -563,9 +553,6 @@ async function submitSellerVerification(user, payload) {
       existing.status === SELLER_VERIFICATION_STATUS.REJECTED)
   ) {
     existing.set(sharedFields);
-    if (!existing.submittedAt) {
-      existing.submittedAt = new Date();
-    }
     await existing.save();
     return reloadVerificationById(existing._id);
   }
@@ -573,7 +560,6 @@ async function submitSellerVerification(user, payload) {
   const verification = await SellerVerification.create({
     userId: user._id,
     ...sharedFields,
-    submittedAt: new Date(),
   });
 
   return reloadVerificationById(verification._id);
@@ -626,8 +612,6 @@ async function rejectSellerVerificationByAdmin(adminUser, verificationId, reason
 
   verification.status = SELLER_VERIFICATION_STATUS.REJECTED;
   verification.LyDoTuChoi = lyDoTuChoi;
-  verification.rejectedAt = new Date();
-  verification.approvedAt = null;
   verification.approvedBy = null;
   verification.UpdatedAt = new Date();
   await verification.save();
@@ -648,20 +632,41 @@ function toPublicVerification(verification) {
     cccdFrontImage: verification.cccdFrontImage || "",
     cccdBackImage: verification.cccdBackImage || "",
     selfieImage: verification.selfieImage || "",
-    address: verification.address || "",
-    DiaChiHeThong: verification.DiaChiHeThong || "",
+    address:
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "",
+    addressHeThong:
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "",
+    DiaChiHeThong:
+      verification.addressHeThong ||
+      verification.DiaChiHeThong ||
+      verification.address ||
+      "",
     latitude: verification.latitude,
     longitude: verification.longitude,
-    shopUsername: verification.shopUsername || "",
-    shopName: verification.shopName || "",
+    // Tên/handle lấy từ User khi populate; giữ field trống để tương thích client cũ.
+    shopUsername: verification.userId?.UserName || verification.shopUsername || "",
+    shopName: verification.userId?.FullName || verification.shopName || "",
     categoryId: category.categoryId,
     categoryName: category.categoryName,
-    shopDescription: verification.shopDescription || "",
+    shopDescription: verification.shopDescription || verification.description || "",
     status: verification.status,
     lyDoTuChoi: verification.LyDoTuChoi || "",
-    submittedAt: verification.submittedAt,
-    approvedAt: verification.approvedAt,
-    rejectedAt: verification.rejectedAt,
+    // Thời điểm trạng thái cuối = UpdatedAt.
+    submittedAt: verification.CreatedAt,
+    approvedAt:
+      verification.status === SELLER_VERIFICATION_STATUS.APPROVED
+        ? verification.UpdatedAt
+        : null,
+    rejectedAt:
+      verification.status === SELLER_VERIFICATION_STATUS.REJECTED
+        ? verification.UpdatedAt
+        : null,
     createdAt: verification.CreatedAt,
     updatedAt: verification.UpdatedAt,
   };

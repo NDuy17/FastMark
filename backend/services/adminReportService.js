@@ -4,15 +4,22 @@ const Review = require("../models/Review");
 const Product = require("../models/Product");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
-const { REPORT_STATUS, REPORT_STATUS_LABELS } = require("../constants/reportStatus");
-const { REPORT_TYPE, REPORT_TYPE_LABELS } = require("../constants/reportType");
-const { PRODUCT_STATUS } = require("../constants/productStatus");
-const { SHOP_STATUS, SHOP_OPEN } = require("../constants/shopStatus");
+const {
+  REPORT_STATUS,
+  REPORT_STATUS_LABELS,
+  REPORT_TYPE,
+  REPORT_TYPE_LABELS,
+  RESERVATION_REPORT_TYPES,
+  CONTENT_REPORT_TYPES,
+  PRODUCT_STATUS,
+  SHOP_STATUS,
+  SHOP_OPEN,
+  NOTIFICATION_AUDIENCE,
+  USER_ROLE,
+} = require("../constants");
 const { resolveMediaUrl } = require("../utils/resolveMediaUrl");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants/notificationAudience");
 const { blockAccount } = require("./adminAccountService");
-const { USER_ROLE } = require("../constants/sellerVerification");
 
 const SEED_DEMO_TAG = "seed-report-demo";
 
@@ -34,11 +41,17 @@ function isStrictMongoObjectId(value) {
   return /^[a-f\d]{24}$/i.test(pickString(value));
 }
 
-function pickShopDisplayName(shop) {
-  if (!shop) {
+function pickShopDisplayName(shop, owner = null) {
+  if (!shop && !owner) {
     return "";
   }
-  return pickString(shop.shopName) || pickString(shop.description);
+  // Tên gian hàng = FullName/UserName chủ shop; description chỉ là bio, không dùng làm tên.
+  return (
+    pickString(owner?.FullName) ||
+    pickString(owner?.UserName) ||
+    pickString(shop?.shopName) ||
+    ""
+  );
 }
 
 async function loadReportTargetContext(reports) {
@@ -107,15 +120,32 @@ async function loadReportTargetContext(reports) {
   }
 
   const linkedShops = shopQuery.length
-    ? await ShopProfile.find({ $or: shopQuery }).select("shopName description externalRestaurantId").lean()
+    ? await ShopProfile.find({ $or: shopQuery })
+        .select("shopName description externalRestaurantId userId")
+        .lean()
     : [];
+
+  const allShops = [...linkedShops, ...sellerShops];
+  const ownerIds = [
+    ...new Set(
+      [
+        ...targetUserIds,
+        ...allShops.map((shop) => (shop.userId ? String(shop.userId) : "")),
+      ].filter(Boolean)
+    ),
+  ];
+  const owners = ownerIds.length
+    ? await User.find({ _id: { $in: ownerIds } }).select("FullName UserName").lean()
+    : [];
+  const ownerById = new Map(owners.map((owner) => [String(owner._id), owner]));
 
   const shopNameById = new Map();
   const shopNameByExternalId = new Map();
   const shopNameByUserId = new Map();
 
-  [...linkedShops, ...sellerShops].forEach((shop) => {
-    const displayName = pickShopDisplayName(shop);
+  allShops.forEach((shop) => {
+    const owner = shop.userId ? ownerById.get(String(shop.userId)) : null;
+    const displayName = pickShopDisplayName(shop, owner);
     if (!displayName) {
       return;
     }
@@ -125,6 +155,18 @@ async function loadReportTargetContext(reports) {
     }
     if (shop.userId) {
       shopNameByUserId.set(String(shop.userId), displayName);
+    }
+  });
+
+  // Báo cáo gắn targetUserId nhưng chưa có ShopProfile — vẫn dùng tên user.
+  targetUserIds.forEach((userId) => {
+    if (shopNameByUserId.has(userId)) {
+      return;
+    }
+    const owner = ownerById.get(userId);
+    const displayName = pickShopDisplayName(null, owner);
+    if (displayName) {
+      shopNameByUserId.set(userId, displayName);
     }
   });
 
@@ -201,15 +243,16 @@ function toReporterSummary(user) {
   };
 }
 
-function toShopDetailSummary(shop) {
+function toShopDetailSummary(shop, owner = null) {
   if (!shop) {
     return null;
   }
 
   return {
     id: String(shop._id),
-    name: pickShopDisplayName(shop),
-    address: pickString(shop.address) || pickString(shop.DiaChiHeThong),
+    name: pickShopDisplayName(shop, owner),
+    description: pickString(shop.description),
+    address: pickString(shop.addressHeThong) || pickString(shop.DiaChiHeThong) || pickString(shop.address),
     phone: pickString(shop.phone),
     userId: shop.userId ? String(shop.userId) : "",
   };
@@ -297,6 +340,10 @@ function toReportListItem(report, reporter, targetUser, targetNames = {}) {
     reportTypeLabel: REPORT_TYPE_LABELS[report.reportType] || "Không rõ",
     title: report.title || "",
     content: report.content || "",
+    description: report.content || report.description || "",
+    reservationId: report.reservationId ? String(report.reservationId) : "",
+    latitude: report.latitude == null ? null : Number(report.latitude),
+    longitude: report.longitude == null ? null : Number(report.longitude),
     status: report.status,
     statusLabel: REPORT_STATUS_LABELS[report.status] || "Không rõ",
     reasonLabel: report.title || "Không rõ",
@@ -317,11 +364,24 @@ async function buildReportFilter({ search, reportType, status }) {
   const normalizedStatus = pickString(status);
   const keyword = pickString(search);
 
-  if (normalizedType !== "" && Object.values(REPORT_TYPE).includes(Number(normalizedType))) {
+  // Tab Báo cáo chỉ quản lý báo cáo nội dung (review/user/shop/product).
+  // Khiếu nại đơn giữ hàng → tab Tranh chấp.
+  if (normalizedType !== "" && CONTENT_REPORT_TYPES.includes(Number(normalizedType))) {
     filter.reportType = Number(normalizedType);
+  } else {
+    filter.reportType = { $in: CONTENT_REPORT_TYPES };
   }
 
-  if (normalizedStatus !== "" && Object.values(REPORT_STATUS).includes(Number(normalizedStatus))) {
+  if (normalizedStatus === "history" || normalizedStatus === "processed") {
+    filter.status = { $in: [REPORT_STATUS.PROCESSED, REPORT_STATUS.REJECTED] };
+  } else if (normalizedStatus === "0" || normalizedStatus === "pending") {
+    filter.status = REPORT_STATUS.PENDING;
+  } else if (
+    normalizedStatus !== "" &&
+    [REPORT_STATUS.PENDING, REPORT_STATUS.PROCESSED, REPORT_STATUS.REJECTED].includes(
+      Number(normalizedStatus)
+    )
+  ) {
     filter.status = Number(normalizedStatus);
   }
 
@@ -462,10 +522,13 @@ async function getReportDetail(reportId) {
 
   const targetUserDoc = await resolveReportTargetUser(report);
   const targetNames = resolveReportTargetNames(report, targetContext);
-  const shop = toShopDetailSummary(resolvedShopDoc);
+  const shop = toShopDetailSummary(resolvedShopDoc, targetUserDoc);
   const product = toProductDetailSummary(
     productDoc,
-    shop?.name || targetNames.targetShopName || ""
+    shop?.name ||
+      targetNames.targetShopName ||
+      pickShopDisplayName(resolvedShopDoc, targetUserDoc) ||
+      ""
   );
   const targetSubjectLabel = buildTargetSubjectLabel({
     report,
@@ -481,6 +544,12 @@ async function getReportDetail(reportId) {
     reportTypeLabel: REPORT_TYPE_LABELS[report.reportType] || "Không rõ",
     title: report.title || "",
     content: report.content || "",
+    description: report.content || report.description || "",
+    reservationId: report.reservationId ? String(report.reservationId) : "",
+    latitude: report.latitude == null ? null : Number(report.latitude),
+    longitude: report.longitude == null ? null : Number(report.longitude),
+    adminDecision: report.adminDecision || "",
+    adminNote: report.adminNote || "",
     status: report.status,
     statusLabel: REPORT_STATUS_LABELS[report.status] || "Không rõ",
     reasonLabel: report.title || "Không rõ",
@@ -522,15 +591,40 @@ async function assertPendingReport(reportId) {
   return report;
 }
 
-async function dismissReport(adminUser, reportId) {
+async function notifyReporter(report, { title, content }) {
+  if (!report?.userId) {
+    return;
+  }
+  await createNotification(report.userId, {
+    title: title || "Cập nhật tố cáo",
+    content:
+      content ||
+      "Báo cáo của bạn đã được hệ thống cập nhật. Cảm ơn bạn đã đóng góp.",
+    audience: NOTIFICATION_AUDIENCE.SYSTEM,
+  });
+}
+
+const DEFAULT_APPROVE_REPLY =
+  "Cảm ơn bạn đã báo cáo. Chúng tôi đã tiếp nhận và sẽ xem xét lại nội dung này.";
+const DEFAULT_DISMISS_REPLY =
+  "Báo cáo của bạn đã bị bác bỏ. Cảm ơn bạn đã đóng góp ý kiến.";
+
+async function dismissReport(adminUser, reportId, { replyMessage } = {}) {
   const report = await assertPendingReport(reportId);
   const now = new Date();
+  const message = pickString(replyMessage) || DEFAULT_DISMISS_REPLY;
 
   report.status = REPORT_STATUS.REJECTED;
   report.processedBy = adminUser._id;
   report.processedAt = now;
+  report.adminNote = message;
   report.UpdatedAt = now;
   await report.save();
+
+  await notifyReporter(report, {
+    title: "Tố cáo đã bị bác bỏ",
+    content: message,
+  });
 
   return getReportDetail(report._id);
 }
@@ -705,62 +799,44 @@ async function applyUserAction(report, action, adminUser) {
   throw createServiceError("Hành động xử lý không hợp lệ.", 400);
 }
 
-async function approveReport(adminUser, reportId, { action } = {}) {
+async function approveReport(adminUser, reportId, { action, replyMessage } = {}) {
   const report = await assertPendingReport(reportId);
-  const normalizedAction = pickString(action) || "hide";
 
-  if (report.reportType === REPORT_TYPE.REVIEW) {
-    if (!["hide", "delete"].includes(normalizedAction)) {
-      throw createServiceError("Hành động xử lý đánh giá không hợp lệ.", 400);
-    }
-    await applyReviewAction(report, normalizedAction);
-  } else if (report.reportType === REPORT_TYPE.SHOP) {
-    if (!["warn_limit", "suspend_7_days", "permanent_close"].includes(normalizedAction)) {
-      throw createServiceError("Hành động xử lý gian hàng không hợp lệ.", 400);
-    }
-    await applyShopAction(report, normalizedAction, adminUser);
-  } else if (isUserLikeReportType(report.reportType)) {
-    if (!["warn", "block"].includes(normalizedAction)) {
-      throw createServiceError("Hành động xử lý người dùng không hợp lệ.", 400);
-    }
-    await applyUserAction(report, normalizedAction, adminUser);
-  } else {
-    throw createServiceError("Loại báo cáo không được hỗ trợ xử lý.", 400);
+  // Báo cáo tranh chấp giữ hàng → dùng approve-buyer / approve-seller / reject.
+  if (RESERVATION_REPORT_TYPES.includes(Number(report.reportType))) {
+    throw createServiceError(
+      "Báo cáo giữ hàng: dùng /admin/reports/:id/approve-buyer | approve-seller | reject.",
+      400
+    );
   }
+
+  const message = pickString(replyMessage) || DEFAULT_APPROVE_REPLY;
+  // Chỉ duyệt + gửi thông báo cho người tố cáo — không áp dụng xử lý đối tượng.
+  const normalizedAction = "resolve";
 
   const now = new Date();
   report.status = REPORT_STATUS.PROCESSED;
   report.processedBy = adminUser._id;
   report.processedAt = now;
+  report.adminNote = message;
+  report.adminDecision = normalizedAction;
   report.UpdatedAt = now;
   await report.save();
+
+  await notifyReporter(report, {
+    title: "Tố cáo đã được duyệt",
+    content: message,
+  });
 
   return getReportDetail(report._id);
 }
 
-function getApproveMessage(reportType, action) {
-  if (reportType === REPORT_TYPE.SHOP) {
-    if (action === "permanent_close") {
-      return "Đã khóa vĩnh viễn gian hàng, ẩn sản phẩm và khóa tài khoản chủ shop.";
-    }
-    if (action === "suspend_7_days") {
-      return "Đã tạm đình chỉ gian hàng 7 ngày và ẩn toàn bộ sản phẩm.";
-    }
-    return "Đã cảnh cáo và giới hạn hiển thị gian hàng.";
-  }
+function getDefaultContentAction(_reportType) {
+  return "resolve";
+}
 
-  if (isUserLikeReportType(reportType)) {
-    if (action === "block") {
-      return "Đã khóa tài khoản người dùng và duyệt báo cáo.";
-    }
-    return "Đã cảnh cáo người dùng và duyệt báo cáo.";
-  }
-
-  if (action === "delete") {
-    return "Đã duyệt vi phạm và xóa mềm đánh giá.";
-  }
-
-  return "Đã duyệt vi phạm và ẩn đánh giá.";
+function getApproveMessage(_reportType, _action) {
+  return "Đã duyệt tố cáo và gửi thông báo cho người tố cáo.";
 }
 
 module.exports = {
@@ -769,4 +845,6 @@ module.exports = {
   dismissReport,
   approveReport,
   getApproveMessage,
+  DEFAULT_APPROVE_REPLY,
+  DEFAULT_DISMISS_REPLY,
 };

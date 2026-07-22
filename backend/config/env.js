@@ -1,9 +1,10 @@
 const path = require("path");
 const dotenv = require("dotenv");
 
-// Chỉ dùng 1 file .env ở thư mục gốc dự án (FastMark/.env)
+// Chỉ dùng 1 file .env ở thư mục gốc dự án (FastMark/.env).
+// override: true — luôn lấy giá trị từ file gốc (tránh process cũ / env rỗng che mất key mới).
 const rootEnvPath = path.resolve(__dirname, "..", "..", ".env");
-dotenv.config({ path: rootEnvPath });
+dotenv.config({ path: rootEnvPath, override: true, quiet: true });
 
 function readEnv(name, { required = false, fallback = "" } = {}) {
   const value = process.env[name];

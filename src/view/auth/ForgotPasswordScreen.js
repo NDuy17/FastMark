@@ -59,11 +59,13 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
     try {
       const payload = await requestPasswordResetOnBackend({ email: normalizedEmail });
       setEmail(normalizedEmail);
-      setResendCooldown(payload.data?.verification?.resendCooldownSeconds || 180);
-      setSuccessMessage('Đã gừi mã OTP đến email của bạn.');
+      setResendCooldown(
+        Number(payload.data?.verification?.resendCooldownSeconds) || 120
+      );
+      setSuccessMessage('Đã gửi mã OTP đến email của bạn.');
       setStep(STEPS.OTP);
     } catch (requestError) {
-      setError(requestError.message || 'Không gừi được OTP.');
+      setError(requestError.message || 'Không gửi được OTP.');
     } finally {
       setIsLoading(false);
     }
@@ -83,6 +85,24 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
       setSuccessMessage('Xác thực OTP thành công. Nhập mật khẩu mới.');
       setStep(STEPS.PASSWORD);
     } catch (verifyError) {
+      const errData = verifyError?.data || {};
+      if (errData.mustUseNewCode) {
+        setOtp('');
+        setResendCooldown(
+          Number(errData.resendCooldownSeconds) ||
+            (errData.resendAvailableAt
+              ? Math.max(
+                  0,
+                  Math.ceil((new Date(errData.resendAvailableAt).getTime() - Date.now()) / 1000)
+                )
+              : 120)
+        );
+        setError(
+          verifyError.message ||
+            'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
+        );
+        return;
+      }
       setError(verifyError.message || 'Mã OTP không đúng.');
     } finally {
       setIsLoading(false);

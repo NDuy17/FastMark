@@ -18,5 +18,23 @@ router.get(
 );
 router.post("/topup", verifyFirebaseToken, asyncHandler(walletController.createTopup));
 router.post("/topup/sync", verifyFirebaseToken, asyncHandler(walletController.syncTopup));
+router.post("/topup/cancel", verifyFirebaseToken, asyncHandler(walletController.cancelTopup));
+
+const withdrawController = require("../controllers/withdrawController");
+router.get(
+  "/banks",
+  verifyFirebaseToken,
+  asyncHandler(withdrawController.listActiveBanks)
+);
+router.get(
+  "/withdraws",
+  verifyFirebaseToken,
+  asyncHandler(withdrawController.listMyWithdraws)
+);
+router.post(
+  "/withdraw",
+  verifyFirebaseToken,
+  asyncHandler(withdrawController.createWithdraw)
+);
 
 module.exports = router;

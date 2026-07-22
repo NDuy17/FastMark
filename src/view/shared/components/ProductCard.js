@@ -2,7 +2,7 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatDistance } from '../../../core/utils/geo';
-import { formatPriceRange } from '../../../core/utils/productFormat';
+import { formatPriceRange, getProductPromoPriceLabels } from '../../../core/utils/productFormat';
 import { getProductImageOverlayLabel } from '../../../core/utils/productAvailability';
 
 function formatProductDistance(product) {
@@ -23,6 +23,8 @@ export default function ProductCard({
 }) {
   const overlayLabel = getProductImageOverlayLabel(product);
   const likeCount = Number(product.likeCount) || 0;
+  const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
+  const promoLabels = isPromotion ? getProductPromoPriceLabels(product) : null;
 
   return (
     <Pressable
@@ -48,6 +50,11 @@ export default function ProductCard({
               </Text>
             </View>
           ) : null}
+          {isPromotion ? (
+            <View style={[styles.discountBadge, compact && styles.discountBadgeCompact]}>
+              <Text style={styles.discountBadgeText}>-{product.discountPercent}%</Text>
+            </View>
+          ) : null}
         </View>
         {onToggleLike ? (
           <Pressable
@@ -70,9 +77,27 @@ export default function ProductCard({
         <Text style={[styles.productName, compact && styles.productNameCompact]} numberOfLines={2}>
           {product.name}
         </Text>
-        <Text style={[styles.productPrice, compact && styles.productPriceCompact]} numberOfLines={1}>
-          {formatPriceRange(product.minPrice ?? product.price, product.maxPrice ?? product.price)}
-        </Text>
+        {isPromotion && promoLabels ? (
+          <View style={styles.promoPriceWrap}>
+            <Text style={[styles.originalPrice, compact && styles.originalPriceCompact]} numberOfLines={1}>
+              {promoLabels.originalLabel}
+            </Text>
+            <Text
+              style={[
+                styles.productPrice,
+                compact && styles.productPriceCompact,
+                styles.productPromoPrice,
+              ]}
+              numberOfLines={1}
+            >
+              {promoLabels.saleLabel}
+            </Text>
+          </View>
+        ) : (
+          <Text style={[styles.productPrice, compact && styles.productPriceCompact]} numberOfLines={1}>
+            {formatPriceRange(product.minPrice ?? product.price, product.maxPrice ?? product.price)}
+          </Text>
+        )}
         <View style={styles.productFooter}>
           <Text style={[styles.productSold, compact && styles.productSoldCompact]} numberOfLines={1}>
             Đã bán: {Number(product.soldCount) || 0}
@@ -155,9 +180,43 @@ const styles = StyleSheet.create({
   soldOutTextCompact: {
     fontSize: 12,
   },
-  likeBadge: {
+  discountBadge: {
     position: 'absolute',
     top: 8,
+    right: 8,
+    zIndex: 5,
+    backgroundColor: '#dc2626',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  discountBadgeCompact: {
+    top: 6,
+    right: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  discountBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  promoPriceWrap: {
+    gap: 2,
+    marginBottom: 4,
+  },
+  originalPrice: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '600',
+    textDecorationLine: 'line-through',
+  },
+  originalPriceCompact: {
+    fontSize: 11,
+  },
+  likeBadge: {
+    position: 'absolute',
+    bottom: 8,
     right: 8,
     zIndex: 6,
     elevation: 6,
@@ -174,11 +233,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-    zIndex: 2,
   },
   likeBadgeCompact: {
-    top: 6,
+    bottom: 6,
     right: 6,
     paddingHorizontal: 8,
     paddingVertical: 5,
@@ -214,7 +271,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#076F32',
-    marginBottom: 4,
+    marginBottom: 0,
+  },
+  productPromoPrice: {
+    color: '#dc2626',
   },
   productPriceCompact: {
     fontSize: 11,

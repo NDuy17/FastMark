@@ -4,15 +4,15 @@ import { submitBuyerReviewOnBackend } from '../../api/reviewApi';
 import { markOrderAsReviewed } from '../../hooks/useReviewedOrderCodes';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 
-import { RESERVATION_STATUS } from '../../constants/sellerOrders';
+import {
+  RESERVATION_STATUS,
+  RESERVATION_STATUS_LABELS,
+} from '../../constants/sellerOrders';
 
 export const PURCHASE_REVIEW_STATUSES = ['Hoàn thành', 'Đã giao'];
 
 const RESERVATION_STATUS_LABEL = {
-  [RESERVATION_STATUS.PENDING]: 'Chờ xác nhận',
-  [RESERVATION_STATUS.CONFIRMED]: 'Đã xác nhận',
-  [RESERVATION_STATUS.COMPLETED]: 'Hoàn thành',
-  [RESERVATION_STATUS.CANCELLED]: 'Đã hủy',
+  ...RESERVATION_STATUS_LABELS,
   active: 'Đang giữ',
   picked_up: 'Đã nhận',
   expired: 'Hết hạn',
@@ -30,6 +30,7 @@ export function canReviewPurchaseOrder(order) {
 export function canReviewReservationOrder(order) {
   return (
     order?.status === RESERVATION_STATUS.COMPLETED ||
+    order?.status === RESERVATION_STATUS.AUTO_COMPLETED ||
     order?.status === 'picked_up'
   );
 }
@@ -62,16 +63,28 @@ export function getPurchaseStatusLabel(status) {
 }
 
 export async function submitShopReview({
+  productId,
+  reservationId,
+  shopId,
   storeId,
-  storeName,
-  productName,
   orderCode,
   rating,
   comment,
+  images,
   imageUrl,
 }) {
   if (!rating || Number(rating) < 1) {
     throw new Error('Vui lòng chọn số sao trước khi gửi đánh giá.');
+  }
+
+  const resolvedProductId = String(productId || '').trim();
+  if (!resolvedProductId) {
+    throw new Error('Thiếu sản phẩm để đánh giá.');
+  }
+
+  const resolvedReservationId = String(reservationId || orderCode || '').trim();
+  if (!resolvedReservationId) {
+    throw new Error('Thiếu đơn hàng để đánh giá.');
   }
 
   const idToken = await getCurrentUserIdToken();
@@ -79,23 +92,25 @@ export async function submitShopReview({
     throw new Error('Vui lòng đăng nhập để gửi đánh giá.');
   }
 
+  const resolvedShopId = shopId || storeId;
+
   try {
     const review = await submitBuyerReviewOnBackend({
       idToken,
-      storeId,
-      storeName,
-      productName,
-      orderCode,
+      productId: resolvedProductId,
+      reservationId: resolvedReservationId,
+      shopId: resolvedShopId,
       rating,
       comment,
+      images,
       imageUrl,
     });
 
-    markOrderAsReviewed({ orderCode });
+    markOrderAsReviewed({ orderCode: resolvedReservationId, id: resolvedReservationId });
     return review;
   } catch (error) {
     if (error.statusCode === 409) {
-      markOrderAsReviewed({ orderCode });
+      markOrderAsReviewed({ orderCode: resolvedReservationId, id: resolvedReservationId });
     }
     throw error;
   }

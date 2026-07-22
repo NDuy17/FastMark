@@ -1,7 +1,8 @@
 const User = require("../models/User");
-const { USER_ROLE } = require("../constants/sellerVerification");
+const Notification = require("../models/Notification");
+const { USER_ROLE } = require("../constants");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants/notificationAudience");
+const { NOTIFICATION_AUDIENCE } = require("../constants");
 
 const AUDIENCE = {
   ALL: "all",
@@ -110,7 +111,62 @@ async function sendSystemNotification(adminUser, { title, content, audience = AU
   };
 }
 
+/**
+ * Lịch sử gửi broadcast: gộp Notification theo (title, content, audience, phút gửi).
+ */
+async function listBroadcastHistory({ page = 1, limit = 20 } = {}) {
+  const currentPage = Math.max(1, Number(page) || 1);
+  const pageSize = Math.min(50, Math.max(1, Number(limit) || 20));
+
+  const rows = await Notification.aggregate([
+    {
+      $group: {
+        _id: {
+          title: "$title",
+          content: "$content",
+          audience: "$audience",
+          minute: { $dateToString: { format: "%Y-%m-%d %H:%M", date: "$CreatedAt" } },
+        },
+        recipientCount: { $sum: 1 },
+        readCount: { $sum: { $cond: [{ $eq: ["$isRead", 1] }, 1, 0] } },
+        sentAt: { $max: "$CreatedAt" },
+      },
+    },
+    { $sort: { sentAt: -1 } },
+    {
+      $facet: {
+        items: [
+          { $skip: (currentPage - 1) * pageSize },
+          { $limit: pageSize },
+        ],
+        total: [{ $count: "count" }],
+      },
+    },
+  ]);
+
+  const items = (rows[0]?.items || []).map((row) => ({
+    title: row._id.title || "",
+    content: row._id.content || "",
+    audience: row._id.audience || "",
+    recipientCount: row.recipientCount,
+    readCount: row.readCount,
+    sentAt: row.sentAt || null,
+  }));
+  const total = rows[0]?.total?.[0]?.count || 0;
+
+  return {
+    items,
+    pagination: {
+      page: currentPage,
+      limit: pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
+  };
+}
+
 module.exports = {
   AUDIENCE,
   sendSystemNotification,
+  listBroadcastHistory,
 };

@@ -41,5 +41,6 @@ export function toAuthErrorPayload(error) {
     message: toReadableAuthError(error),
     field: error.field || '',
     code: error.code || '',
+    ...(error.data !== undefined && error.data !== null ? { data: error.data } : {}),
   };
 }

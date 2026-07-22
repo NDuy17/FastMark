@@ -6,7 +6,7 @@ function errorHandler(error, req, res, next) {
   if (error?.type === 'entity.too.large') {
     return res.status(413).json({
       success: false,
-      message: 'Ảnh quá lớn. Vui lòng chọn ảnh nhỏ hơn 5MB.',
+      message: 'Payload quá lớn (ảnh đính kèm). Vui lòng chọn ít ảnh hơn hoặc ảnh nhỏ hơn.',
     });
   }
 
@@ -62,6 +62,7 @@ function errorHandler(error, req, res, next) {
     error: message,
     ...(error.code ? { code: error.code } : {}),
     ...(error.field ? { field: error.field } : {}),
+    ...(error.data !== undefined && error.data !== null ? { data: error.data } : {}),
   });
 }
 

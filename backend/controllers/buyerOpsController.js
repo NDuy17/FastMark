@@ -52,13 +52,112 @@ exports.cancelReservation = async (req, res) => {
   });
 };
 
-exports.completeReservation = async (req, res) => {
-  const reservation = await buyerOpsService.completeReservationByBuyer(
+exports.confirmReceived = async (req, res) => {
+  const reservationId =
+    pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]) || req.params.id;
+  const scannedShopId = pickBodyValue(req.body, [
+    "scannedShopId",
+    "scanned_shop_id",
+    "shopId",
+    "shop_id",
+  ]);
+
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const reservation = await buyerOpsService.confirmReceivedByBuyer(
     req.currentUser,
-    req.params.id
+    reservationId,
+    { scannedShopId }
   );
   return success(res, {
-    message: "Đã xác nhận lấy hàng thành công.",
+    message: "Đã xác nhận nhận hàng. Cọc đã chuyển cho người bán.",
+    data: { reservation },
+  });
+};
+
+exports.validateShopQrScan = async (req, res) => {
+  const reservationId =
+    pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]) || req.params.id;
+  const scannedShopId = pickBodyValue(req.body, [
+    "scannedShopId",
+    "scanned_shop_id",
+    "shopId",
+    "shop_id",
+  ]);
+
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const data = await buyerOpsService.validateShopQrScan(
+    req.currentUser,
+    reservationId,
+    scannedShopId
+  );
+  return success(res, {
+    message: data.message,
+    data,
+  });
+};
+
+exports.reportReservation = async (req, res) => {
+  const reservationId =
+    pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]) || req.params.id;
+  const reason = pickBodyValue(req.body, ["reason"]);
+  const description = pickBodyValue(req.body, ["description", "note"]);
+  const latitude = req.body.latitude ?? req.body.lat;
+  const longitude = req.body.longitude ?? req.body.lng ?? req.body.lon;
+  const images = req.body.images || req.body.imageUrls || [];
+
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  // Luồng mới (GPS) không bắt buộc reason string cũ.
+  const hasGps =
+    latitude !== undefined &&
+    latitude !== null &&
+    String(latitude).trim() !== "" &&
+    longitude !== undefined &&
+    longitude !== null &&
+    String(longitude).trim() !== "";
+
+  if (!hasGps && !reason) {
+    return fail(res, { status: 400, message: "Thiếu lý do báo cáo." });
+  }
+
+  const result = await buyerOpsService.reportReservationByBuyer(
+    req.currentUser,
+    reservationId,
+    { reason, description, latitude, longitude, images }
+  );
+
+  // buyerReportSeller trả { report, reservation }; legacy trả reservation thuần.
+  const reservation = result?.reservation || result;
+  const report = result?.report || null;
+
+  return success(res, {
+    message: "Đã gửi báo cáo. Admin sẽ xử lý tranh chấp.",
+    data: { reservation, report },
+  });
+};
+
+/** Buyer đồng ý mất cọc sau quá giờ nhận → giải ngân seller. */
+exports.forfeitDeposit = async (req, res) => {
+  const reservationId =
+    pickBodyValue(req.body, ["reservationId", "reservation_id", "id"]) || req.params.id;
+  if (!reservationId) {
+    return fail(res, { status: 400, message: "Thiếu reservationId." });
+  }
+
+  const reservation = await buyerOpsService.forfeitDepositByBuyer(
+    req.currentUser,
+    reservationId
+  );
+  return success(res, {
+    message: "Bạn đã đồng ý mất cọc. Tiền cọc đã chuyển cho người bán.",
     data: { reservation },
   });
 };

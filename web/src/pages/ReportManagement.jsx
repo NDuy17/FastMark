@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import {
   approveReport,
@@ -15,60 +16,13 @@ const REPORT_TYPE_OPTIONS = [
   { value: '2', label: 'Người dùng' },
   { value: '3', label: 'Gian hàng' },
   { value: '4', label: 'Sản phẩm' },
+  { value: '8', label: 'Hệ thống lỗi' },
+  { value: '9', label: 'Khác' },
 ];
 
-const STATUS_OPTIONS = [
-  { value: '', label: 'Tất cả trạng thái' },
-  { value: '0', label: 'Chờ xử lý' },
-  { value: '1', label: 'Đã xử lý' },
-  { value: '2', label: 'Đã bác bỏ' },
-];
-
-const REVIEW_ACTION_OPTIONS = [
-  {
-    value: 'hide',
-    label: 'Ẩn đánh giá',
-    description: 'Đánh giá sẽ không hiển thị công khai nhưng vẫn lưu trong hệ thống.',
-  },
-  {
-    value: 'delete',
-    label: 'Xóa mềm đánh giá',
-    description: 'Đánh giá được đánh dấu xóa mềm và loại khỏi danh sách hiển thị.',
-  },
-];
-
-const USER_ACTION_OPTIONS = [
-  {
-    value: 'warn',
-    label: 'Cảnh cáo người dùng',
-    description: 'Gửi thông báo cảnh cáo in-app tới tài khoản bị tố cáo.',
-  },
-  {
-    value: 'block',
-    label: 'Khóa tài khoản người dùng',
-    description: 'Cập nhật trạng thái tài khoản bị tố cáo thành đã khóa trong hệ thống.',
-  },
-];
-
-const SHOP_ACTION_OPTIONS = [
-  {
-    value: 'warn_limit',
-    label: 'Cảnh cáo & Giới hạn hiển thị',
-    description:
-      'Gửi thông báo cảnh cáo tới chủ shop, đồng thời tạm thời giảm hiển thị của gian hàng.',
-  },
-  {
-    value: 'suspend_7_days',
-    label: 'Tạm đình chỉ hoạt động (7 ngày)',
-    description:
-      'Tạm khóa quyền bán hàng và ẩn toàn bộ sản phẩm hiện có của gian hàng để điều tra.',
-  },
-  {
-    value: 'permanent_close',
-    label: 'Khóa gian hàng vĩnh viễn',
-    description:
-      'Đóng cửa gian hàng vĩnh viễn, ẩn toàn bộ sản phẩm và khóa tài khoản chủ shop.',
-  },
+const STATUS_FILTER_OPTIONS = [
+  { value: 'pending', label: 'Chờ xử lý' },
+  { value: 'processed', label: 'Đã xử lý' },
 ];
 
 const REPORT_TYPE = {
@@ -76,38 +30,25 @@ const REPORT_TYPE = {
   USER: 2,
   SHOP: 3,
   PRODUCT: 4,
+  SYSTEM: 8,
+  OTHER: 9,
 };
 
-function isUserLikeReportType(reportType) {
-  return [REPORT_TYPE.USER, REPORT_TYPE.SHOP, REPORT_TYPE.PRODUCT].includes(reportType);
-}
+const APPROVE_REPLY_TEMPLATES = [
+  'Cảm ơn bạn đã báo cáo. Chúng tôi đã tiếp nhận và sẽ xem xét lại nội dung này.',
+  'Cảm ơn bạn đã tố cáo. Đội ngũ FastMark đã ghi nhận và đang xử lý.',
+  'Báo cáo của bạn đã được duyệt. Chúng tôi sẽ theo dõi và xử lý phù hợp.',
+];
 
-function getApproveActionOptions(reportType) {
-  if (reportType === REPORT_TYPE.SHOP) {
-    return SHOP_ACTION_OPTIONS;
-  }
-  return isUserLikeReportType(reportType) ? USER_ACTION_OPTIONS : REVIEW_ACTION_OPTIONS;
-}
-
-function getDefaultApproveAction(reportType) {
-  if (reportType === REPORT_TYPE.SHOP) {
-    return 'warn_limit';
-  }
-  return isUserLikeReportType(reportType) ? 'warn' : 'hide';
-}
-
-function getApprovePrompt(reportType) {
-  if (reportType === REPORT_TYPE.SHOP) {
-    return 'Chọn phương án xử lý gian hàng vi phạm:';
-  }
-  return isUserLikeReportType(reportType)
-    ? 'Chọn phương án xử lý người dùng vi phạm:'
-    : 'Chọn phương án xử lý đánh giá vi phạm:';
-}
+const DISMISS_REPLY_TEMPLATES = [
+  'Báo cáo của bạn đã bị bác bỏ. Cảm ơn bạn đã đóng góp ý kiến.',
+  'Sau khi xem xét, chúng tôi chưa đủ căn cứ để xử lý tố cáo này.',
+  'Tố cáo chưa đủ thông tin nên đã bị bác bỏ. Bạn có thể gửi lại với chi tiết rõ hơn.',
+];
 
 function formatDate(value) {
   if (!value) {
-    return '—';
+    return '';
   }
   return new Date(value).toLocaleString('vi-VN');
 }
@@ -137,6 +78,8 @@ function typeBadgeClass(reportType) {
   if (reportType === REPORT_TYPE.REVIEW) return 'badge badge-info';
   if (reportType === REPORT_TYPE.SHOP) return 'badge badge-warning';
   if (reportType === REPORT_TYPE.PRODUCT) return 'badge badge-danger';
+  if (reportType === REPORT_TYPE.SYSTEM) return 'badge badge-danger';
+  if (reportType === REPORT_TYPE.OTHER) return 'badge badge-neutral';
   return 'badge badge-neutral';
 }
 
@@ -153,6 +96,40 @@ function getReportTargetLabel(item) {
   return '';
 }
 
+function formatTargetUserLine(user) {
+  if (!user) return '';
+  const name = user.fullName || user.userName || '';
+  if (!name && !user.email) return '';
+  if (user.userName && user.fullName) {
+    return `${user.fullName} (@${user.userName})`;
+  }
+  return name || user.email || '';
+}
+
+function getAvatarInitial(person) {
+  const raw = String(person?.fullName || person?.userName || person?.name || '?').trim();
+  return raw.charAt(0).toUpperCase() || '?';
+}
+
+function PartyAvatar({ person, name }) {
+  const avatarUrl = resolveMediaUrl(person?.avatar || '');
+  const initial = getAvatarInitial(person || { fullName: name });
+  if (avatarUrl) {
+    return <img src={avatarUrl} alt="" className="report-party-avatar" />;
+  }
+  return <div className="report-party-avatar placeholder">{initial}</div>;
+}
+
+function getReportedAccountId(detail) {
+  if (detail?.targetUser?.id) {
+    return String(detail.targetUser.id);
+  }
+  if (detail?.shop?.userId) {
+    return String(detail.shop.userId);
+  }
+  return '';
+}
+
 function getReportedSubjectFieldLabel(reportType) {
   switch (reportType) {
     case REPORT_TYPE.SHOP:
@@ -163,6 +140,10 @@ function getReportedSubjectFieldLabel(reportType) {
       return 'Sản phẩm bị báo cáo';
     case REPORT_TYPE.REVIEW:
       return 'Đánh giá bị báo cáo';
+    case REPORT_TYPE.SYSTEM:
+      return 'Đối tượng bị báo cáo';
+    case REPORT_TYPE.OTHER:
+      return 'Đối tượng bị báo cáo';
     default:
       return 'Đối tượng bị báo cáo';
   }
@@ -172,20 +153,22 @@ function getReportedSubjectValue(detail) {
   const reportType = detail?.reportType;
 
   if (reportType === REPORT_TYPE.SHOP) {
-    return detail?.shop?.name || detail?.targetShopName || detail?.target_shop_name || '—';
+    return (
+      detail?.shop?.name ||
+      detail?.targetShopName ||
+      detail?.target_shop_name ||
+      detail?.targetUser?.fullName ||
+      detail?.targetUser?.userName ||
+      ''
+    );
   }
 
   if (reportType === REPORT_TYPE.USER) {
-    const user = detail?.targetUser;
-    if (user?.fullName || user?.userName) {
-      const name = user.fullName || user.userName;
-      return user.email ? `${name} (${user.email})` : name;
-    }
-    return '—';
+    return formatTargetUserLine(detail?.targetUser);
   }
 
   if (reportType === REPORT_TYPE.PRODUCT) {
-    return detail?.product?.name || detail?.targetProductName || detail?.target_product_name || '—';
+    return detail?.product?.name || detail?.targetProductName || detail?.target_product_name || '';
   }
 
   if (reportType === REPORT_TYPE.REVIEW) {
@@ -196,10 +179,63 @@ function getReportedSubjectValue(detail) {
         : `${review.userName || 'Khách hàng'} • ★ ${review.rating}/5`;
       return summary;
     }
-    return detail?.content || '—';
+    return detail?.content || '';
   }
 
-  return detail?.targetSubjectLabel || getReportTargetLabel(detail) || '—';
+  return detail?.targetSubjectLabel || getReportTargetLabel(detail) || '';
+}
+
+function getReportedOwnerLines(detail) {
+  const lines = [];
+  const targetUser = detail?.targetUser;
+  const ownerLine = formatTargetUserLine(targetUser);
+  const shopBio = String(detail?.shop?.description || '').trim();
+
+  if (detail?.reportType === REPORT_TYPE.SHOP) {
+    if (shopBio) {
+      lines.push(`Bio: ${shopBio}`);
+    }
+    if (targetUser?.userName) {
+      lines.push(`@${targetUser.userName}`);
+    }
+    if (targetUser?.email) {
+      lines.push(targetUser.email);
+    }
+    return lines;
+  }
+
+  if (detail?.reportType === REPORT_TYPE.PRODUCT) {
+    const shopName =
+      detail?.shop?.name ||
+      detail?.targetShopName ||
+      detail?.target_shop_name ||
+      targetUser?.fullName ||
+      targetUser?.userName ||
+      '';
+    if (shopName) {
+      lines.push(`Gian hàng: ${shopName}`);
+    }
+    if (shopBio) {
+      lines.push(`Bio: ${shopBio}`);
+    }
+    if (ownerLine) {
+      lines.push(`Chủ gian hàng: ${ownerLine}`);
+    }
+    if (targetUser?.email) {
+      lines.push(targetUser.email);
+    }
+    return lines;
+  }
+
+  if (detail?.reportType === REPORT_TYPE.USER && targetUser?.email) {
+    lines.push(targetUser.email);
+  }
+
+  if (shouldShowRelatedTargetField(detail?.reportType) && getRelatedTargetValue(detail)) {
+    lines.push(getRelatedTargetValue(detail));
+  }
+
+  return lines;
 }
 
 function getRelatedTargetValue(detail) {
@@ -216,7 +252,7 @@ function getRelatedTargetValue(detail) {
   if (shopName) {
     return shopName;
   }
-  return '—';
+  return '';
 }
 
 function shouldShowRelatedTargetField(reportType) {
@@ -297,19 +333,22 @@ function ReportDetailModal({
   onDismiss,
   onApprove,
   showApproveOptions,
-  selectedAction,
-  onSelectAction,
+  showDismissOptions,
+  replyMessage,
+  onChangeReplyMessage,
+  onPickReplyTemplate,
   onConfirmApprove,
-  onCancelApprove,
+  onConfirmDismiss,
+  onCancelAction,
 }) {
   const isPending = detail?.status === 0;
   const review = detail?.review;
   const shop = detail?.shop;
   const product = detail?.product;
   const evidenceImages = detail?.evidenceImages || [];
-  const approveActionOptions = getApproveActionOptions(detail?.reportType);
-  const approvePrompt = getApprovePrompt(detail?.reportType);
   const [previewImage, setPreviewImage] = useState('');
+  const replyTemplates = showDismissOptions ? DISMISS_REPLY_TEMPLATES : APPROVE_REPLY_TEMPLATES;
+  const composingReply = showApproveOptions || showDismissOptions;
 
   function handlePreview(url) {
     setPreviewImage(url);
@@ -330,7 +369,7 @@ function ReportDetailModal({
         <div className="modal-header-row">
           <div>
             <h3>Chi tiết báo cáo vi phạm</h3>
-            <p>Mã báo cáo: {detail?.id || '—'}</p>
+            <p>Mã báo cáo: {detail?.id || ''}</p>
           </div>
           <button type="button" className="ghost-btn" disabled={actionLoading} onClick={onClose}>
             Đóng
@@ -346,88 +385,203 @@ function ReportDetailModal({
         ) : (
           <div className="report-modal-body">
             <div className="report-modal-grid">
-              <section className="modal-section">
-                <h4>Thông tin vi phạm</h4>
-                <div className="badge-row">
-                  <span className={typeBadgeClass(detail?.reportType)}>{detail?.reportTypeLabel}</span>
-                  <span className={reasonBadgeClass(detail?.reasonLabel)}>{detail?.reasonLabel}</span>
-                  <span className={statusBadgeClass(detail?.status)}>{detail?.statusLabel}</span>
+              <section className="modal-section report-info-section">
+                <div className="report-chip-row">
+                  <span className={typeBadgeClass(detail?.reportType)}>
+                    {detail?.reportTypeLabel || '—'}
+                  </span>
+                  <span className={statusBadgeClass(detail?.status)}>
+                    {detail?.statusLabel || '—'}
+                  </span>
                 </div>
 
-                <dl className="detail-list">
-                  <div><dt>Loại báo cáo</dt><dd>{detail?.reportTypeLabel || '—'}</dd></div>
-                  <div><dt>Nội dung</dt><dd>{detail?.content || '—'}</dd></div>
-                  <div>
-                    <dt>{getReportedSubjectFieldLabel(detail?.reportType)}</dt>
-                    <dd>{getReportedSubjectValue(detail)}</dd>
-                  </div>
-                  {shouldShowRelatedTargetField(detail?.reportType) ? (
-                    <div>
-                      <dt>Thuộc sản phẩm/gian hàng</dt>
-                      <dd>{getRelatedTargetValue(detail)}</dd>
+                <div className="report-party-grid">
+                  <article className="report-party-card">
+                    <span className="report-party-label">Người báo cáo</span>
+                    <div className="report-party-head">
+                      <PartyAvatar person={detail?.reporter} />
+                      <div className="report-party-head-copy">
+                        <strong className="report-party-name">
+                          {detail?.reporter?.fullName || detail?.reporter?.userName || '—'}
+                        </strong>
+                        {detail?.reporter?.userName ? (
+                          <span className="report-party-meta">@{detail.reporter.userName}</span>
+                        ) : null}
+                        {detail?.reporter?.email ? (
+                          <span className="report-party-meta">{detail.reporter.email}</span>
+                        ) : null}
+                      </div>
                     </div>
-                  ) : null}
-                  <div><dt>Người báo cáo</dt><dd>{detail?.reporter?.fullName || detail?.reporter?.userName || '—'}</dd></div>
-                  <div><dt>Email người báo cáo</dt><dd>{detail?.reporter?.email || '—'}</dd></div>
-                  {detail?.processedBy ? (
-                    <div>
-                      <dt>Người xử lý</dt>
-                      <dd>{detail.processedBy.fullName || detail.processedBy.userName || '—'}</dd>
+                    <span className="report-party-meta">
+                      Gửi lúc {formatDate(detail?.createdAt) || '—'}
+                    </span>
+                    {detail?.reporter?.id ? (
+                      <Link
+                        className="detail-btn report-party-link"
+                        to={`/accounts/${detail.reporter.id}`}
+                        onClick={onClose}
+                      >
+                        Xem chi tiết tài khoản
+                      </Link>
+                    ) : null}
+                  </article>
+
+                  <article className="report-party-card">
+                    <span className="report-party-label">
+                      {getReportedSubjectFieldLabel(detail?.reportType)}
+                    </span>
+                    <div className="report-party-head">
+                      <PartyAvatar
+                        person={
+                          detail?.reportType === REPORT_TYPE.SHOP
+                            ? detail?.targetUser
+                            : detail?.targetUser || detail?.shop
+                        }
+                        name={getReportedSubjectValue(detail)}
+                      />
+                      <div className="report-party-head-copy">
+                        <strong className="report-party-name">
+                          {getReportedSubjectValue(detail) || 'Chưa gắn đối tượng'}
+                        </strong>
+                        {!getReportedSubjectValue(detail) ? (
+                          <span className="report-party-meta">
+                            Báo cáo lúc gửi chưa lưu gian hàng / user.
+                          </span>
+                        ) : null}
+                        {getReportedOwnerLines(detail).map((line) => (
+                          <span key={line} className="report-party-meta">
+                            {line}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  ) : null}
-                  <div><dt>Thời gian gửi</dt><dd>{formatDate(detail?.createdAt)}</dd></div>
-                  <div><dt>Thời gian xử lý</dt><dd>{formatDate(detail?.processedAt)}</dd></div>
-                </dl>
+                    {detail?.reasonLabel ? (
+                      <span className={`report-party-reason ${reasonBadgeClass(detail.reasonLabel)}`}>
+                        {detail.reasonLabel}
+                      </span>
+                    ) : null}
+                    {getReportedAccountId(detail) ? (
+                      <Link
+                        className="detail-btn report-party-link"
+                        to={`/accounts/${getReportedAccountId(detail)}`}
+                        onClick={onClose}
+                      >
+                        Xem chi tiết tài khoản
+                      </Link>
+                    ) : null}
+                  </article>
+                </div>
+
+                <div className="report-content-block">
+                  <h4>Nội dung báo cáo</h4>
+                  <p className="report-content-text">{detail?.content || 'Không có nội dung.'}</p>
+                </div>
+
+                <div className="report-evidence-block">
+                  <EvidenceImagesSection images={evidenceImages} onPreview={handlePreview} />
+                </div>
+
+                {detail?.processedBy || detail?.processedAt ? (
+                  <dl className="detail-list report-process-meta">
+                    {detail?.processedBy ? (
+                      <div>
+                        <dt>Người xử lý</dt>
+                        <dd>{detail.processedBy.fullName || detail.processedBy.userName || ''}</dd>
+                      </div>
+                    ) : null}
+                    <div>
+                      <dt>Thời gian xử lý</dt>
+                      <dd>{formatDate(detail?.processedAt)}</dd>
+                    </div>
+                  </dl>
+                ) : null}
               </section>
 
               <section className="modal-section modal-section-actions">
-                <h4>Xử lý báo cáo</h4>
+                <h4>Phản hồi người tố cáo</h4>
                 {!isPending ? (
                   <div className="empty-card">Báo cáo này đã được xử lý trước đó.</div>
-                ) : showApproveOptions ? (
+                ) : composingReply ? (
                   <div className="action-option-group">
-                    <p>{approvePrompt}</p>
-                    {approveActionOptions.map((option) => (
-                      <label key={option.value} className="action-option">
-                        <input
-                          type="radio"
-                          name="reportAction"
-                          value={option.value}
-                          checked={selectedAction === option.value}
-                          onChange={() => onSelectAction(option.value)}
-                        />
-                        <span>
-                          <strong>{option.label}</strong>
-                          <small>{option.description}</small>
-                        </span>
-                      </label>
-                    ))}
-                    <div className="dialog-actions">
-                      <button type="button" className="ghost-btn" disabled={actionLoading} onClick={onCancelApprove}>
+                    <p>
+                      {showDismissOptions
+                        ? 'Chọn hoặc nhập nội dung thông báo khi bác bỏ.'
+                        : 'Chọn hoặc nhập nội dung thông báo khi duyệt.'}
+                    </p>
+
+                    <label className="report-reply-field">
+                      <strong>Thông báo gửi người tố cáo</strong>
+                      <div className="report-reply-templates">
+                        {replyTemplates.map((template, index) => (
+                          <button
+                            key={`tpl-${index}`}
+                            type="button"
+                            className="ghost-btn report-reply-template"
+                            onClick={() => onPickReplyTemplate(template)}
+                          >
+                            {template}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={replyMessage}
+                        onChange={(event) => onChangeReplyMessage(event.target.value)}
+                        placeholder="Nhập nội dung thông báo..."
+                      />
+                    </label>
+
+                    <div className="report-action-row">
+                      <button
+                        type="button"
+                        className="report-btn report-btn-ghost"
+                        disabled={actionLoading}
+                        onClick={onCancelAction}
+                      >
                         Quay lại
                       </button>
-                      <button type="button" className="approve-btn" disabled={actionLoading} onClick={onConfirmApprove}>
-                        {actionLoading ? 'Đang xử lý...' : 'Xác nhận duyệt'}
-                      </button>
+                      {showDismissOptions ? (
+                        <button
+                          type="button"
+                          className="report-btn report-btn-reject"
+                          disabled={actionLoading || !String(replyMessage || '').trim()}
+                          onClick={onConfirmDismiss}
+                        >
+                          {actionLoading ? 'Đang xử lý...' : 'Xác nhận bác bỏ'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="report-btn report-btn-approve"
+                          disabled={actionLoading || !String(replyMessage || '').trim()}
+                          onClick={onConfirmApprove}
+                        >
+                          {actionLoading ? 'Đang xử lý...' : 'Xác nhận duyệt'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : (
                   <>
-                    <p>
-                      Xem xét nội dung vi phạm và chọn bác bỏ nếu báo cáo không hợp lệ, hoặc duyệt vi phạm để áp dụng
-                      biện pháp xử lý.
+                    <p className="report-action-hint">
+                      Duyệt hoặc bác bỏ. Hệ thống chỉ gửi thông báo phản hồi cho người tố cáo.
                     </p>
-                    <div className="dialog-actions modal-action-stack">
+                    <div className="report-action-row">
                       <button
                         type="button"
-                        className="outline-btn-danger"
+                        className="report-btn report-btn-reject"
                         disabled={actionLoading}
                         onClick={onDismiss}
                       >
-                        {actionLoading ? 'Đang xử lý...' : 'Bác bỏ'}
+                        Bác bỏ
                       </button>
-                      <button type="button" className="approve-btn" disabled={actionLoading} onClick={onApprove}>
-                        Duyệt vi phạm
+                      <button
+                        type="button"
+                        className="report-btn report-btn-approve"
+                        disabled={actionLoading}
+                        onClick={onApprove}
+                      >
+                        Duyệt
                       </button>
                     </div>
                   </>
@@ -435,23 +589,22 @@ function ReportDetailModal({
               </section>
             </div>
 
-            {shop && detail?.reportType === REPORT_TYPE.SHOP ? (
-              <section className="modal-section modal-section-full">
-                <h4>Thông tin bổ sung gian hàng</h4>
-                <dl className="detail-list">
-                  <div><dt>Địa chỉ</dt><dd>{shop.address || '—'}</dd></div>
-                  <div><dt>Số điện thoại</dt><dd>{shop.phone || '—'}</dd></div>
-                </dl>
-              </section>
-            ) : null}
-
             {shop && detail?.reportType !== REPORT_TYPE.SHOP ? (
               <section className="modal-section modal-section-full">
                 <h4>Thông tin gian hàng liên quan</h4>
                 <dl className="detail-list">
-                  <div><dt>Tên gian hàng</dt><dd>{shop.name || '—'}</dd></div>
-                  <div><dt>Địa chỉ</dt><dd>{shop.address || '—'}</dd></div>
-                  <div><dt>Số điện thoại</dt><dd>{shop.phone || '—'}</dd></div>
+                  <div>
+                    <dt>Tên gian hàng</dt>
+                    <dd>{shop.name || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>Địa chỉ</dt>
+                    <dd>{shop.addressHeThong || shop.systemAddress || shop.address || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>Số điện thoại</dt>
+                    <dd>{shop.phone || ''}</dd>
+                  </div>
                 </dl>
               </section>
             ) : null}
@@ -461,10 +614,16 @@ function ReportDetailModal({
                 <h4>Thông tin bổ sung sản phẩm</h4>
                 <dl className="detail-list">
                   {product.shopName ? (
-                    <div><dt>Gian hàng</dt><dd>{product.shopName}</dd></div>
+                    <div>
+                      <dt>Gian hàng</dt>
+                      <dd>{product.shopName}</dd>
+                    </div>
                   ) : null}
                   {product.description ? (
-                    <div><dt>Mô tả</dt><dd>{product.description}</dd></div>
+                    <div>
+                      <dt>Mô tả</dt>
+                      <dd>{product.description}</dd>
+                    </div>
                   ) : null}
                 </dl>
               </section>
@@ -474,12 +633,21 @@ function ReportDetailModal({
               <section className="modal-section modal-section-full">
                 <h4>Thông tin sản phẩm liên quan</h4>
                 <dl className="detail-list">
-                  <div><dt>Tên sản phẩm</dt><dd>{product.name || '—'}</dd></div>
+                  <div>
+                    <dt>Tên sản phẩm</dt>
+                    <dd>{product.name || ''}</dd>
+                  </div>
                   {product.shopName ? (
-                    <div><dt>Gian hàng</dt><dd>{product.shopName}</dd></div>
+                    <div>
+                      <dt>Gian hàng</dt>
+                      <dd>{product.shopName}</dd>
+                    </div>
                   ) : null}
                   {product.description ? (
-                    <div><dt>Mô tả</dt><dd>{product.description}</dd></div>
+                    <div>
+                      <dt>Mô tả</dt>
+                      <dd>{product.description}</dd>
+                    </div>
                   ) : null}
                 </dl>
               </section>
@@ -497,10 +665,6 @@ function ReportDetailModal({
                 </article>
               </section>
             ) : null}
-
-            <section className="modal-section modal-section-full modal-section-evidence">
-              <EvidenceImagesSection images={evidenceImages} onPreview={handlePreview} />
-            </section>
           </div>
         )}
       </div>
@@ -521,7 +685,7 @@ export default function ReportManagement() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [reportType, setReportType] = useState('');
-  const [status, setStatus] = useState('');
+  const [statusFilter, setStatusFilter] = useState('pending');
   const [page, setPage] = useState(1);
   const [dataMeta, setDataMeta] = useState(null);
 
@@ -530,7 +694,10 @@ export default function ReportManagement() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [showApproveOptions, setShowApproveOptions] = useState(false);
-  const [selectedAction, setSelectedAction] = useState('hide');
+  const [showDismissOptions, setShowDismissOptions] = useState(false);
+  const [replyMessage, setReplyMessage] = useState(APPROVE_REPLY_TEMPLATES[0]);
+
+  const statusParam = statusFilter === 'pending' ? '0' : 'processed';
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -541,7 +708,7 @@ export default function ReportManagement() {
       const payload = await listReports(token, {
         search,
         reportType,
-        status,
+        status: statusParam,
         page,
         limit: 20,
       });
@@ -555,7 +722,7 @@ export default function ReportManagement() {
     } finally {
       setLoading(false);
     }
-  }, [getIdToken, page, reportType, search, status]);
+  }, [getIdToken, page, reportType, search, statusParam]);
 
   const loadDetail = useCallback(
     async (reportId) => {
@@ -604,7 +771,8 @@ export default function ReportManagement() {
   function openDetail(reportId) {
     setSelectedReportId(reportId);
     setShowApproveOptions(false);
-    setSelectedAction('hide');
+    setShowDismissOptions(false);
+    setReplyMessage(APPROVE_REPLY_TEMPLATES[0]);
     loadDetail(reportId);
   }
 
@@ -615,17 +783,30 @@ export default function ReportManagement() {
     setSelectedReportId('');
     setDetail(null);
     setShowApproveOptions(false);
+    setShowDismissOptions(false);
   }
 
   async function refreshAfterAction(message, updatedReport) {
     setSnackbar(message);
     setDetail(updatedReport);
     setShowApproveOptions(false);
+    setShowDismissOptions(false);
     await loadItems();
   }
 
-  async function handleDismiss() {
+  function handleDismissClick() {
+    setShowDismissOptions(true);
+    setShowApproveOptions(false);
+    setReplyMessage(DISMISS_REPLY_TEMPLATES[0]);
+  }
+
+  async function handleConfirmDismiss() {
     if (!selectedReportId) {
+      return;
+    }
+    const message = String(replyMessage || '').trim();
+    if (!message) {
+      setError('Vui lòng nhập thông báo gửi người tố cáo.');
       return;
     }
 
@@ -634,7 +815,7 @@ export default function ReportManagement() {
 
     try {
       const token = await getIdToken();
-      const payload = await dismissReport(token, selectedReportId);
+      const payload = await dismissReport(token, selectedReportId, message);
       await refreshAfterAction(payload.message || 'Đã bác bỏ báo cáo vi phạm.', payload.data?.report);
     } catch (actionError) {
       setError(actionError.message || 'Không bác bỏ được báo cáo.');
@@ -644,12 +825,18 @@ export default function ReportManagement() {
   }
 
   function handleApproveClick() {
-    setSelectedAction(getDefaultApproveAction(detail?.reportType));
     setShowApproveOptions(true);
+    setShowDismissOptions(false);
+    setReplyMessage(APPROVE_REPLY_TEMPLATES[0]);
   }
 
-  async function handleConfirmApprove(action = selectedAction) {
+  async function handleConfirmApprove() {
     if (!selectedReportId) {
+      return;
+    }
+    const message = String(replyMessage || '').trim();
+    if (!message) {
+      setError('Vui lòng nhập thông báo gửi người tố cáo.');
       return;
     }
 
@@ -658,7 +845,7 @@ export default function ReportManagement() {
 
     try {
       const token = await getIdToken();
-      const payload = await approveReport(token, selectedReportId, action);
+      const payload = await approveReport(token, selectedReportId, 'resolve', message);
       await refreshAfterAction(payload.message || 'Đã duyệt vi phạm thành công.', payload.data?.report);
     } catch (actionError) {
       setError(actionError.message || 'Không duyệt được báo cáo.');
@@ -669,19 +856,6 @@ export default function ReportManagement() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Quản lý báo cáo vi phạm</h1>
-          <p>
-            Dữ liệu được tải trực tiếp từ MongoDB (collection <code>reports</code>). Theo dõi, xem chi
-            tiết và xử lý các báo cáo vi phạm từ người dùng.
-          </p>
-        </div>
-        <button type="button" onClick={loadItems} disabled={loading}>
-          Làm mới
-        </button>
-      </header>
-
       <section className="filter-card">
         <form className="filter-form" onSubmit={handleSearchSubmit}>
           <label className="filter-search">
@@ -699,6 +873,23 @@ export default function ReportManagement() {
 
         <div className="filter-grid">
           <label>
+            Trạng thái
+            <select
+              value={statusFilter}
+              onChange={(event) => {
+                handleFilterChange(setStatusFilter, event.target.value);
+                setShowApproveOptions(false);
+                setShowDismissOptions(false);
+              }}
+            >
+              {STATUS_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Loại vi phạm
             <select
               value={reportType}
@@ -711,82 +902,83 @@ export default function ReportManagement() {
               ))}
             </select>
           </label>
-
-          <label>
-            Trạng thái
-            <select value={status} onChange={(event) => handleFilterChange(setStatus, event.target.value)}>
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value || 'all-status'} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </section>
 
       {snackbar ? <p className="snackbar">{snackbar}</p> : null}
       {error ? <p className="error-banner">{error}</p> : null}
 
-      <div className="account-table-wrap">
-        <table className="account-table">
-          <thead>
-            <tr>
-              <th>Nội dung vi phạm</th>
-              <th>Loại</th>
-              <th>Lý do vi phạm</th>
-              <th>Người báo cáo</th>
-              <th>Trạng thái</th>
-              <th>Thời gian</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? <SkeletonRows /> : null}
-            {!loading && items.length === 0 ? (
+      <section className="table-card">
+        <div className="table-toolbar">
+          <strong>
+            {statusFilter === 'pending' ? 'Báo cáo chờ xử lý' : 'Báo cáo đã xử lý'} ·{' '}
+            {pagination.total} phiếu
+          </strong>
+        </div>
+        <div className="account-table-wrap">
+          <table className="account-table">
+            <thead>
               <tr>
-                <td colSpan={7}>
-                  <div className="empty-card">Không tìm thấy báo cáo phù hợp.</div>
-                </td>
+                <th>Nội dung vi phạm</th>
+                <th>Loại</th>
+                <th>Lý do vi phạm</th>
+                <th>Người báo cáo</th>
+                <th>Trạng thái</th>
+                <th>Thời gian</th>
+                <th />
               </tr>
-            ) : null}
-            {!loading
-              ? items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <div className="account-primary">{item.content || item.title || '—'}</div>
-                      {getReportTargetLabel(item) ? (
-                        <div className="report-target-meta">{getReportTargetLabel(item)}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <span className={typeBadgeClass(item.reportType)}>{item.reportTypeLabel}</span>
-                    </td>
-                    <td>
-                      <span className={reasonBadgeClass(item.reasonLabel)}>{item.reasonLabel}</span>
-                    </td>
-                    <td>
-                      <div>{item.reporter?.fullName || item.reporter?.userName || '—'}</div>
-                      <div className="account-secondary">{item.reporter?.email || '—'}</div>
-                    </td>
-                    <td>
-                      <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
-                    </td>
-                    <td>
-                      <div className="account-secondary">Gửi: {formatDate(item.createdAt)}</div>
-                      <div className="account-secondary">Xử lý: {formatDate(item.processedAt)}</div>
-                    </td>
-                    <td>
-                      <button type="button" className="table-link" onClick={() => openDetail(item.id)}>
-                        Chi tiết
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              : null}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {loading ? <SkeletonRows /> : null}
+              {!loading && items.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="empty-card">
+                      {statusFilter === 'pending'
+                        ? 'Không có báo cáo chờ xử lý.'
+                        : 'Không có báo cáo đã xử lý.'}
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+              {!loading
+                ? items.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <div className="account-primary">{item.content || item.title || ''}</div>
+                        {getReportTargetLabel(item) ? (
+                          <div className="report-target-meta">{getReportTargetLabel(item)}</div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className={typeBadgeClass(item.reportType)}>{item.reportTypeLabel}</span>
+                      </td>
+                      <td>
+                        <span className={reasonBadgeClass(item.reasonLabel)}>{item.reasonLabel}</span>
+                      </td>
+                      <td>
+                        <div>{item.reporter?.fullName || item.reporter?.userName || ''}</div>
+                        <div className="account-secondary">{item.reporter?.email || ''}</div>
+                      </td>
+                      <td>
+                        <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
+                      </td>
+                      <td>
+                        <div className="account-secondary">Gửi: {formatDate(item.createdAt)}</div>
+                        <div className="account-secondary">Xử lý: {formatDate(item.processedAt)}</div>
+                      </td>
+                      <td>
+                        <button type="button" className="detail-btn" onClick={() => openDetail(item.id)}>
+                          Chi tiết
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <div className="pagination-row">
         <span>
@@ -819,13 +1011,19 @@ export default function ReportManagement() {
           loading={detailLoading}
           actionLoading={actionLoading}
           onClose={closeDetail}
-          onDismiss={handleDismiss}
+          onDismiss={handleDismissClick}
           onApprove={handleApproveClick}
           showApproveOptions={showApproveOptions}
-          selectedAction={selectedAction}
-          onSelectAction={setSelectedAction}
-          onConfirmApprove={() => handleConfirmApprove(selectedAction)}
-          onCancelApprove={() => setShowApproveOptions(false)}
+          showDismissOptions={showDismissOptions}
+          replyMessage={replyMessage}
+          onChangeReplyMessage={setReplyMessage}
+          onPickReplyTemplate={setReplyMessage}
+          onConfirmApprove={handleConfirmApprove}
+          onConfirmDismiss={handleConfirmDismiss}
+          onCancelAction={() => {
+            setShowApproveOptions(false);
+            setShowDismissOptions(false);
+          }}
         />
       ) : null}
     </div>

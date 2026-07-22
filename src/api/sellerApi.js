@@ -11,6 +11,9 @@ async function parseApiResponse(response) {
     const error = new Error(payload.message || payload.error || 'Yêu cầu API thất bại.');
     error.statusCode = response.status;
     error.payload = payload;
+    if (payload.data !== undefined) {
+      error.data = payload.data;
+    }
     log.warn('request failed', response.status, payload.message || payload.error || '');
     throw error;
   }

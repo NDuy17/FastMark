@@ -1,32 +1,54 @@
 const mongoose = require("mongoose");
 
+/**
+ * SellerVerification — hồ sơ đăng ký bán hàng (KYC).
+ * status: 0 chờ duyệt, 1 đã duyệt, 2 từ chối.
+ * Thời điểm trạng thái cuối = UpdatedAt (duyệt / từ chối đều cập nhật UpdatedAt).
+ */
 const SellerVerificationSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  // User gửi đăng ký (ref User).
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+    index: true,
+  },
 
-  cccdFrontImage: String,
-  cccdBackImage: String,
-  selfieImage: String,
+  // URL ảnh CCCD mặt trước.
+  cccdFrontImage: { type: String, default: "" },
+  // URL ảnh CCCD mặt sau.
+  cccdBackImage: { type: String, default: "" },
+  // URL ảnh selfie cầm CCCD / xác minh khuôn mặt.
+  selfieImage: { type: String, default: "" },
 
-  shopUsername: { type: String, trim: true, lowercase: true },
-  shopName: String,
-  shopDescription: String,
+  // Danh mục kinh doanh đề xuất (ref ShopCategory).
   categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopCategory" },
 
-  address: String,
-  DiaChiHeThong: String,
-  latitude: Number,
-  longitude: Number,
+  // Địa chỉ hệ thống / geocode.
+  addressHeThong: { type: String, default: "" },
 
-  status: { type: Number, default: 0 },
-  LyDoTuChoi: String,
+  // Vĩ độ (GPS), null nếu chưa có.
+  latitude: { type: Number, default: null },
+  // Kinh độ (GPS), null nếu chưa có.
+  longitude: { type: Number, default: null },
 
-  submittedAt: Date,
-  approvedAt: Date,
-  rejectedAt: Date,
-  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  // Trạng thái KYC: 0 = chờ duyệt, 1 = duyệt, 2 = từ chối.
+  status: { type: Number, default: 0, index: true },
 
+  // Lý do bị từ chối khi đăng ký seller (chỉ khi status = 2).
+  LyDoTuChoi: { type: String, default: "" },
+
+  // Admin duyệt / từ chối (ref User role admin).
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+  // Thời điểm gửi đăng ký.
   CreatedAt: { type: Date, default: Date.now },
+  // Cập nhật khi gửi lại / admin xử lý — dùng làm mốc thời gian trạng thái cuối.
   UpdatedAt: { type: Date, default: Date.now },
+});
+
+SellerVerificationSchema.pre("save", function saveHook() {
+  this.UpdatedAt = new Date();
 });
 
 module.exports = mongoose.model("SellerVerification", SellerVerificationSchema);
