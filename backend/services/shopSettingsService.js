@@ -182,6 +182,7 @@ function normalizeTime(value) {
     return "";
   }
 
+  // Chấp nhận HH:mm, H:mm, HH:mm:ss (cắt giây).
   const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
   if (!match) {
     throw createServiceError("Giờ mở/đóng cửa phải theo định dạng HH:mm.");
@@ -228,9 +229,11 @@ async function updateShopSettings(user, payload) {
   }
   if (payload.openTime !== undefined) {
     shop.openTime = normalizeTime(payload.openTime);
+    shop.markModified("openTime");
   }
   if (payload.closeTime !== undefined) {
     shop.closeTime = normalizeTime(payload.closeTime);
+    shop.markModified("closeTime");
   }
   if (payload.isOpen !== undefined) {
     shop.isOpen = Number(payload.isOpen) === SHOP_OPEN.OPEN ? SHOP_OPEN.OPEN : SHOP_OPEN.CLOSED;
@@ -246,6 +249,15 @@ async function updateShopSettings(user, payload) {
 
   if (payload.pinHours !== undefined) {
     shop.pinHours = Boolean(payload.pinHours);
+    shop.markModified("pinHours");
+  } else if (
+    (payload.openTime !== undefined || payload.closeTime !== undefined) &&
+    shop.openTime &&
+    shop.closeTime &&
+    shop.pinHours == null
+  ) {
+    shop.pinHours = true;
+    shop.markModified("pinHours");
   }
 
   shop.UpdatedAt = new Date();

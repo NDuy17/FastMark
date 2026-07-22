@@ -98,16 +98,20 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
     return formatPriceRange(product.minPrice, product.maxPrice);
   }, [product]);
 
-  const promotionBasePrice = useMemo(() => {
-    const fromProduct = Number(product?.minPrice);
-    if (Number.isFinite(fromProduct) && fromProduct > 0) {
-      return fromProduct;
-    }
+  const promotionPriceBounds = useMemo(() => {
     const prices = (variants || [])
       .map((v) => Number(v.price))
       .filter((p) => Number.isFinite(p) && p > 0);
-    return prices.length ? Math.min(...prices) : 0;
-  }, [product?.minPrice, variants]);
+    if (prices.length) {
+      return { min: Math.min(...prices), max: Math.max(...prices) };
+    }
+    const min = Number(product?.minPrice) || 0;
+    const max = Number(product?.maxPrice) || min;
+    return { min, max };
+  }, [product?.minPrice, product?.maxPrice, variants]);
+
+  const promotionBasePrice = promotionPriceBounds.min;
+  const promotionBaseMaxPrice = promotionPriceBounds.max;
 
   const applyProductToForm = useCallback((nextProduct) => {
     setProduct(nextProduct);
@@ -531,6 +535,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
             <ProductPromotionSection
               enabled={promotion.enabled}
               basePrice={promotionBasePrice}
+              baseMaxPrice={promotionBaseMaxPrice}
               discountPercent={promotion.discountPercent}
               startDate={promotion.startDate}
               endDate={promotion.endDate}

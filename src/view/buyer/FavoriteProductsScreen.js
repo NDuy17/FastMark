@@ -45,6 +45,13 @@ function mapFavoriteToProduct(item) {
     isOutOfStock: item.isOutOfStock,
     remainingQuantity: item.remainingQuantity,
     variants: item.variants,
+    isPromotion: Boolean(item.isPromotion),
+    discountPercent: Number(item.discountPercent) || 0,
+    promotionPrice: item.promotionPrice,
+    promotionMinPrice: item.promotionMinPrice,
+    promotionMaxPrice: item.promotionMaxPrice,
+    originalPrice: item.originalPrice,
+    originalMaxPrice: item.originalMaxPrice,
   };
 }
 

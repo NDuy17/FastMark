@@ -214,9 +214,52 @@ export default function SellerProductsTabScreen({
 
   function handlePinPress(product) {
     const current = Number(product.pinProduct) || 0;
+    const hasPin1 = products.some(
+      (item) => item.id !== product.id && Number(item.pinProduct) === 1
+    );
+    const hasPin2 = products.some(
+      (item) => item.id !== product.id && Number(item.pinProduct) === 2
+    );
+
+    if (current > 0) {
+      Alert.alert('Ghim sản phẩm', `Đang ghim ở vị trí ${current}.`, [
+        {
+          text: 'Bỏ ghim',
+          style: 'destructive',
+          onPress: () => applyPin(product.id, 0),
+        },
+        ...(current !== 1
+          ? [
+              {
+                text: 'Chuyển vị trí 1',
+                onPress: () => applyPin(product.id, 1),
+              },
+            ]
+          : []),
+        ...(current !== 2 && hasPin1
+          ? [
+              {
+                text: 'Chuyển vị trí 2',
+                onPress: () => applyPin(product.id, 2),
+              },
+            ]
+          : []),
+        { text: 'Hủy', style: 'cancel' },
+      ]);
+      return;
+    }
+
+    // Chưa có ghim vị trí 1 → ghim mặc định vị trí 1.
+    if (!hasPin1) {
+      applyPin(product.id, 1);
+      return;
+    }
+
     Alert.alert(
       'Ghim sản phẩm',
-      'Chỉ ghim tối đa 2 sản phẩm trên gian hàng (vị trí 1 và 2). Ghim đè sẽ thay sản phẩm cũ cùng vị trí.',
+      hasPin2
+        ? 'Đã ghim đủ 2 sản phẩm. Chọn vị trí để chèn — sản phẩm đang ở vị trí đó sẽ bị bỏ ghim.'
+        : 'Chọn vị trí. Ghim vị trí 1 sẽ đẩy sản phẩm đang ở 1 xuống vị trí 2.',
       [
         {
           text: 'Vị trí 1',
@@ -226,15 +269,6 @@ export default function SellerProductsTabScreen({
           text: 'Vị trí 2',
           onPress: () => applyPin(product.id, 2),
         },
-        ...(current > 0
-          ? [
-              {
-                text: 'Bỏ ghim',
-                style: 'destructive',
-                onPress: () => applyPin(product.id, 0),
-              },
-            ]
-          : []),
         { text: 'Hủy', style: 'cancel' },
       ]
     );

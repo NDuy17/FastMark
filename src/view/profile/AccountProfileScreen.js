@@ -21,7 +21,6 @@ import {
 } from '../../viewmodel/auth/authSelectors';
 import { uploadUserAvatar, syncSellerAccess, loadUserProfile, applyShopSettingsToProfile, clearAuthFeedback } from '../../viewmodel/auth/authSlice';
 import { getMyProductsOnBackend } from '../../api/productApi';
-import { getFavoriteProductIdsOnBackend } from '../../api/favoriteApi';
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import StarRating from '../store/components/StarRating';
@@ -169,7 +168,6 @@ export default function AccountProfileScreen({
   const [sellerProducts, setSellerProducts] = useState([]);
   const [shopContact, setShopContact] = useState(null);
   const [isLoadingShopContact, setIsLoadingShopContact] = useState(false);
-  const [favoriteCount, setFavoriteCount] = useState(0);
 
   const loadShopContact = useCallback(async () => {
     if (!showAsSeller) {
@@ -229,38 +227,6 @@ export default function AccountProfileScreen({
     // so profile does not show stale success/error alerts.
     dispatch(clearAuthFeedback());
   }, [dispatch, isProfileVisible]);
-
-  useEffect(() => {
-    if (!isProfileVisible || !showAsBuyer || !user) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    async function loadFavoriteCount() {
-      try {
-        const idToken = await getCurrentUserIdToken();
-        if (!idToken) {
-          if (!cancelled) {
-            setFavoriteCount(0);
-          }
-          return;
-        }
-        const productIds = await getFavoriteProductIdsOnBackend(idToken);
-        if (!cancelled) {
-          setFavoriteCount(Array.isArray(productIds) ? productIds.length : 0);
-        }
-      } catch {
-        if (!cancelled) {
-          setFavoriteCount(0);
-        }
-      }
-    }
-
-    loadFavoriteCount();
-    return () => {
-      cancelled = true;
-    };
-  }, [isProfileVisible, showAsBuyer, user]);
 
   useEffect(() => {
     if (!isProfileVisible || !showAsSeller) {
@@ -431,17 +397,8 @@ export default function AccountProfileScreen({
                 <Text style={styles.followValue}>{formatCount(stats.followers)}</Text> người theo dõi
               </Text>
             </Pressable>
-            {showAsBuyer ? (
-              <>
-                <Text style={styles.followDivider}>•</Text>
-                <Pressable onPress={() => onOpenFavoriteProducts?.()}>
-                  <Text style={styles.followText}>
-                    <Text style={styles.followValue}>{formatCount(favoriteCount)}</Text> yêu thích
-                  </Text>
-                </Pressable>
-              </>
-            ) : null}
           </View>
+
           {showAsSeller ? (
             <View style={styles.shopStatsRow}>
               <View style={styles.shopStatItem}>

@@ -245,6 +245,13 @@ export default function SellerPostForm({ onProductCreated }) {
     return prices.length ? Math.min(...prices) : 0;
   }, [variants]);
 
+  const promotionBaseMaxPrice = useMemo(() => {
+    const prices = (variants || [])
+      .map((v) => Number(v.price))
+      .filter((p) => Number.isFinite(p) && p > 0);
+    return prices.length ? Math.max(...prices) : 0;
+  }, [variants]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -423,11 +430,6 @@ export default function SellerPostForm({ onProductCreated }) {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
-      <View style={styles.header}>
-        <Text style={styles.title}>Đăng tin</Text>
-        <Text style={styles.subtitle}>Tạo sản phẩm mới với ảnh, mô tả và biến thể</Text>
-      </View>
-
       <View style={styles.card}>
         <View style={styles.field}>
           <Text style={styles.label}>Tên sản phẩm</Text>
@@ -527,6 +529,7 @@ export default function SellerPostForm({ onProductCreated }) {
         <ProductPromotionSection
           enabled={promotion.enabled}
           basePrice={promotionBasePrice}
+          baseMaxPrice={promotionBaseMaxPrice}
           discountPercent={promotion.discountPercent}
           startDate={promotion.startDate}
           endDate={promotion.endDate}
@@ -569,21 +572,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 32,
-  },
-  header: {
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: '#1f2937',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#6b7280',
-    fontWeight: '500',
-    lineHeight: 22,
   },
   card: {
     backgroundColor: '#ffffff',

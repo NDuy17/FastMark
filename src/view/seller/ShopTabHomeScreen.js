@@ -20,7 +20,6 @@ const HUB_ITEMS = [
   { key: 'post', label: 'Đăng bài sản phẩm', icon: 'add-circle-outline', action: 'post' },
   { key: 'products', label: 'Sản phẩm', icon: 'cube-outline', action: 'products' },
   { key: 'orders', label: 'Đơn bán', icon: 'receipt-outline', action: 'orders' },
-  { key: 'notifications', label: 'Thông báo', icon: 'notifications-outline', action: 'notifications' },
   { key: 'pickup-qr', label: 'QR nhận hàng', icon: 'qr-code-outline', action: 'pickup-qr' },
   { key: 'reviews', label: 'Đánh giá', icon: 'star-outline', action: 'reviews' },
   { key: 'settings', label: 'Cài đặt shop', icon: 'storefront-outline', action: 'settings' },
@@ -30,6 +29,7 @@ const HUB_ITEMS = [
 
 export default function ShopTabHomeScreen({
   shopSettings = null,
+  unreadNotificationsCount = 0,
   onStartRegister,
   onOpenHub,
   onOpenWallet,
@@ -46,6 +46,7 @@ export default function ShopTabHomeScreen({
   const isPending = verification?.status === SELLER_VERIFICATION_STATUS.PENDING;
   const isRejected = verification?.status === SELLER_VERIFICATION_STATUS.REJECTED;
   const showManageHub = Boolean(canSwitchToSeller && isSeller);
+  const notificationBadgeCount = Math.max(0, Number(unreadNotificationsCount) || 0);
   const shopName = profile?.fullName || shopSettings?.shopName || 'Gian hàng của bạn';
   const subscriptionActive = Boolean(
     shopSettings?.subscriptionActive || profile?.subscriptionActive
@@ -84,15 +85,33 @@ export default function ShopTabHomeScreen({
             </Text>
           </View>
           {showManageHub ? (
-            <Pressable
-              onPress={() => onOpenHub?.('preview')}
-              style={({ pressed }) => [styles.headerPreviewBtn, pressed && styles.pressed]}
-              accessibilityRole="button"
-              accessibilityLabel="Xem shop"
-              hitSlop={8}
-            >
-              <Ionicons name="eye-outline" size={18} color="#64748b" />
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() => onOpenHub?.('preview')}
+                style={({ pressed }) => [styles.headerActionBtn, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Xem shop"
+                hitSlop={8}
+              >
+                <Ionicons name="eye-outline" size={18} color="#64748b" />
+              </Pressable>
+              <Pressable
+                onPress={() => onOpenHub?.('notifications')}
+                style={({ pressed }) => [styles.headerActionBtn, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Thông báo"
+                hitSlop={8}
+              >
+                <Ionicons name="notifications-outline" size={18} color="#64748b" />
+                {notificationBadgeCount > 0 ? (
+                  <View style={styles.headerBadge}>
+                    <Text style={styles.headerBadgeText}>
+                      {notificationBadgeCount > 9 ? '9+' : String(notificationBadgeCount)}
+                    </Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            </View>
           ) : null}
         </View>
 
@@ -223,7 +242,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  headerPreviewBtn: {
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerActionBtn: {
     width: 34,
     height: 34,
     borderRadius: 17,
@@ -232,6 +256,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+  },
+  headerBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  headerBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
   },
   title: {
     fontSize: 22,

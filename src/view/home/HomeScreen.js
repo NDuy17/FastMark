@@ -28,6 +28,7 @@ import { formatDistance, hasValidLocation, normalizeExpoLocation, calculateDista
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
 import { normalizeProduct } from '../../model/productModel';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
@@ -53,7 +54,7 @@ function SectionHeader({ title, onSeeAll }) {
       <Text style={styles.sectionTitle}>{title}</Text>
       {onSeeAll ? (
         <Pressable onPress={onSeeAll} hitSlop={8}>
-          <Text style={styles.seeAllText}>Xem tất cả {'>'}</Text>
+          <Text style={styles.seeAllText}>Xem tất cả</Text>
         </Pressable>
       ) : null}
     </View>
@@ -146,7 +147,7 @@ function HomeProductCard({ product, isLiked, likeCount = 0, onToggleLike, onPres
   );
 }
 
-function HomeShopCard({ shop, onPress }) {
+function HomeShopCard({ shop, onPress, grid = false }) {
   const distance = formatDistance(shop.distance_meters);
   const rating = Number(shop.rating_avg) || 0;
   const isOpen = shop.is_open !== false;
@@ -157,7 +158,11 @@ function HomeShopCard({ shop, onPress }) {
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.shopCard, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.shopCard,
+        grid && styles.shopCardGrid,
+        pressed && styles.pressed,
+      ]}
       onPress={() => onPress?.(shop.id)}
     >
       {avatar ? (
@@ -193,6 +198,21 @@ function HomeShopCard({ shop, onPress }) {
     </Pressable>
   );
 }
+
+const SEE_ALL_SECTIONS = {
+  promotions: {
+    title: 'Sản phẩm giảm giá',
+    type: 'products',
+  },
+  nearbyProducts: {
+    title: 'Sản phẩm gần bạn',
+    type: 'products',
+  },
+  nearbyShops: {
+    title: 'Cửa hàng gần bạn',
+    type: 'shops',
+  },
+};
 
 function CategoryChip({ category, label, onPress, active = false }) {
   const text = label || category?.categoryName || category?.name || '';
@@ -387,6 +407,7 @@ export default function HomeScreen({
   onOpenShop,
   onOpenWalletTopUp,
   onOpenChat,
+  onNavigateDirections,
   resumeReserveRequest = null,
   onResumeReserveHandled,
   isScreenActive = true,
@@ -420,6 +441,7 @@ export default function HomeScreen({
   const [showSearchScreen, setShowSearchScreen] = useState(false);
   const [showInboxScreen, setShowInboxScreen] = useState(false);
   const [chatOpenRequest, setChatOpenRequest] = useState(null);
+  const [seeAllSection, setSeeAllSection] = useState(null);
 
   const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
     if (!shopId) {
@@ -440,13 +462,15 @@ export default function HomeScreen({
             selectedStoreId ||
             showSearchScreen ||
             showInboxScreen ||
-            chatOpenRequest)
+            chatOpenRequest ||
+            seeAllSection)
       )
     );
   }, [
     chatOpenRequest,
     isScreenActive,
     onNavigationStateChange,
+    seeAllSection,
     selectedProductId,
     selectedStoreId,
     showSearchScreen,
@@ -797,12 +821,14 @@ export default function HomeScreen({
     return (
       <StoreDetailScreen
         storeId={selectedStoreId}
+        originLocation={currentLocation}
         onBack={() => setSelectedStoreId(null)}
         onProductPress={(productId) => {
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
         onOpenChat={handleOpenChatLocal}
+        onNavigateDirections={onNavigateDirections}
       />
     );
   }
@@ -838,13 +864,71 @@ export default function HomeScreen({
     );
   }
 
-  const messageBadgeCount = Math.max(0, Number(unreadMessagesCount) || 0);
   const categoryKey = String(selectedCategoryId || '').trim();
   const visiblePromotionProducts = categoryKey
     ? promotionProducts.filter(
         (product) => String(product.categoryId || '') === categoryKey
       )
     : promotionProducts;
+
+  if (seeAllSection && SEE_ALL_SECTIONS[seeAllSection]) {
+    const sectionMeta = SEE_ALL_SECTIONS[seeAllSection];
+    const seeAllProducts =
+      seeAllSection === 'promotions'
+        ? visiblePromotionProducts
+        : seeAllSection === 'nearbyProducts'
+          ? products
+          : [];
+    const seeAllShops = seeAllSection === 'nearbyShops' ? shops : [];
+
+    return (
+      <View style={[styles.screen, { paddingTop: insets.contentPaddingTop }]}>
+        <SubScreenHeader title={sectionMeta.title} onBack={() => setSeeAllSection(null)} />
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.seeAllContent,
+            { paddingBottom: insets.tabRootScrollPaddingBottom },
+          ]}
+        >
+          {sectionMeta.type === 'products' ? (
+            seeAllProducts.length > 0 ? (
+              <View style={styles.productGrid}>
+                {seeAllProducts.map((item) => (
+                  <HomeProductCard
+                    key={`see-all-${String(item.id)}`}
+                    product={item}
+                    grid
+                    isLiked={Boolean(likedProducts[String(item.id)])}
+                    likeCount={getDisplayLikeCount(item)}
+                    onToggleLike={toggleLikeProduct}
+                    onPress={setSelectedProductId}
+                  />
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>Chưa có sản phẩm nào.</Text>
+            )
+          ) : seeAllShops.length > 0 ? (
+            <View style={styles.shopGrid}>
+              {seeAllShops.map((item) => (
+                <HomeShopCard
+                  key={`see-all-shop-${String(item.id)}`}
+                  shop={item}
+                  grid
+                  onPress={setSelectedStoreId}
+                />
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.emptyText}>Chưa có cửa hàng nào.</Text>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  const messageBadgeCount = Math.max(0, Number(unreadMessagesCount) || 0);
 
   function handleSelectCategory(categoryId = '') {
     setSelectedCategoryId(String(categoryId || ''));
@@ -974,7 +1058,10 @@ export default function HomeScreen({
 
         {visiblePromotionProducts.length > 0 ? (
           <>
-            <SectionHeader title="🔥 Sản phẩm giảm giá" />
+            <SectionHeader
+              title="🔥 Sản phẩm giảm giá"
+              onSeeAll={() => setSeeAllSection('promotions')}
+            />
             <FlatList
               horizontal
               data={visiblePromotionProducts}
@@ -1002,11 +1089,7 @@ export default function HomeScreen({
           <>
             <SectionHeader
               title="Sản phẩm gần bạn"
-              onSeeAll={() =>
-                onOpenProducts?.(
-                  selectedCategoryId ? { categoryId: selectedCategoryId } : undefined
-                )
-              }
+              onSeeAll={() => setSeeAllSection('nearbyProducts')}
             />
             <FlatList
               horizontal
@@ -1031,7 +1114,7 @@ export default function HomeScreen({
           <>
             <SectionHeader
               title="Cửa hàng gần bạn"
-              onSeeAll={() => onOpenProducts?.({ focusShops: true })}
+              onSeeAll={() => setSeeAllSection('nearbyShops')}
             />
             <FlatList
               horizontal
@@ -1351,6 +1434,14 @@ const styles = StyleSheet.create({
     rowGap: 10,
     paddingBottom: 14,
   },
+  seeAllContent: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+  },
+  shopGrid: {
+    gap: 10,
+    paddingBottom: 14,
+  },
   productCard: {
     width: 168,
     backgroundColor: '#ffffff',
@@ -1487,6 +1578,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     padding: 8,
+  },
+  shopCardGrid: {
+    width: '100%',
   },
   shopAvatar: {
     width: 52,

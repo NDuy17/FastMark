@@ -405,6 +405,7 @@ export default function AuthenticatedHome() {
           onOpenShop={handleOpenShopNav}
           onOpenWalletTopUp={() => handleOpenProfileNav('wallet-topup')}
           onOpenChat={handleOpenChat}
+          onNavigateDirections={handleNavigateToStore}
           resumeReserveRequest={resumeReserveRequest}
           onResumeReserveHandled={() => setResumeReserveRequest(null)}
           isScreenActive={activeTab === 'home'}
@@ -515,6 +516,7 @@ export default function AuthenticatedHome() {
               onOpenBuyerOrders={handleOpenBuyerOrders}
               onOpenWalletTopUp={() => handleOpenProfileNav('wallet-topup')}
               onOpenChat={handleOpenChat}
+              onNavigateDirections={handleNavigateToStore}
               onBack={handleCloseBuyerOverlay}
             />
           </View>

@@ -3,6 +3,8 @@ import {
   Alert,
   ActivityIndicator,
   Image,
+  Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 
 import {
   loadProductsByStoreId,
@@ -32,7 +35,12 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { getProductImageOverlayLabel } from '../../core/utils/productAvailability';
-import { formatDistance, calculateDistanceMeters, hasValidLocation } from '../../core/utils/geo';
+import {
+  formatDistance,
+  calculateDistanceMeters,
+  hasValidLocation,
+  normalizeExpoLocation,
+} from '../../core/utils/geo';
 import { getAvatarInitial } from '../../core/utils/avatarInitial';
 import { storeLogger as log } from '../../core/utils/logger';
 import CircularBackButton from '../shared/components/CircularBackButton';
@@ -115,7 +123,7 @@ function StatCard({ label, value, onPress }) {
 
 export default function StoreDetailScreen({
   storeId,
-  originLocation,
+  originLocation: originLocationProp = null,
   onBack,
   onProductPress,
   onOpenChat,
@@ -137,9 +145,46 @@ export default function StoreDetailScreen({
   const [showFollowScreen, setShowFollowScreen] = useState(false);
   const [likedProducts, setLikedProducts] = useState({});
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(null);
+  const [resolvedOrigin, setResolvedOrigin] = useState(null);
+
+  const originLocation = hasValidLocation(originLocationProp)
+    ? originLocationProp
+    : resolvedOrigin;
+
+  useEffect(() => {
+    if (hasValidLocation(originLocationProp)) {
+      setResolvedOrigin(null);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadOriginLocation() {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!active || permission.status !== 'granted') {
+          return;
+        }
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!active) {
+          return;
+        }
+        setResolvedOrigin(normalizeExpoLocation(current));
+      } catch {
+        // Distance is optional when location is unavailable.
+      }
+    }
+
+    loadOriginLocation();
+    return () => {
+      active = false;
+    };
+  }, [originLocationProp?.latitude, originLocationProp?.longitude, storeId]);
 
   const straightLineDistanceMeters = useMemo(() => {
-    if (!store || !hasValidLocation(originLocation)) {
+    if (!store || !hasValidLocation(originLocation) || !hasValidLocation(store)) {
       return null;
     }
 
@@ -150,7 +195,7 @@ export default function StoreDetailScreen({
   }, [store, originLocation?.latitude, originLocation?.longitude]);
 
   useEffect(() => {
-    if (!store || !hasValidLocation(originLocation)) {
+    if (!store || !hasValidLocation(originLocation) || !hasValidLocation(store)) {
       setRouteDistanceMeters(null);
       return undefined;
     }
@@ -187,8 +232,11 @@ export default function StoreDetailScreen({
 
   const distanceMeters = Number.isFinite(routeDistanceMeters)
     ? routeDistanceMeters
-    : straightLineDistanceMeters ??
-      (Number.isFinite(Number(store?.distance_meters)) ? Number(store.distance_meters) : null);
+    : Number.isFinite(straightLineDistanceMeters)
+      ? straightLineDistanceMeters
+      : Number.isFinite(Number(store?.distance_meters))
+        ? Number(store.distance_meters)
+        : null;
 
   useEffect(() => {
     let active = true;
@@ -490,13 +538,26 @@ export default function StoreDetailScreen({
       return;
     }
 
-    onNavigateDirections?.({
-      shopId: store.id,
-      storeName: store.shop_name || store.name,
-      latitude,
-      longitude,
-      categoryId: store.category_id || store.categoryId || '',
-      storeAvatar: store.image_url || store.cover_image_url || '',
+    if (onNavigateDirections) {
+      onNavigateDirections({
+        shopId: store.id,
+        storeName: store.shop_name || store.name,
+        latitude,
+        longitude,
+        categoryId: store.category_id || store.categoryId || '',
+        storeAvatar: store.image_url || store.cover_image_url || '',
+      });
+      return;
+    }
+
+    const label = encodeURIComponent(store.shop_name || store.name || 'Gian hàng');
+    const url =
+      Platform.OS === 'ios'
+        ? `http://maps.apple.com/?daddr=${latitude},${longitude}&q=${label}`
+        : `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
+
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Không mở được bản đồ', 'Vui lòng thử lại sau.');
     });
   }
 
@@ -603,22 +664,35 @@ export default function StoreDetailScreen({
             label="Địa chỉ"
             value={store.system_address || store.user_address}
           />
-          {Number.isFinite(distanceMeters) ? (
-            <View style={styles.distanceRow}>
-              <Text style={styles.infoLine}>
-                <Text style={styles.infoLabelInline}>Khoảng cách: </Text>
-                <Text style={styles.infoValueInline}>{`Cách bạn ${formatDistance(distanceMeters)}`}</Text>
-              </Text>
-              {onNavigateDirections ? (
-                <Pressable
-                  onPress={handleNavigateDirections}
-                  style={({ pressed }) => [styles.directionsChip, pressed && styles.pressed]}
-                >
-                  <Text style={styles.directionsChipText}>Chỉ đường</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : null}
+          {(() => {
+            const hasCoords =
+              Number.isFinite(Number(store.latitude)) && Number.isFinite(Number(store.longitude));
+            const hasDistance = Number.isFinite(Number(distanceMeters));
+            if (!hasDistance && !hasCoords) {
+              return null;
+            }
+            return (
+              <View style={styles.distanceRow}>
+                <Text style={[styles.infoLine, styles.distanceText]} numberOfLines={2}>
+                  <Text style={styles.infoLabelInline}>Khoảng cách: </Text>
+                  <Text style={styles.infoValueInline}>
+                    {hasDistance ? `Cách bạn ${formatDistance(distanceMeters)}` : 'Đang xác định...'}
+                  </Text>
+                </Text>
+                {hasCoords ? (
+                  <Pressable
+                    onPress={handleNavigateDirections}
+                    style={({ pressed }) => [styles.directionsChip, pressed && styles.pressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Chỉ đường"
+                  >
+                    <Ionicons name="navigate" size={13} color="#076F32" />
+                    <Text style={styles.directionsChipText}>Chỉ đường</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            );
+          })()}
           <InfoRow label="Giờ đóng - mở cửa" value={hoursText} />
           <InfoRow
             label="Trạng thái"
@@ -743,12 +817,6 @@ export default function StoreDetailScreen({
                             <Text style={styles.promoBadgeText}>-{product.discountPercent}%</Text>
                           </View>
                         ) : null}
-                        {Number(product.pinProduct) > 0 ? (
-                          <View style={styles.pinBadge}>
-                            <Ionicons name="pin" size={11} color="#ffffff" />
-                            <Text style={styles.pinBadgeText}>{Number(product.pinProduct)}</Text>
-                          </View>
-                        ) : null}
                       </View>
                       <Pressable
                         onPress={() => toggleLikeProduct(product.id)}
@@ -787,7 +855,19 @@ export default function StoreDetailScreen({
                           )}
                         </Text>
                       )}
-                      <Text style={styles.productSold}>Đã bán: {product.soldCount || 0}</Text>
+                      <View style={styles.productSoldRow}>
+                        <Text style={styles.productSold} numberOfLines={1}>
+                          Đã bán: {product.soldCount || 0}
+                        </Text>
+                        {Number(product.pinProduct) > 0 ? (
+                          <Ionicons
+                            name="pin"
+                            size={13}
+                            color="#076F32"
+                            style={styles.productPinIcon}
+                          />
+                        ) : null}
+                      </View>
                     </View>
                   </Pressable>
                 );
@@ -1067,9 +1147,16 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 4,
   },
+  distanceText: {
+    flex: 1,
+    minWidth: 0,
+  },
   directionsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: '#E6F4EC',
     borderWidth: 1,
@@ -1231,28 +1318,22 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
-  pinBadge: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    zIndex: 3,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: '#076F32',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  pinBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '800',
-  },
   productSold: {
     fontSize: 11,
     color: '#94a3b8',
     fontWeight: '600',
+    flex: 1,
+    flexShrink: 1,
+  },
+  productSoldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    marginTop: 2,
+  },
+  productPinIcon: {
+    marginLeft: 'auto',
   },
   reviewsList: {
     paddingHorizontal: 16,

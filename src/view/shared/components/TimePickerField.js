@@ -23,7 +23,8 @@ export default function TimePickerField({
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draftDate, setDraftDate] = useState(() => parseTimeString(value, placeholder));
-  const displayValue = String(value || '').trim() || placeholder;
+  const hasValue = Boolean(String(value || '').trim());
+  const displayValue = hasValue ? String(value).trim() : placeholder;
   const pickerDate = useMemo(
     () => parseTimeString(value, placeholder),
     [placeholder, value]
@@ -45,16 +46,21 @@ export default function TimePickerField({
   }
 
   function confirmPicker() {
-    onChange(formatTimeString(draftDate));
+    onChange?.(formatTimeString(draftDate));
     closePicker();
   }
 
   function handleAndroidChange(event, selectedDate) {
-    closePicker();
-    if (event.type === 'dismissed' || !selectedDate) {
+    // Android: chỉ cập nhật khi user bấm OK (không phải dismiss).
+    if (event?.type === 'dismissed') {
+      setShowPicker(false);
       return;
     }
-    onChange(formatTimeString(selectedDate));
+
+    setShowPicker(false);
+    if (selectedDate) {
+      onChange?.(formatTimeString(selectedDate));
+    }
   }
 
   function handleIosChange(_event, selectedDate) {
@@ -89,7 +95,15 @@ export default function TimePickerField({
           pressed && styles.timeButtonPressed,
         ]}
       >
-        <Text style={[styles.timeValue, compact && styles.timeValueCompact]}>{displayValue}</Text>
+        <Text
+          style={[
+            styles.timeValue,
+            compact && styles.timeValueCompact,
+            !hasValue && styles.timeValuePlaceholder,
+          ]}
+        >
+          {displayValue}
+        </Text>
         <View style={[styles.timeButtonIconWrap, compact && styles.timeButtonIconWrapCompact]}>
           <Ionicons name="time-outline" size={20} color="#076F32" />
         </View>
@@ -100,7 +114,7 @@ export default function TimePickerField({
           value={pickerDate}
           mode="time"
           is24Hour
-          display="clock"
+          display="default"
           onChange={handleAndroidChange}
         />
       ) : null}
@@ -180,6 +194,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  timeValuePlaceholder: {
+    color: '#94a3b8',
+    fontWeight: '700',
   },
   timeButtonIconWrap: {
     width: 36,

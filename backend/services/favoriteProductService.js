@@ -8,6 +8,7 @@ const User = require("../models/User");
 const { PRODUCT_STATUS } = require("../constants");
 const { createNotification } = require("./notificationService");
 const { NOTIFICATION_AUDIENCE } = require("../constants");
+const { attachPromotionDto } = require("./productPromotionService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -112,7 +113,7 @@ function toClientFavorite({
       ? Math.round(Number(distanceMeters))
       : null;
 
-  return {
+  const base = {
     id: String(favorite._id),
     productId: String(product?._id || favorite.productId),
     storeId: String(product?.ShopId || shop?._id || ""),
@@ -149,6 +150,8 @@ function toClientFavorite({
       quantity: Math.max(0, Number(variant.Quantity ?? variant.quantity) || 0),
     })),
   };
+
+  return attachPromotionDto(base, product || {});
 }
 
 async function buildFavoriteMaps(rows) {

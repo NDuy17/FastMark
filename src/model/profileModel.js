@@ -167,6 +167,10 @@ export function mergeProfile(authUser, baseProfile, updates = {}) {
       patch.closeTime !== undefined
         ? cleanText(patch.closeTime)
         : baseProfile?.closeTime || '',
+    pinHours:
+      patch.pinHours !== undefined
+        ? Boolean(patch.pinHours)
+        : Boolean(baseProfile?.pinHours),
     isOpen:
       patch.isOpen !== undefined
         ? Number(patch.isOpen) === 1 ? 1 : 0

@@ -14,6 +14,9 @@ import {
 } from '../../viewmodel/auth/authSlice';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
+import { getMyNotificationsOnBackend } from '../../api/notificationApi';
+import { notificationMatchesAudience } from '../../core/utils/notificationRealtime';
+import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import SellerPhoneSetupScreen from './SellerPhoneSetupScreen';
 import SellerRegistrationScreen from './SellerRegistrationScreen';
 import SellerVerificationStatusScreen from './SellerVerificationStatusScreen';
@@ -62,6 +65,7 @@ export default function ShopTabPanel({
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
   const [topUpResult, setTopUpResult] = useState(null);
   const [topUpReturnNav, setTopUpReturnNav] = useState('subscription');
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const handledRegisterRequestRef = useRef(0);
 
   const loadShopSettings = useCallback(async () => {
@@ -83,9 +87,52 @@ export default function ShopTabPanel({
     }
   }, [dispatch, isSeller, isVisible]);
 
+  const loadUnreadSellerNotifications = useCallback(async () => {
+    if (!isSeller) {
+      setUnreadNotificationsCount(0);
+      return;
+    }
+
+    try {
+      const notifications = await getMyNotificationsOnBackend('seller');
+      setUnreadNotificationsCount(
+        (notifications || []).filter((item) => !item.isRead).length
+      );
+    } catch {
+      // Keep previous badge on transient failures.
+    }
+  }, [isSeller]);
+
+  const handleRealtimeSellerNotification = useCallback(
+    (notification) => {
+      if (!notificationMatchesAudience(notification, 'seller')) {
+        return;
+      }
+      if (!notification.isRead) {
+        setUnreadNotificationsCount((current) => current + 1);
+      }
+    },
+    []
+  );
+
+  useNotificationSocket({
+    enabled: Boolean(isVisible && isSeller),
+    onNotificationNew: handleRealtimeSellerNotification,
+  });
+
   useEffect(() => {
     loadShopSettings();
   }, [loadShopSettings, shopContactRefreshKey]);
+
+  useEffect(() => {
+    if (!isVisible || !isSeller) {
+      return;
+    }
+
+    loadUnreadSellerNotifications();
+    const timer = setInterval(loadUnreadSellerNotifications, 30000);
+    return () => clearInterval(timer);
+  }, [isVisible, isSeller, loadUnreadSellerNotifications, shopNav]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -337,7 +384,10 @@ export default function ShopTabPanel({
     return (
       <NotificationsScreen
         audience="seller"
-        onBack={() => setShopNav(null)}
+        onBack={() => {
+          setShopNav(null);
+          loadUnreadSellerNotifications();
+        }}
         isScreenActive
       />
     );
@@ -493,6 +543,7 @@ export default function ShopTabPanel({
   return (
     <ShopTabHomeScreen
       shopSettings={shopSettings}
+      unreadNotificationsCount={unreadNotificationsCount}
       onStartRegister={startSellerRegistration}
       onOpenHub={handleOpenHub}
       onOpenWallet={() => setShopNav('wallet')}

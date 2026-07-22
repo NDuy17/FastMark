@@ -289,7 +289,8 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
           { paddingBottom: insets.nestedScrollPaddingBottom + 72 },
         ]}
         keyboardShouldPersistTaps="handled"
-      >        <View style={styles.balanceCard}>
+      >
+        <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Số dư hiện tại</Text>
           <Text style={styles.balanceValue}>{formatPrice(balance)}</Text>
         </View>
@@ -343,7 +344,8 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
           styles.footer,
           { paddingBottom: Math.max(insets.bottomSpacing, 12) },
         ]}
-      >        <Pressable
+      >
+        <Pressable
           style={[styles.confirmBtn, submitting && styles.confirmBtnDisabled]}
           onPress={handleConfirm}
           disabled={submitting}
@@ -351,12 +353,12 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
           {submitting ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <>
+            <View style={styles.confirmRow}>
               <Text style={styles.confirmText}>
-                Xác nhận nạp {formatPrice(selectedAmount || 0)}
+                {`Xác nhận nạp ${formatPrice(selectedAmount || 0)}`}
               </Text>
               <Ionicons name="arrow-forward" size={18} color="#fff" />
-            </>
+            </View>
           )}
         </Pressable>
       </View>
@@ -475,6 +477,12 @@ const styles = StyleSheet.create({
     minHeight: 56,
     borderRadius: 999,
     backgroundColor: t.primaryDark,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  confirmRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

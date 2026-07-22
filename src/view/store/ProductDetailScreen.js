@@ -13,10 +13,16 @@ import {
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useSelector } from 'react-redux';
 
 import { formatPrice, formatPriceRange, getProductPromoPriceLabels, getPromotionalUnitPrice } from '../../core/utils/productFormat';
-import { formatDistance } from '../../core/utils/geo';
+import {
+  calculateDistanceMeters,
+  formatDistance,
+  hasValidLocation,
+  normalizeExpoLocation,
+} from '../../core/utils/geo';
 import { getPhoneGateStep } from '../../core/utils/phoneVerification';
 import { callStore } from '../../core/utils/storeContact';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
@@ -25,6 +31,7 @@ import {
   getFavoriteProductIdsOnBackend,
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
+import { fetchRouteDistanceMeters } from '../../api/routingApi';
 import { loadProductById, loadStoreById } from '../../viewmodel/store/storeViewModel';
 import { submitReportOnBackend } from '../../api/reportApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
@@ -72,6 +79,8 @@ export default function ProductDetailScreen({
   const [phoneGateVisible, setPhoneGateVisible] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [originLocation, setOriginLocation] = useState(null);
+  const [routeDistanceMeters, setRouteDistanceMeters] = useState(null);
 
   useEffect(() => {
     if (!resumeReserveRequest?.at || !product || loading) {
@@ -146,6 +155,89 @@ export default function ProductDetailScreen({
       active = false;
     };
   }, [productId]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadOriginLocation() {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!active || permission.status !== 'granted') {
+          return;
+        }
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!active) {
+          return;
+        }
+        setOriginLocation(normalizeExpoLocation(current));
+      } catch {
+        // Distance is optional when location is unavailable.
+      }
+    }
+
+    loadOriginLocation();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const straightLineDistanceMeters = useMemo(() => {
+    if (!store || !hasValidLocation(originLocation)) {
+      return null;
+    }
+    return calculateDistanceMeters(originLocation, {
+      latitude: store.latitude,
+      longitude: store.longitude,
+    });
+  }, [store, originLocation?.latitude, originLocation?.longitude]);
+
+  useEffect(() => {
+    if (!store || !hasValidLocation(originLocation) || !hasValidLocation(store)) {
+      setRouteDistanceMeters(null);
+      return undefined;
+    }
+
+    let active = true;
+    const timer = setTimeout(() => {
+      fetchRouteDistanceMeters(originLocation, {
+        latitude: store.latitude,
+        longitude: store.longitude,
+      })
+        .then((distance) => {
+          if (active) {
+            setRouteDistanceMeters(distance);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setRouteDistanceMeters(null);
+          }
+        });
+    }, 200);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    store?.id,
+    store?.latitude,
+    store?.longitude,
+    originLocation?.latitude,
+    originLocation?.longitude,
+  ]);
+
+  const distanceMeters = Number.isFinite(routeDistanceMeters)
+    ? routeDistanceMeters
+    : Number.isFinite(straightLineDistanceMeters)
+      ? straightLineDistanceMeters
+      : Number.isFinite(Number(product?.distanceMeters))
+        ? Number(product.distanceMeters)
+        : Number.isFinite(Number(store?.distance_meters))
+          ? Number(store.distance_meters)
+          : null;
 
   const variants = product?.variants || [];
 
@@ -420,8 +512,8 @@ export default function ProductDetailScreen({
   const productUnavailable = Boolean(product.isUnavailable) || Number(product.status) === 0;
   const ratingValue = Number(store?.rating_avg) || 0;
   const reviewCount = Number(store?.review_count) || 0;
-  const distanceLabel = formatDistance(product.distanceMeters);
-  const hasDistance = distanceLabel && distanceLabel !== '--';
+  const distanceLabel = formatDistance(distanceMeters);
+  const hasDistance = Number.isFinite(Number(distanceMeters));
   const storeIsOpen = store ? store.is_open !== false : true;
   const descriptionText = product.description || 'Chưa có mô tả cho sản phẩm này.';
   const galleryCount = Math.max(galleryImages.length, 1);

@@ -18,7 +18,7 @@ import {
   listMyPromotionProductsOnBackend,
 } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
-import { formatPrice } from '../../core/utils/productFormat';
+import { formatPrice, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import DatePickerField from '../shared/components/DatePickerField';
@@ -46,7 +46,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
   const [activePromos, setActivePromos] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [search, setSearch] = useState('');
-  const [discountPercent, setDiscountPercent] = useState('20');
+  const [discountPercent, setDiscountPercent] = useState('');
   const [startDate, setStartDate] = useState(todayInput());
   const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -91,11 +91,28 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
     loadData();
   }, [loadData]);
 
+  const selectableProducts = useMemo(
+    () => products.filter((item) => !item.isPromotion),
+    [products]
+  );
+
   const filteredProducts = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    if (!keyword) return products;
-    return products.filter((item) => String(item.name || '').toLowerCase().includes(keyword));
-  }, [products, search]);
+    if (!keyword) return selectableProducts;
+    return selectableProducts.filter((item) =>
+      String(item.name || '').toLowerCase().includes(keyword)
+    );
+  }, [selectableProducts, search]);
+
+  useEffect(() => {
+    // Bỏ chọn các SP đã có giảm giá (không còn trong list chọn).
+    setSelectedIds((current) => {
+      if (!current.size) return current;
+      const selectableIds = new Set(selectableProducts.map((item) => item.id));
+      const next = new Set([...current].filter((id) => selectableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableProducts]);
 
   function toggleSelect(id) {
     setSelectedIds((current) => {
@@ -199,37 +216,46 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
               </Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <View style={styles.productRow}>
-              {item.thumbnail ? (
-                <Image source={{ uri: item.thumbnail }} style={styles.thumb} />
-              ) : (
-                <View style={[styles.thumb, styles.thumbPlaceholder]}>
-                  <Text>🛒</Text>
-                </View>
-              )}
-              <View style={styles.productInfo}>
-                <Text style={styles.productName} numberOfLines={2}>
-                  {item.productName || item.name}
-                </Text>
-                <Text style={styles.promoMeta}>
-                  −{item.discountPercent || 0}% ·{' '}
-                  {formatPrice(
-                    Number(item.minPrice) > 0 && Number(item.discountPercent) > 0
-                      ? Math.round(
-                          Number(item.minPrice) * (1 - Number(item.discountPercent) / 100)
-                        )
-                      : item.promotionPrice ?? item.price ?? item.minPrice
-                  )}
-                </Text>
-                {item.promotionEndDate ? (
-                  <Text style={styles.dateMeta}>
-                    Đến {toDateInput(item.promotionEndDate)}
+          renderItem={({ item }) => {
+            const discountPercent = Number(item.discountPercent) || 0;
+            const { originalLabel, saleLabel } = getProductPromoPriceLabels({
+              minPrice: item.originalPrice ?? item.minPrice,
+              maxPrice: item.originalMaxPrice ?? item.maxPrice,
+              discountPercent,
+              promotionMinPrice: item.promotionMinPrice ?? item.promotionPrice,
+              promotionMaxPrice: item.promotionMaxPrice,
+              isPromotion: true,
+            });
+
+            return (
+              <View style={styles.productRow}>
+                {item.thumbnail ? (
+                  <Image source={{ uri: item.thumbnail }} style={styles.thumb} />
+                ) : (
+                  <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                    <Text>🛒</Text>
+                  </View>
+                )}
+                <View style={styles.productInfo}>
+                  <Text style={styles.productName} numberOfLines={2}>
+                    {item.productName || item.name}
                   </Text>
-                ) : null}
+                  <View style={styles.promoPriceRow}>
+                    <Text style={styles.originalPrice}>{originalLabel}</Text>
+                    {discountPercent > 0 ? (
+                      <Text style={styles.discountBadge}>−{discountPercent}%</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.salePrice}>{saleLabel}</Text>
+                  {item.promotionEndDate ? (
+                    <Text style={styles.dateMeta}>
+                      Đến {toDateInput(item.promotionEndDate)}
+                    </Text>
+                  ) : null}
+                </View>
               </View>
-            </View>
-          )}
+            );
+          }}
         />
       ) : (
         <>
@@ -251,7 +277,8 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
                     cleaned === '' ? '' : String(Math.min(99, Number(cleaned) || 0))
                   );
                 }}
-                placeholder="20"
+                placeholder="VD: 20"
+                placeholderTextColor="#94a3b8"
                 maxLength={2}
               />
               <DatePickerField
@@ -322,13 +349,19 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
                       {item.name}
                     </Text>
                     <Text style={styles.priceMeta}>{formatPrice(item.minPrice)}</Text>
-                    {item.isPromotion ? (
-                      <Text style={styles.alreadyPromo}>Đang −{item.discountPercent}%</Text>
-                    ) : null}
                   </View>
                 </Pressable>
               );
             })}
+
+            {filteredProducts.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>Không còn sản phẩm để chọn</Text>
+                <Text style={styles.emptyBody}>
+                  Sản phẩm đang giảm giá nằm ở tab “Đang giảm giá”.
+                </Text>
+              </View>
+            ) : null}
 
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
             {success ? <Text style={styles.successText}>{success}</Text> : null}
@@ -453,9 +486,31 @@ const styles = StyleSheet.create({
   productInfo: { flex: 1, minWidth: 0 },
   productName: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
   priceMeta: { marginTop: 2, fontSize: 13, fontWeight: '700', color: '#076F32' },
-  promoMeta: { marginTop: 2, fontSize: 13, fontWeight: '800', color: '#b45309' },
+  promoPriceRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  originalPrice: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+  },
+  discountBadge: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#b45309',
+  },
+  salePrice: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#076F32',
+  },
   dateMeta: { marginTop: 2, fontSize: 11, color: '#64748b' },
-  alreadyPromo: { marginTop: 2, fontSize: 11, fontWeight: '700', color: '#b45309' },
   emptyCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,

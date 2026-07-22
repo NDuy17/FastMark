@@ -720,7 +720,9 @@ async function softDeleteProduct(user, productId) {
 
 /**
  * Ghim sản phẩm trên shop: 0 bỏ ghim, 1/2 vị trí ghim.
- * Mỗi vị trí chỉ 1 SP — gán đè sẽ bỏ ghim SP cũ cùng vị trí.
+ * - Ghim vị trí 1 khi chưa có vị trí 2: đẩy SP đang ở 1 xuống 2.
+ * - Ghim vị trí 1 khi đã đủ 2 slot: thay SP đang ở 1 (đá ra).
+ * - Ghim vị trí 2: thay SP đang ở 2 (đá ra).
  */
 async function setProductPin(user, productId, pinValue) {
   const shop = await getSellerShop(user);
@@ -741,21 +743,46 @@ async function setProductPin(user, productId, pinValue) {
   }
 
   const now = new Date();
+  const shopFilter = { ShopId: shop._id, _id: { $ne: product._id } };
 
   if (pinProduct === 0) {
     product.pinProduct = 0;
     product.UpdatedAt = now;
     await product.save();
-  } else {
+  } else if (pinProduct === 2) {
     await Product.updateMany(
-      {
-        ShopId: shop._id,
-        pinProduct,
-        _id: { $ne: product._id },
-      },
+      { ...shopFilter, pinProduct: 2 },
       { $set: { pinProduct: 0, UpdatedAt: now } }
     );
-    product.pinProduct = pinProduct;
+    product.pinProduct = 2;
+    product.UpdatedAt = now;
+    await product.save();
+  } else {
+    const atPin1 = await Product.findOne({ ...shopFilter, pinProduct: 1 });
+    const atPin2 = await Product.findOne({ ...shopFilter, pinProduct: 2 });
+
+    // Giải phóng slot của SP hiện tại trước để tránh trùng unique index.
+    if (Number(product.pinProduct) > 0) {
+      product.pinProduct = 0;
+      product.UpdatedAt = now;
+      await product.save();
+    }
+
+    if (atPin1) {
+      if (atPin2) {
+        // Đủ 2 ghim → chèn đè vị trí 1, đá SP cũ ở 1 ra.
+        atPin1.pinProduct = 0;
+        atPin1.UpdatedAt = now;
+        await atPin1.save();
+      } else {
+        // Chỉ có vị trí 1 → đẩy xuống 2.
+        atPin1.pinProduct = 2;
+        atPin1.UpdatedAt = now;
+        await atPin1.save();
+      }
+    }
+
+    product.pinProduct = 1;
     product.UpdatedAt = now;
     await product.save();
   }

@@ -1,24 +1,16 @@
 import { Switch, Text, TextInput, View, StyleSheet } from 'react-native';
 
-import { formatPrice } from '../../core/utils/productFormat';
+import { getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import DatePickerField from '../shared/components/DatePickerField';
-
-function computeSalePrice(basePrice, discountPercent) {
-  const base = Number(basePrice) || 0;
-  const percent = Math.max(0, Math.min(100, Number(discountPercent) || 0));
-  if (base <= 0 || percent <= 0) {
-    return null;
-  }
-  return Math.max(0, Math.round(base * (1 - percent / 100)));
-}
 
 /**
  * Section khuyến mãi sản phẩm — nhập % giảm giá.
- * Preview sale = minPrice * (1 - %/100); không gửi originalPrice/promotionPrice.
+ * Preview: giá gốc min-max (gạch) + %; dòng dưới giá sau giảm min-max.
  */
 export default function ProductPromotionSection({
   enabled,
   basePrice,
+  baseMaxPrice,
   discountPercent,
   startDate,
   endDate,
@@ -26,7 +18,15 @@ export default function ProductPromotionSection({
   disabled = false,
 }) {
   const percent = Number(discountPercent) || 0;
-  const salePrice = computeSalePrice(basePrice, percent);
+  const originalMin = Number(basePrice) || 0;
+  const originalMax = Number(baseMaxPrice) > 0 ? Number(baseMaxPrice) : originalMin;
+  const { originalLabel, saleLabel } = getProductPromoPriceLabels({
+    minPrice: originalMin,
+    maxPrice: originalMax,
+    discountPercent: percent,
+    isPromotion: true,
+  });
+  const canPreview = percent >= 1 && percent <= 99 && originalMin > 0;
 
   function patch(partial) {
     onChange?.({
@@ -64,18 +64,23 @@ export default function ProductPromotionSection({
               const capped = cleaned === '' ? '' : String(Math.min(99, Number(cleaned) || 0));
               patch({ discountPercent: capped });
             }}
-            placeholder="20"
+            placeholder="VD: 20"
+            placeholderTextColor="#94a3b8"
             editable={!disabled}
             maxLength={2}
           />
 
-          {percent >= 1 && percent <= 99 && salePrice != null ? (
-            <Text style={styles.discountPreview}>
-              Giảm {percent}% · {formatPrice(basePrice)} → {formatPrice(salePrice)}
-            </Text>
+          {canPreview ? (
+            <View style={styles.previewBox}>
+              <View style={styles.previewRow}>
+                <Text style={styles.originalPrice}>{originalLabel}</Text>
+                <Text style={styles.discountBadge}>−{percent}%</Text>
+              </View>
+              <Text style={styles.salePrice}>{saleLabel}</Text>
+            </View>
           ) : (
             <Text style={styles.warn}>
-              {Number(basePrice) > 0
+              {originalMin > 0
                 ? 'Nhập mức giảm từ 1% đến 99%.'
                 : 'Thêm biến thể có giá để xem giá sau giảm.'}
             </Text>
@@ -168,10 +173,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
-  discountPreview: {
+  previewBox: {
     marginTop: 8,
-    color: '#076F32',
+    gap: 4,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  originalPrice: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+  },
+  discountBadge: {
+    fontSize: 12,
     fontWeight: '800',
+    color: '#b45309',
+  },
+  salePrice: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#076F32',
   },
   warn: {
     marginTop: 8,

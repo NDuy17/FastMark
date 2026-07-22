@@ -42,7 +42,6 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   const [closeTime, setCloseTime] = useState('');
   const [isOpen, setIsOpen] = useState(true);
   const [depositPercent, setDepositPercent] = useState(0);
-  const [pinHours, setPinHours] = useState(false);
   const [qrPayload, setQrPayload] = useState('');
   const [qrCodeValue, setQrCodeValue] = useState('');
   const [shopId, setShopId] = useState('');
@@ -60,7 +59,6 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
       setCloseTime(shop.closeTime || '21:00');
       setIsOpen(Number(shop.isOpen) === 1);
       setDepositPercent(Math.max(0, Math.min(100, Number(shop.depositPercent) || 0)));
-      setPinHours(Boolean(shop.pinHours));
       const nextShopId = String(shop.shopId || shop.id || '');
       setShopId(nextShopId);
       setQrCodeValue(String(shop.qrCodeValue || nextShopId));
@@ -124,6 +122,14 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
       return;
     }
 
+    const nextOpenTime = String(openTime || '').trim() || '08:00';
+    const nextCloseTime = String(closeTime || '').trim() || '21:00';
+    const timePattern = /^\d{1,2}:\d{2}$/;
+    if (!timePattern.test(nextOpenTime) || !timePattern.test(nextCloseTime)) {
+      Alert.alert('Lỗi', 'Giờ mở/đóng cửa phải theo định dạng HH:mm.');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const idToken = await getCurrentUserIdToken();
@@ -135,19 +141,28 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
           addressHeThong: systemAddress.trim(),
           latitude,
           longitude,
-          openTime: String(openTime || '').trim() || '08:00',
-          closeTime: String(closeTime || '').trim() || '21:00',
+          openTime: nextOpenTime,
+          closeTime: nextCloseTime,
           isOpen: isOpen ? 1 : 0,
           depositPercent: Math.max(0, Math.min(100, Number(depositPercent) || 0)),
-          pinHours,
         },
       });
-      setOpenTime(updated.openTime || '08:00');
-      setCloseTime(updated.closeTime || '21:00');
-      setPinHours(Boolean(updated.pinHours));
-      dispatch(applyShopSettingsToProfile(updated));
+
+      if (updated) {
+        setSystemAddress(updated.systemAddress || updated.addressHeThong || systemAddress);
+        setDescription(updated.description || '');
+        setOpenTime(updated.openTime || nextOpenTime);
+        setCloseTime(updated.closeTime || nextCloseTime);
+        setIsOpen(Number(updated.isOpen) === 1);
+        setDepositPercent(Math.max(0, Math.min(100, Number(updated.depositPercent) || 0)));
+        dispatch(applyShopSettingsToProfile(updated));
+        onSaved?.(updated);
+      } else {
+        await loadSettings();
+        onSaved?.();
+      }
+
       await dispatch(syncSellerAccess());
-      onSaved?.(updated);
       Alert.alert('Thành công', 'Đã lưu cài đặt gian hàng.');
     } catch (saveError) {
       Alert.alert('Lỗi', saveError.message || 'Không lưu được cài đặt.');
@@ -273,20 +288,6 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
             onValueChange={setIsOpen}
             trackColor={{ false: '#cbd5e1', true: '#7dd3c7' }}
             thumbColor={isOpen ? '#076F32' : '#f8fafc'}
-          />
-        </View>
-        <View style={styles.switchRow}>
-          <View style={styles.switchInfo}>
-            <Text style={styles.switchLabel}>Ghim giờ mở/đóng cửa</Text>
-            <Text style={styles.switchHint}>
-              Hiện khung giờ trên trang shop công khai (khi có gói active)
-            </Text>
-          </View>
-          <Switch
-            value={pinHours}
-            onValueChange={setPinHours}
-            trackColor={{ false: '#cbd5e1', true: '#7dd3c7' }}
-            thumbColor={pinHours ? '#076F32' : '#f8fafc'}
           />
         </View>
       </View>

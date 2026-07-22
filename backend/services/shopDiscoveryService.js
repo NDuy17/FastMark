@@ -15,6 +15,7 @@ const {
   isSubscriptionActive,
   activeSubscriptionFilter,
 } = require("../constants");
+const { removeVietnameseDiacritics } = require("../utils/sanitizeFileName");
 
 const EARTH_RADIUS_METERS = 6371000;
 const MAX_SEARCH_RADIUS_METERS = 30000;
@@ -111,11 +112,21 @@ function activeProductFilter(extra = {}) {
 }
 
 function normalizeSearchText(value) {
-  return String(value || "").trim().toLowerCase();
+  return removeVietnameseDiacritics(String(value || ""))
+    .trim()
+    .toLowerCase();
 }
 
-function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function textMatchesKeyword(haystackValue, keyword) {
+  const haystack = normalizeSearchText(haystackValue);
+  const needle = normalizeSearchText(keyword);
+  if (!needle) {
+    return true;
+  }
+  if (!haystack) {
+    return false;
+  }
+  return haystack.includes(needle);
 }
 
 function shopMatchesKeyword(shop, seller, keyword) {
@@ -138,8 +149,12 @@ function shopMatchesKeyword(shop, seller, keyword) {
   return haystack.some((text) => text.includes(keyword));
 }
 
-/** Match shop by display name or @username only. */
-function shopMatchesNameOrUsername(shop, keyword) {
+/**
+ * Match người dùng/gian hàng theo:
+ * - tên (FullName / shopName) — bỏ dấu + lowercase
+ * - username (UserName / shopUsername), có hoặc không có @
+ */
+function shopMatchesNameOrUsername(shop, seller, keyword) {
   if (!keyword) {
     return true;
   }
@@ -149,7 +164,12 @@ function shopMatchesNameOrUsername(shop, keyword) {
     return true;
   }
 
-  const haystack = [shop.shopName, shop.shopUsername]
+  const haystack = [
+    seller?.FullName,
+    seller?.UserName,
+    shop.shopName,
+    shop.shopUsername,
+  ]
     .map(normalizeSearchText)
     .filter(Boolean);
 
@@ -168,12 +188,6 @@ async function findProductMatchesByShopId(keyword, categoryId = "") {
   if (normalizedCategoryId) {
     productFilter.CategoryId = normalizedCategoryId;
   }
-  if (productKeyword) {
-    productFilter.ProductName = {
-      $regex: escapeRegex(productKeyword),
-      $options: "i",
-    };
-  }
 
   const matchingProducts = await Product.find(productFilter)
     .select("ShopId ProductName CategoryId")
@@ -181,6 +195,9 @@ async function findProductMatchesByShopId(keyword, categoryId = "") {
 
   const productMatchesByShopId = new Map();
   for (const product of matchingProducts) {
+    if (productKeyword && !textMatchesKeyword(product.ProductName, productKeyword)) {
+      continue;
+    }
     const shopId = String(product.ShopId);
     if (!productMatchesByShopId.has(shopId)) {
       productMatchesByShopId.set(shopId, []);
@@ -275,7 +292,8 @@ function toPublicStore(
   const closeTime = pickShopText(shop, "closeTime", "close_time");
   const shopUsername = ownerUsername || pickShopText(shop, "shopUsername", "shop_username");
   const pinHours = Boolean(shop.pinHours);
-  const showHours = pinHours;
+  // Hiện giờ công khai khi shop đã có giờ mở/đóng cửa.
+  const showHours = Boolean(openTime && closeTime);
   const ownerFollowers =
     Number(user?.FollowersCount) || Number(followCount) || Number(shop.followersCount) || 0;
   const depositPercent = Math.max(
@@ -499,7 +517,7 @@ async function searchShops({
     }
 
     if (identityOnly) {
-      if (shopKeyword && !shopMatchesNameOrUsername(shop, shopKeyword)) {
+      if (shopKeyword && !shopMatchesNameOrUsername(shop, seller, shopKeyword)) {
         continue;
       }
       results.push({
@@ -777,22 +795,18 @@ async function discoverProducts({
   if (normalizedCategoryId) {
     productFilter.CategoryId = normalizedCategoryId;
   }
-  if (keyword) {
-    productFilter.ProductName = {
-      $regex: escapeRegex(keyword),
-      $options: "i",
-    };
-  }
 
-  // When searching (or unlimited radius), load matches then sort by distance.
-  // Nearby browse keeps an early limit for speed.
+  // Khi có keyword: lấy SP rồi lọc bỏ dấu + lowercase ở bộ nhớ (regex DB không match tiếng Việt bỏ dấu).
   let productsQuery = Product.find(productFilter);
   if (keyword || radius == null) {
     productsQuery = productsQuery.lean();
   } else {
     productsQuery = productsQuery.sort({ CreatedAt: -1 }).limit(maxResults).lean();
   }
-  const products = await productsQuery;
+  let products = await productsQuery;
+  if (keyword) {
+    products = products.filter((product) => textMatchesKeyword(product.ProductName, keyword));
+  }
 
   if (products.length === 0) {
     return [];

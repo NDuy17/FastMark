@@ -800,7 +800,7 @@ export default function MapScreen({
     log.info('search:select', { label: result.label });
   }
 
-  const RADIUS_SLIDER_MAX = 30000;
+  const RADIUS_SLIDER_MAX = 10000;
   const RADIUS_SLIDER_STEP = 500;
 
   function formatRadiusLabel(meters) {
@@ -992,8 +992,8 @@ export default function MapScreen({
               />
               <View style={styles.radiusScaleRow}>
                 <Text style={styles.radiusScaleText}>0 km</Text>
-                <Text style={styles.radiusScaleText}>15 km</Text>
-                <Text style={styles.radiusScaleText}>30 km</Text>
+                <Text style={styles.radiusScaleText}>5 km</Text>
+                <Text style={styles.radiusScaleText}>10 km</Text>
               </View>
               <View style={styles.radiusStepRow}>
                 <Pressable

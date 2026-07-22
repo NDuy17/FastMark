@@ -1,9 +1,9 @@
 export function parseTimeString(value, fallback = '08:00') {
   const source = String(value || fallback).trim();
-  const match = source.match(/^(\d{1,2}):(\d{2})$/);
+  const match = source.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
 
   if (!match) {
-    const fallbackMatch = String(fallback).match(/^(\d{1,2}):(\d{2})$/);
+    const fallbackMatch = String(fallback).match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
     return new Date(
       2000,
       0,

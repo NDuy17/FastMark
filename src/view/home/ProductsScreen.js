@@ -61,6 +61,7 @@ export default function ProductsScreen({
   onOpenBuyerOrders,
   onOpenWalletTopUp,
   onOpenChat,
+  onNavigateDirections,
   focusRequest = null,
   onBack = null,
 }) {
@@ -436,12 +437,14 @@ export default function ProductsScreen({
     return (
       <StoreDetailScreen
         storeId={selectedStoreId}
+        originLocation={currentLocation}
         onBack={() => setSelectedStoreId(null)}
         onProductPress={(productId) => {
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
         onOpenChat={handleOpenChatLocal}
+        onNavigateDirections={onNavigateDirections}
       />
     );
   }
