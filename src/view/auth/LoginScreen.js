@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Image,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -20,12 +16,14 @@ import {
 import { clearAuthFeedback, loginUser } from '../../viewmodel/auth/authSlice';
 import { validateLoginForm } from '../../viewmodel/auth/authFormValidation';
 import { getGoogleAuthSetupError } from '../../viewmodel/auth/googleAuthConfig';
+import { showErrorAlert, showAdminAccountAlert, isAdminAccountMessage, resolveAuthAlertMessage } from '../../core/utils/appAlert';
+import AuthFormScreen from './components/AuthFormScreen';
 import AuthDivider from './components/AuthDivider';
 import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
 import GoogleSignInButton from './GoogleSignInButton';
 
-export default function LoginScreen({ onGoRegister, onGoForgot }) {
+export default function LoginScreen({ onGoForgot, onGoBack }) {
   const dispatch = useDispatch();
   const actionStatus = useSelector(selectAuthActionStatus);
   const configError = useSelector(selectAuthConfigError);
@@ -35,16 +33,30 @@ export default function LoginScreen({ onGoRegister, onGoForgot }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [fieldErrors, setFieldErrors] = useState({ login: '', password: '' });
-  const [localError, setLocalError] = useState('');
 
   const isLoading = actionStatus === 'loading';
   const isDisabled = isLoading || Boolean(configError);
   const googleSetupError = getGoogleAuthSetupError();
-  const displayError = configError || localError || (!fieldErrors.login && !fieldErrors.password ? error : '');
 
   useEffect(() => {
     dispatch(clearAuthFeedback());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (configError) {
+      showErrorAlert(configError);
+    }
+  }, [configError]);
+
+  useEffect(() => {
+    if (error && !fieldErrors.login && !fieldErrors.password) {
+      if (isAdminAccountMessage(error)) {
+        showAdminAccountAlert();
+        return;
+      }
+      showErrorAlert(error);
+    }
+  }, [error, fieldErrors.login, fieldErrors.password]);
 
   function clearFieldError(field) {
     setFieldErrors((current) => ({ ...current, [field]: '' }));
@@ -57,12 +69,10 @@ export default function LoginScreen({ onGoRegister, onGoForgot }) {
         login: validationError.field === 'login' ? validationError.message : '',
         password: validationError.field === 'password' ? validationError.message : '',
       });
-      setLocalError('');
       return;
     }
 
     setFieldErrors({ login: '', password: '' });
-    setLocalError('');
     dispatch(clearAuthFeedback());
 
     try {
@@ -84,114 +94,92 @@ export default function LoginScreen({ onGoRegister, onGoForgot }) {
         setFieldErrors({ login: message, password: '' });
       } else if (/mật khẩu|google/i.test(message)) {
         setFieldErrors({ login: '', password: message });
+      } else if (/admin/i.test(message)) {
+        showAdminAccountAlert();
       } else {
-        setLocalError(message);
+        showErrorAlert(message);
       }
     }
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.brandWrap}>
-          <Image
-            source={require('../../../assets/welcome.jpg')}
-            style={styles.brandLogo}
-            resizeMode="cover"
-          />
-          <Text style={styles.brandTitle}>Đăng nhập tài khoản</Text>
-        </View>
+    <AuthFormScreen title="Đăng nhập" onBack={onGoBack}>
+      <View style={styles.card}>
+        <AuthInput
+          label="Email hoặc Username"
+          value={login}
+          onChangeText={(value) => {
+            setLogin(value);
+            clearFieldError('login');
+          }}
+          error={fieldErrors.login}
+          autoCapitalize="none"
+          autoComplete="username"
+        />
 
-        <View style={styles.card}>
-          <AuthInput
-            label="Email hoặc Username"
-            value={login}
-            onChangeText={(value) => {
-              setLogin(value);
-              clearFieldError('login');
-              setLocalError('');
-            }}
-            error={fieldErrors.login}
-            autoCapitalize="none"
-            autoComplete="username"
-          />
+        <AuthInput
+          label="Mật khẩu"
+          value={password}
+          onChangeText={(value) => {
+            setPassword(value);
+            clearFieldError('password');
+          }}
+          error={fieldErrors.password}
+          secureTextEntry
+          autoCapitalize="none"
+          autoComplete="current-password"
+        />
 
-          <AuthInput
-            label="Mật khẩu"
-            value={password}
-            onChangeText={(value) => {
-              setPassword(value);
-              clearFieldError('password');
-              setLocalError('');
-            }}
-            error={fieldErrors.password}
-            secureTextEntry
-            autoCapitalize="none"
-            autoComplete="current-password"
-          />
-
-          {displayError ? (
-            <View style={styles.alertBox}>
-              <Text style={styles.alertText}>{displayError}</Text>
-            </View>
-          ) : null}
-
-          {successMessage ? (
-            <View style={[styles.alertBox, styles.alertSuccess]}>
-              <Text style={[styles.alertText, styles.alertTextSuccess]}>{successMessage}</Text>
-            </View>
-          ) : null}
-
-          <Pressable
-            disabled={isDisabled}
-            onPress={handleSubmit}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              (pressed || isLoading) && styles.primaryButtonPressed,
-              isDisabled && styles.primaryButtonDisabled,
-            ]}
-          >
-            <Text style={styles.primaryButtonText}>
-              {isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
-            </Text>
-          </Pressable>
-
-          <Pressable onPress={() => onGoForgot?.()} style={styles.forgotLinkWrap} hitSlop={8}>
-            <Text style={styles.forgotLink}>Quên mật khẩu?</Text>
-          </Pressable>
-
-          <AuthDivider label="Hoặc đăng nhập với" />
-
-          {googleSetupError ? (
-            <View style={styles.hintBox}>
-              <Text style={styles.hintText}>{googleSetupError}</Text>
-            </View>
-          ) : null}
-
-          <GoogleSignInButton disabled={isLoading} onError={setLocalError} />
-        </View>
+        {successMessage ? (
+          <View style={[styles.alertBox, styles.alertSuccess]}>
+            <Text style={[styles.alertText, styles.alertTextSuccess]}>{successMessage}</Text>
+          </View>
+        ) : null}
 
         <Pressable
-          onPress={onGoRegister}
+          disabled={isDisabled}
+          onPress={handleSubmit}
           style={({ pressed }) => [
-            styles.registerButton,
-            pressed && styles.registerButtonPressed,
+            styles.primaryButton,
+            (pressed || isLoading) && styles.primaryButtonPressed,
+            isDisabled && styles.primaryButtonDisabled,
           ]}
         >
-          <Text style={styles.registerButtonText}>Đăng ký tài khoản mới</Text>
+          <Text style={styles.primaryButtonText}>
+            {isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+          </Text>
         </Pressable>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+        <Pressable onPress={() => onGoForgot?.()} style={styles.forgotLinkWrap} hitSlop={8}>
+          <Text style={styles.forgotLink}>Quên mật khẩu?</Text>
+        </Pressable>
+
+        <AuthDivider label="Hoặc đăng nhập với" />
+
+        {googleSetupError ? (
+          <View style={styles.hintBox}>
+            <Text style={styles.hintText}>{googleSetupError}</Text>
+          </View>
+        ) : null}
+
+        <GoogleSignInButton
+          disabled={isLoading}
+          onError={(message) => {
+            const text = resolveAuthAlertMessage(message);
+            if (!text) {
+              return;
+            }
+            if (isAdminAccountMessage(text)) {
+              showAdminAccountAlert();
+              return;
+            }
+            showErrorAlert(text);
+          }}
+        />
+      </View>
+    </AuthFormScreen>
   );
 }
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -199,26 +187,26 @@ const styles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
-    justifyContent: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 36,
+    paddingTop: 12,
+    paddingBottom: 36,
   },
-  brandWrap: {
+  headerRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 28,
+    gap: 12,
+    marginBottom: 20,
   },
-  brandLogo: {
-    width: 96,
-    height: 96,
-    borderRadius: 24,
-    marginBottom: 18,
-  },
-  brandTitle: {
-    fontSize: 26,
-    fontWeight: '800',
+  headerTitle: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: '900',
     color: AUTH_COLORS.text,
-    textAlign: 'center',
-    letterSpacing: -0.5,
+  },
+  backButton: {
+    borderWidth: 1,
+    borderColor: AUTH_COLORS.border,
+    backgroundColor: '#ffffff',
   },
   card: {
     paddingVertical: 8,
@@ -292,36 +280,5 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#92400e',
     fontWeight: '600',
-  },
-  registerButton: {
-    marginTop: 24,
-    minHeight: 54,
-    borderRadius: AUTH_RADIUS.button,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: AUTH_COLORS.primary,
-  },
-  registerButtonPressed: {
-    opacity: 0.85,
-  },
-  registerButtonText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: AUTH_COLORS.primary,
-  },
-  footerLinkWrap: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  footerText: {
-    fontSize: 14,
-    color: AUTH_COLORS.textMuted,
-    fontWeight: '500',
-  },
-  footerLink: {
-    color: AUTH_COLORS.primary,
-    fontWeight: '800',
   },
 });

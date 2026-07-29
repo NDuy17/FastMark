@@ -1,10 +1,8 @@
 const ProductCategory = require("../models/ProductCategory");
-const Product = require("../models/Product");
 const { normalizeCategoryId, isValidCategoryId } = require("../utils/categoryId");
-const { PRODUCT_STATUS } = require("../constants");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
 
-const CATEGORY_SORT = { CreatedAt: 1, _id: 1 };
+const CATEGORY_SORT = { IsDeleted: -1, CreatedAt: 1, _id: 1 };
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -75,7 +73,7 @@ async function getProductCategoryNameMap(categoryIds = []) {
   );
 }
 
-async function createCategory({ name, description, icon, isDeleted }) {
+async function createCategory({ name, description, icon }) {
   const categoryName = pickString(name);
   if (!categoryName) {
     throw createServiceError("Vui lòng nhập tên danh mục.");
@@ -85,6 +83,18 @@ async function createCategory({ name, description, icon, isDeleted }) {
     $or: [{ name: categoryName }, { categoryName }],
   });
   if (existing) {
+    if (Number(existing.IsDeleted) === 0) {
+      existing.name = categoryName;
+      existing.categoryName = categoryName;
+      existing.description = pickString(description);
+      if (icon !== undefined) {
+        existing.icon = pickString(icon);
+      }
+      existing.IsDeleted = 1;
+      existing.UpdatedAt = new Date();
+      await existing.save();
+      return { category: toPublicCategory(existing), restored: true };
+    }
     throw createServiceError("Tên danh mục đã tồn tại.");
   }
 
@@ -93,13 +103,13 @@ async function createCategory({ name, description, icon, isDeleted }) {
     categoryName,
     description: pickString(description),
     icon: pickString(icon),
-    IsDeleted: Number(isDeleted) === 0 ? 0 : 1,
+    IsDeleted: 1,
   });
 
-  return toPublicCategory(category);
+  return { category: toPublicCategory(category), restored: false };
 }
 
-async function updateCategory(categoryId, { name, description, icon, isDeleted }) {
+async function updateCategory(categoryId, { name, description, icon }) {
   const category = await ProductCategory.findById(categoryId);
   if (!category) {
     throw createServiceError("Không tìm thấy danh mục.", 404);
@@ -124,9 +134,6 @@ async function updateCategory(categoryId, { name, description, icon, isDeleted }
   if (icon !== undefined) {
     category.icon = pickString(icon);
   }
-  if (isDeleted !== undefined) {
-    category.IsDeleted = Number(isDeleted) === 0 ? 0 : 1;
-  }
   category.UpdatedAt = new Date();
   await category.save();
 
@@ -139,19 +146,28 @@ async function deleteCategory(categoryId) {
     throw createServiceError("Không tìm thấy danh mục.", 404);
   }
 
-  const productCount = await Product.countDocuments({
-    CategoryId: category._id,
-    $or: [
-      { Status: PRODUCT_STATUS.ACTIVE },
-      { Status: { $exists: false }, IsDeleted: { $ne: true } },
-    ],
-  });
-  if (productCount > 0) {
-    throw createServiceError(`Không thể xóa danh mục đang có ${productCount} sản phẩm.`, 400);
+  if (Number(category.IsDeleted) === 0) {
+    return toPublicCategory(category);
   }
 
-  await category.deleteOne();
-  return { id: categoryId };
+  category.IsDeleted = 0;
+  category.UpdatedAt = new Date();
+  await category.save();
+  return toPublicCategory(category);
+}
+
+async function restoreCategory(categoryId) {
+  const category = await ProductCategory.findById(categoryId);
+  if (!category) {
+    throw createServiceError("Không tìm thấy danh mục.", 404);
+  }
+  if (Number(category.IsDeleted) !== 0) {
+    return toPublicCategory(category);
+  }
+  category.IsDeleted = 1;
+  category.UpdatedAt = new Date();
+  await category.save();
+  return toPublicCategory(category);
 }
 
 async function uploadCategoryIcon({ file, categoryId }) {
@@ -180,5 +196,6 @@ module.exports = {
   createCategory,
   updateCategory,
   deleteCategory,
+  restoreCategory,
   uploadCategoryIcon,
 };

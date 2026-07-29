@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Eye, Pencil, Trash2 } from 'lucide-react';
 
 import {
   createBannerPlan,
@@ -6,19 +7,16 @@ import {
   listBannerPlans,
   updateBannerPlan,
 } from '../api/sellerPlanApi';
+import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
+import { formatPrice } from '../utils/format';
 
 const emptyForm = {
   name: '',
   description: '',
   durationDays: '',
   price: '',
-  isActive: true,
 };
-
-function formatPrice(value) {
-  return `${Number(value || 0).toLocaleString('vi-VN')}đ`;
-}
 
 function formatDuration(plan) {
   const days = Number(plan.durationDays) || 0;
@@ -57,9 +55,6 @@ function BannerPlanDetailDialog({ plan, onClose }) {
           <DetailField label="Tên gói">{plan.name || ''}</DetailField>
           <DetailField label="Thời hạn">{formatDuration(plan)}</DetailField>
           <DetailField label="Giá">{formatPrice(plan.price)}</DetailField>
-          <DetailField label="Trạng thái">
-            {plan.isActive ? 'Đang bán' : 'Ngừng bán'}
-          </DetailField>
           <DetailField label="Mô tả">{plan.description || ''}</DetailField>
         </dl>
       </div>
@@ -76,6 +71,7 @@ export default function BannerPlansPage() {
   const [editingId, setEditingId] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [actionId, setActionId] = useState('');
   const [selectedPlan, setSelectedPlan] = useState(null);
 
   const loadItems = useCallback(async () => {
@@ -109,7 +105,6 @@ export default function BannerPlansPage() {
       description: plan.description || '',
       durationDays: Number(plan.durationDays) || 30,
       price: Number(plan.price) || 0,
-      isActive: plan.isActive !== false,
     });
   }
 
@@ -135,14 +130,13 @@ export default function BannerPlansPage() {
         description: String(form.description || '').trim(),
         durationDays,
         price: Number(form.price),
-        isActive: Boolean(form.isActive),
       };
       if (editingId) {
         await updateBannerPlan(token, editingId, payload);
         setSuccessMessage('Cập nhật gói banner thành công.');
       } else {
-        await createBannerPlan(token, payload);
-        setSuccessMessage('Tạo gói banner thành công.');
+        const result = await createBannerPlan(token, payload);
+        setSuccessMessage(result.message || 'Tạo gói banner thành công.');
       }
       resetForm();
       await loadItems();
@@ -154,14 +148,20 @@ export default function BannerPlansPage() {
   }
 
   async function handleDelete(plan) {
-    if (!window.confirm(`Ngừng bán "${plan.name}"?`)) return;
+    if (!window.confirm(
+      `Xóa gói "${plan.name}"?\nGói sẽ ẩn khỏi admin và app. Thêm lại đúng tên sẽ tự khôi phục.`
+    )) return;
+    setActionId(plan.id);
     try {
       const token = await getIdToken();
       await deleteBannerPlan(token, plan.id);
-      setSuccessMessage('Đã ngừng bán gói banner.');
+      setSuccessMessage('Đã xóa gói banner.');
+      if (editingId === plan.id) resetForm();
       await loadItems();
     } catch (deleteError) {
-      setError(deleteError.message || 'Không ngừng bán được.');
+      setError(deleteError.message || 'Không xóa được gói banner.');
+    } finally {
+      setActionId('');
     }
   }
 
@@ -179,8 +179,8 @@ export default function BannerPlansPage() {
             </button>
           ) : null}
         </div>
-        <form className="category-form" onSubmit={handleSubmit}>
-          <div className="category-form-row category-form-row-4">
+        <form className="category-form category-form-compact" onSubmit={handleSubmit}>
+          <div className="category-form-row category-form-row-3">
             <label>
               Tên gói
               <input
@@ -212,19 +212,6 @@ export default function BannerPlansPage() {
                 required
               />
             </label>
-            <label>
-              Trạng thái
-              <select
-                className="category-select"
-                value={form.isActive ? 1 : 0}
-                onChange={(event) =>
-                  setForm((c) => ({ ...c, isActive: Number(event.target.value) === 1 }))
-                }
-              >
-                <option value={1}>Đang bán</option>
-                <option value={0}>Ngừng bán</option>
-              </select>
-            </label>
           </div>
           <label>
             Chi tiết gói
@@ -251,15 +238,14 @@ export default function BannerPlansPage() {
               <th>Chi tiết</th>
               <th>Thời hạn</th>
               <th>Giá</th>
-              <th>Trạng thái</th>
               <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6}>Đang tải...</td></tr>
+              <tr><td colSpan={5}>Đang tải...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={6}>Chưa có Banner Plan. Hãy thêm gói mới ở form phía trên.</td></tr>
+              <tr><td colSpan={5}>Chưa có Banner Plan. Hãy thêm gói mới ở form phía trên.</td></tr>
             ) : (
               items.map((plan) => (
                 <tr key={plan.id}>
@@ -267,27 +253,28 @@ export default function BannerPlansPage() {
                   <td className="review-content-cell">{plan.description || ''}</td>
                   <td>{formatDuration(plan)}</td>
                   <td>{formatPrice(plan.price)}</td>
-                  <td>
-                    <span className={plan.isActive ? 'badge badge-success' : 'badge badge-neutral'}>
-                      {plan.isActive ? 'Đang bán' : 'Ngừng bán'}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="action-row">
-                      <button
-                        type="button"
-                        className="detail-btn"
-                        onClick={() => setSelectedPlan(plan)}
-                      >
-                        Chi tiết
-                      </button>
-                      <button type="button" onClick={() => startEdit(plan)}>
-                        Sửa
-                      </button>
-                      <button type="button" className="danger-btn" onClick={() => handleDelete(plan)}>
-                        Ẩn
-                      </button>
-                    </div>
+                  <td className="col-actions">
+                    <TableIconActions
+                      actions={[
+                        {
+                          icon: Eye,
+                          label: 'Chi tiết gói banner',
+                          onClick: () => setSelectedPlan(plan),
+                        },
+                        {
+                          icon: Pencil,
+                          label: 'Sửa gói banner',
+                          onClick: () => startEdit(plan),
+                        },
+                        {
+                          icon: Trash2,
+                          label: 'Xóa gói banner',
+                          variant: 'danger',
+                          disabled: actionId === plan.id,
+                          onClick: () => handleDelete(plan),
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))

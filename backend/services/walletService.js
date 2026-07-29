@@ -13,8 +13,10 @@ const {
   MIN_TOPUP_AMOUNT,
   MAX_TOPUP_AMOUNT,
   NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
 } = require("../constants");
 const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -185,8 +187,20 @@ async function applySuccessfulTopup(orderCode, { amount, paymentLinkId } = {}) {
       title: "Nạp tiền thành công",
       content: `Đã nạp ${Number(tx.amount).toLocaleString("vi-VN")}đ vào ví FastMark.`,
       audience: NOTIFICATION_AUDIENCE.SYSTEM,
+      index: NOTIFICATION_INDEX.SYSTEM,
     }).catch((error) => {
       console.warn("[wallet] topup notification failed:", error?.message || error);
+    });
+
+    emitUserResourceUpdated(tx.userId, "wallet", {
+      transactionId: String(tx._id),
+      orderCode: tx.orderCode,
+      balance: wallet.balance,
+    });
+    emitAdminUpdated("wallet", {
+      userId: String(tx.userId),
+      transactionId: String(tx._id),
+      orderCode: tx.orderCode,
     });
 
     return {

@@ -56,3 +56,77 @@ export async function submitReportOnBackend({
   const payload = await parseApiResponse(response);
   return payload.data?.report;
 }
+
+export async function getLockAppealStatusOnBackend(idToken) {
+  const response = await apiRequest(
+    API_ENDPOINTS.authLockAppeal,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data || null;
+}
+
+export async function submitLockAppealOnBackend({ idToken, title, content, images }) {
+  const hasImages = Array.isArray(images) && images.length > 0;
+  const response = await apiRequest(
+    API_ENDPOINTS.authLockAppeal,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title,
+        content,
+        images: images || [],
+      }),
+    },
+    hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.report;
+}
+
+export async function getShopLockAppealStatusOnBackend(idToken) {
+  const response = await apiRequest(
+    API_ENDPOINTS.authShopLockAppeal,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data || null;
+}
+
+export async function submitShopLockAppealOnBackend({ idToken, title, content, images }) {
+  const hasImages = Array.isArray(images) && images.length > 0;
+  const response = await apiRequest(
+    API_ENDPOINTS.authShopLockAppeal,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title,
+        content,
+        images: images || [],
+      }),
+    },
+    hasImages ? SELLER_UPLOAD_TIMEOUT_MS : AUTH_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.report;
+}

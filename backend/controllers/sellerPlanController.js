@@ -9,8 +9,11 @@ exports.listAdminPlans = async (req, res) => {
 
 exports.createPlan = async (req, res) => {
   try {
-    const plan = await sellerPlanService.createPlan(req.body);
-    return success(res, { message: "Đã tạo gói bán hàng.", data: { plan } });
+    const { plan, restored } = await sellerPlanService.createPlan(req.body);
+    return success(res, {
+      message: restored ? "Đã khôi phục gói bán hàng." : "Đã tạo gói bán hàng.",
+      data: { plan, restored: Boolean(restored) },
+    });
   } catch (error) {
     return fail(res, { status: error.statusCode || 500, message: error.message });
   }
@@ -34,12 +37,23 @@ exports.removePlan = async (req, res) => {
   }
 };
 
+exports.restorePlan = async (req, res) => {
+  try {
+    const plan = await sellerPlanService.restorePlan(req.params.id);
+    return success(res, { message: "Đã khôi phục gói bán hàng.", data: { plan } });
+  } catch (error) {
+    return fail(res, { status: error.statusCode || 500, message: error.message });
+  }
+};
+
 exports.listSubscriptions = async (req, res) => {
   const data = await sellerSubscriptionService.listAdminSubscriptions({
     page: req.query.page,
     limit: req.query.limit,
     status: req.query.status,
     search: req.query.search || req.query.q,
+    from: req.query.from || req.query.dateFrom,
+    to: req.query.to || req.query.dateTo,
   });
   return success(res, { data });
 };

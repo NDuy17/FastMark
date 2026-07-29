@@ -1,13 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -25,6 +17,8 @@ import {
   requestEmailVerificationCode,
 } from '../../viewmodel/auth/authSlice';
 import { validateEmailVerificationForm } from '../../viewmodel/auth/authFormValidation';
+import { confirmLogout } from '../../core/utils/appAlert';
+import AuthFormScreen from './components/AuthFormScreen';
 import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
 
@@ -230,21 +224,12 @@ export default function EmailVerificationScreen() {
   }
 
   function handleLogout() {
-    dispatch(logoutUser());
+    confirmLogout(() => dispatch(logoutUser()));
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Xác minh email</Text>
-
+    <AuthFormScreen title="Xác minh email">
+      <View style={styles.formContent}>
         <Text style={styles.emailLabel}>Email cần xác minh</Text>
         <Text style={styles.emailValue}>{email || '—'}</Text>
 
@@ -315,27 +300,14 @@ export default function EmailVerificationScreen() {
         >
           <Text style={styles.logoutText}>Đăng xuất</Text>
         </Pressable>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </View>
+    </AuthFormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: AUTH_COLORS.background,
-  },
-  content: {
+  formContent: {
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 36,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: AUTH_COLORS.text,
-    marginBottom: 24,
   },
   emailLabel: {
     fontSize: 14,

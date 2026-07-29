@@ -12,8 +12,17 @@ const {
   MIN_WITHDRAW_AMOUNT,
   MAX_WITHDRAW_AMOUNT,
   NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
 } = require("../constants");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendUniqueOrConditions,
+} = require("../utils/adminSearchHelpers");
 const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 const {
   getOrCreateWallet,
   createUniqueOrderCode,
@@ -139,10 +148,21 @@ async function createWithdrawRequest(user, payload = {}) {
       walletDto = { balance: wallet.balance };
     });
 
-    return {
+    const response = {
       withdraw: toPublicWithdraw(withdraw),
       wallet: walletDto,
     };
+    emitAdminUpdated("withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.PENDING,
+      userId: String(user._id),
+    });
+    emitUserResourceUpdated(user._id, "wallet", { balance: walletDto?.balance });
+    emitUserResourceUpdated(user._id, "withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.PENDING,
+    });
+    return response;
   } finally {
     session.endSession();
   }
@@ -165,9 +185,20 @@ async function listAdminWithdraws({
 } = {}) {
   const filter = {};
   if (status !== undefined && status !== "" && status !== null) {
-    const statusNum = Number(status);
-    if (Number.isFinite(statusNum)) {
-      filter.status = statusNum;
+    const statusText = String(status);
+    if (statusText.includes(",")) {
+      const statuses = statusText
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isFinite(value));
+      if (statuses.length) {
+        filter.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
+      }
+    } else {
+      const statusNum = Number(statusText);
+      if (Number.isFinite(statusNum)) {
+        filter.status = statusNum;
+      }
     }
   }
 
@@ -188,27 +219,27 @@ async function listAdminWithdraws({
 
   const queryText = String(q || "").trim();
   if (queryText) {
-    const escaped = queryText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(escaped, "i");
-    const matchedUsers = await User.find({
-      $or: [
-        { FullName: regex },
-        { UserName: regex },
-        { Phone: regex },
-        { Email: regex },
-      ],
-    })
-      .select("_id")
-      .limit(100)
-      .lean();
-    const matchedUserIds = matchedUsers.map((user) => user._id);
-    filter.$or = [
-      { accountNumber: regex },
-      { accountName: regex },
-      { bankName: regex },
-      { bankCode: regex },
-      ...(matchedUserIds.length ? [{ userId: { $in: matchedUserIds } }] : []),
-    ];
+    const orConditions = [];
+    const regex = buildSearchRegex(queryText);
+
+    if (regex) {
+      const matchedUsers = await findUsersBySearchRegex(User, regex);
+      const matchedUserIds = matchedUsers.map((user) => user._id);
+      orConditions.push(
+        { accountNumber: regex },
+        { accountName: regex },
+        { bankName: regex },
+        { bankCode: regex },
+        ...(matchedUserIds.length ? [{ userId: { $in: matchedUserIds } }] : [])
+      );
+    }
+
+    appendStatusLabelSearchConditions(orConditions, queryText, WITHDRAW_STATUS_LABEL);
+    orConditions.push(...buildObjectIdSearchConditions(queryText));
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
 
   const pageNum = Math.max(1, Number(page) || 1);
@@ -283,9 +314,21 @@ async function approveWithdraw(adminUser, withdrawId, { adminNote } = {}) {
       title: "Rút tiền đã được duyệt",
       content: `Yêu cầu rút ${Number(withdraw.amount).toLocaleString("vi-VN")}đ đã được admin chuyển khoản.`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.SYSTEM,
     }).catch((error) => {
       console.warn("[withdraw] approve notification failed:", error?.message || error);
     });
+
+    emitAdminUpdated("withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.APPROVED,
+      userId: String(withdraw.userId),
+    });
+    emitUserResourceUpdated(withdraw.userId, "withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.APPROVED,
+    });
+    emitUserResourceUpdated(withdraw.userId, "wallet", {});
 
     return toPublicWithdraw(withdraw);
   } finally {
@@ -357,9 +400,21 @@ async function rejectWithdraw(adminUser, withdrawId, { adminNote } = {}) {
         rejectNote ||
         `Yêu cầu rút ${Number(withdraw.amount).toLocaleString("vi-VN")}đ đã bị từ chối. Tiền đã hoàn về ví.`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.SYSTEM,
     }).catch((error) => {
       console.warn("[withdraw] reject notification failed:", error?.message || error);
     });
+
+    emitAdminUpdated("withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.REJECTED,
+      userId: String(withdraw.userId),
+    });
+    emitUserResourceUpdated(withdraw.userId, "withdraw", {
+      withdrawId: String(withdraw._id),
+      status: WITHDRAW_STATUS.REJECTED,
+    });
+    emitUserResourceUpdated(withdraw.userId, "wallet", { balance: walletDto?.balance });
 
     return { withdraw: toPublicWithdraw(withdraw), wallet: walletDto };
   } finally {

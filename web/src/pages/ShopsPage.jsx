@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Eye, Lock, Store, Unlock, UserCheck, UserX } from 'lucide-react';
 
-import { blockShop, deleteShop, listShops, unblockShop } from '../api/catalogApi';
+import { blockShop, listShops, unblockShop } from '../api/catalogApi';
+import AdminFilterPanel from '../components/admin/AdminFilterPanel';
+import AdminDateFilter from '../components/admin/AdminDateFilter';
+import AdminPageShell from '../components/admin/AdminPageShell';
+import AdminPagination from '../components/admin/AdminPagination';
+import DataTableShell from '../components/admin/DataTableShell';
+import { TableSttCell, TableSttHeader } from '../components/admin/TableStt';
+import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
+import { formatDate } from '../utils/format';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Tất cả trạng thái' },
@@ -16,40 +28,93 @@ const OPEN_OPTIONS = [
   { value: '0', label: 'Đóng cửa' },
 ];
 
-function formatDate(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('vi-VN');
-}
-
 export default function ShopsPage() {
   const { getIdToken } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterFromUrl = searchParams.get('filter') || '';
+  const statusFromUrl = searchParams.get('status') || '';
+
   const [items, setItems] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: DEFAULT_PAGE_SIZE,
+    total: 0,
+    totalPages: 1,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
+  const { input: searchInput, debounced: search, setInput: setSearchInput } = useDebouncedSearch();
+  const {
+    from: dateFrom,
+    to: dateTo,
+    preset: datePreset,
+    applyRange: applyDateRange,
+    resetRange: resetDateRange,
+    queryParams: dateQueryParams,
+  } = useAdminDateFilter();
+  const [status, setStatus] = useState(statusFromUrl);
   const [isOpen, setIsOpen] = useState('');
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
   const [busyId, setBusyId] = useState('');
+
+  const pageMeta = useMemo(() => {
+    if (filterFromUrl === 'pending') {
+      return { title: 'Gian hàng chờ duyệt', description: 'Các gian hàng đang chờ xác minh hoặc phê duyệt.' };
+    }
+    if (statusFromUrl === '0') {
+      return { title: 'Gian hàng bị khóa', description: 'Danh sách gian hàng đang bị khóa trên hệ thống.' };
+    }
+    if (statusFromUrl === '1') {
+      return { title: 'Gian hàng đã duyệt', description: 'Các gian hàng đang hoạt động bình thường.' };
+    }
+    return {
+      title: 'Gian hàng',
+      description: 'Danh sách gian hàng trên FastMark. Mỗi gian hàng gắn với một tài khoản chủ shop.',
+    };
+  }, [filterFromUrl, statusFromUrl]);
+
+  useEffect(() => {
+    setStatus(statusFromUrl);
+    resetDateRange();
+    setPage(1);
+  }, [statusFromUrl, filterFromUrl, resetDateRange]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const token = await getIdToken();
-      const payload = await listShops(token, { search, status, isOpen, page, limit: 20 });
+      const payload = await listShops(token, {
+        search,
+        status,
+        isOpen,
+        filter: filterFromUrl || undefined,
+        page,
+        limit,
+        ...dateQueryParams,
+      });
       setItems(payload.data?.items || []);
-      setPagination(payload.data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 });
+      setPagination(
+        payload.data?.pagination || {
+          page: 1,
+          limit: DEFAULT_PAGE_SIZE,
+          total: 0,
+          totalPages: 1,
+        },
+      );
     } catch (loadError) {
       setError(loadError.message || 'Không tải được danh sách gian hàng.');
       setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [getIdToken, isOpen, page, search, status]);
+  }, [dateFrom, dateQueryParams, dateTo, filterFromUrl, getIdToken, isOpen, limit, page, search, status]);
 
   useEffect(() => {
     loadItems();
@@ -63,12 +128,6 @@ export default function ShopsPage() {
       const token = await getIdToken();
       if (action === 'block') await blockShop(token, shopId);
       if (action === 'unblock') await unblockShop(token, shopId);
-      if (action === 'delete') {
-        const confirmed = window.confirm('Xóa/đóng gian hàng này và ẩn toàn bộ sản phẩm?');
-        if (!confirmed) return;
-        await deleteShop(token, shopId);
-      }
-      setMessage('Cập nhật gian hàng thành công.');
       await loadItems();
     } catch (actionError) {
       setError(actionError.message || 'Thao tác thất bại.');
@@ -77,96 +136,123 @@ export default function ShopsPage() {
     }
   }
 
+  function handleStatusChange(value) {
+    setStatus(value);
+    setPage(1);
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('status', value);
+    else next.delete('status');
+    next.delete('filter');
+    setSearchParams(next, { replace: true });
+  }
+
+  const activeCount = items.filter((shop) => shop.status === 1).length;
+  const lockedCount = items.filter((shop) => shop.status === 0).length;
+  const openCount = items.filter((shop) => shop.isOpen === 1).length;
+
   return (
-    <div className="page">
+    <AdminPageShell
+      icon={Store}
+      title={pageMeta.title}
+      description={pageMeta.description}
+      stats={[
+        { label: 'Tổng gian hàng', value: loading ? '…' : pagination.total, icon: Store, tone: 'green' },
+        { label: 'Đang hoạt động', value: loading ? '…' : activeCount, icon: UserCheck, tone: 'green' },
+        { label: 'Đang mở cửa', value: loading ? '…' : openCount, icon: Store, tone: 'blue' },
+        { label: 'Bị khóa', value: loading ? '…' : lockedCount, icon: UserX, tone: 'red' },
+      ]}
+    >
       {error ? <p className="error-banner">{error}</p> : null}
       {message ? <p className="success-banner">{message}</p> : null}
 
-      <section className="filter-card">
-        <form
-          className="filter-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setPage(1);
-            setSearch(searchInput.trim());
-          }}
-        >
-          <label className="filter-search">
-            Tìm kiếm
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Tên shop, username, địa chỉ, SĐT..."
+      <DataTableShell
+        title="Danh sách gian hàng"
+        filterColumns={4}
+        filters={
+          <AdminFilterPanel
+            layout="inline"
+            searchValue={searchInput}
+            onSearchChange={setSearchInput}
+            searchPlaceholder="Tên shop, username, địa chỉ, SĐT..."
+          >
+            <label>
+              Trạng thái hoạt động
+              <select value={status} onChange={(event) => handleStatusChange(event.target.value)}>
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value || 'all-status'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Trạng thái mở/đóng
+              <select
+                value={isOpen}
+                onChange={(event) => {
+                  setIsOpen(event.target.value);
+                  setPage(1);
+                }}
+              >
+                {OPEN_OPTIONS.map((option) => (
+                  <option key={option.value || 'all-open'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <AdminDateFilter
+              from={dateFrom}
+              to={dateTo}
+              preset={datePreset}
+              onApply={(range) => applyDateRange(range, () => setPage(1))}
             />
-          </label>
-          <button type="submit" className="primary-btn">
-            Tìm
-          </button>
-        </form>
-
-        <div className="filter-grid">
-          <label>
-            Trạng thái hoạt động
-            <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
-                setPage(1);
-              }}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value || 'all-status'} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Trạng thái mở/đóng
-            <select
-              value={isOpen}
-              onChange={(event) => {
-                setIsOpen(event.target.value);
-                setPage(1);
-              }}
-            >
-              {OPEN_OPTIONS.map((option) => (
-                <option key={option.value || 'all-open'} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section className="table-card">
-        <table className="data-table">
+          </AdminFilterPanel>
+        }
+        pagination={
+          <AdminPagination
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            total={pagination.total}
+            label="gian hàng"
+            limit={limit}
+            onLimitChange={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+            loading={loading}
+            onPageChange={setPage}
+          />
+        }
+      >
+        <table className="data-table admin-data-table shops-table">
           <thead>
             <tr>
+              <TableSttHeader />
               <th>Gian hàng</th>
               <th>Chủ shop</th>
               <th>Địa chỉ</th>
               <th>Danh mục</th>
               <th>Đánh giá</th>
-              <th>Mở/đóng</th>
+              <th className="col-open">Mở/đóng</th>
               <th>Gói</th>
-              <th>Trạng thái</th>
-              <th>Thao tác</th>
+              <th className="col-shop-status">Trạng thái</th>
+              <th className="col-actions">Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9}>Đang tải...</td>
+                <td colSpan={10} className="table-empty">Đang tải...</td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={9}>Không có gian hàng.</td>
+                <td colSpan={10} className="table-empty">Không có gian hàng.</td>
               </tr>
             ) : (
-              items.map((shop) => (
+              items.map((shop, index) => (
                 <tr key={shop.id}>
+                  <TableSttCell page={pagination.page} limit={limit} index={index} />
                   <td>
                     <div className="user-cell">
                       {shop.avatar ? (
@@ -186,13 +272,18 @@ export default function ShopsPage() {
                     {shop.owner?.fullName || ''}
                     <div className="muted">{shop.owner?.email || ''}</div>
                   </td>
-                  <td>{shop.addressHeThong || shop.systemAddress || shop.address || ''}</td>
+                  <td
+                    className="table-address-clamp"
+                    title={shop.addressHeThong || shop.systemAddress || shop.address || ''}
+                  >
+                    {shop.addressHeThong || shop.systemAddress || shop.address || ''}
+                  </td>
                   <td>{shop.categoryName || ''}</td>
                   <td>
                     {Number(shop.averageRating) ? `${shop.averageRating} ★` : ''}
                     <div className="muted">{Number(shop.followersCount) || 0} theo dõi</div>
                   </td>
-                  <td>
+                  <td className="col-open">
                     <span className={shop.isOpen === 1 ? 'badge badge-success' : 'badge'}>
                       {shop.isOpenLabel}
                     </span>
@@ -207,67 +298,39 @@ export default function ShopsPage() {
                       <span className="badge">Hết / chưa mua</span>
                     )}
                   </td>
-                  <td>
+                  <td className="col-shop-status">
                     <span className={shop.status === 1 ? 'badge badge-success' : 'badge badge-danger'}>
                       {shop.statusLabel}
                     </span>
                   </td>
-                  <td>
-                    <div className="action-row">
-                      <Link className="detail-btn" to={`/shops/${shop.id}`}>
-                        Chi tiết
-                      </Link>
-                      {shop.status === 1 ? (
-                        <button
-                          type="button"
-                          disabled={busyId === shop.id}
-                          onClick={() => runAction(shop.id, 'block')}
-                        >
-                          Khóa
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busyId === shop.id}
-                          onClick={() => runAction(shop.id, 'unblock')}
-                        >
-                          Mở khóa
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="danger-btn"
-                        disabled={busyId === shop.id}
-                        onClick={() => runAction(shop.id, 'delete')}
-                      >
-                        Xóa
-                      </button>
-                    </div>
+                  <td className="col-actions">
+                    <TableIconActions
+                      actions={[
+                        { icon: Eye, label: 'Chi tiết', to: `/shops/${shop.id}` },
+                        shop.status === 1
+                          ? {
+                              icon: Lock,
+                              label: 'Khóa gian hàng',
+                              variant: 'warning',
+                              disabled: busyId === shop.id,
+                              onClick: () => runAction(shop.id, 'block'),
+                            }
+                          : {
+                              icon: Unlock,
+                              label: 'Mở khóa gian hàng',
+                              variant: 'primary',
+                              disabled: busyId === shop.id,
+                              onClick: () => runAction(shop.id, 'unblock'),
+                            },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
-
-        <div className="pagination-row">
-          <span>
-            Trang {pagination.page}/{pagination.totalPages} · {pagination.total} gian hàng
-          </span>
-          <div className="action-row">
-            <button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>
-              Trước
-            </button>
-            <button
-              type="button"
-              disabled={page >= pagination.totalPages}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              Sau
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
+      </DataTableShell>
+    </AdminPageShell>
   );
 }

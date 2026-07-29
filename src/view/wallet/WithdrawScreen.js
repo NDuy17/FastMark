@@ -7,15 +7,15 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatPrice } from '../../core/utils/productFormat';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
-import { useScreenInsets } from '../../hooks/useScreenInsets';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import {
   createWithdrawViewModel,
   loadMyWithdrawsViewModel,
@@ -56,7 +56,6 @@ function WithdrawDetailRow({ label, value }) {
 }
 
 export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
-  const insets = useScreenInsets();
   const [banks, setBanks] = useState([]);
   const [withdraws, setWithdraws] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -168,12 +167,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
             title="Chi tiết rút tiền"
             onBack={() => setSelectedWithdraw(null)}
           />
-          <ScrollView
-            contentContainerStyle={[
-              styles.content,
-              { paddingBottom: insets.nestedScrollPaddingBottom },
-            ]}
-          >
+          <KeyboardAwareScrollView contentContainerStyle={styles.content}>
             <View style={styles.detailSummary}>
               <Text style={styles.detailSummaryLabel}>Số tiền rút</Text>
               <Text style={styles.detailSummaryAmount}>
@@ -228,7 +222,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
                 value={formatWithdrawTime(selectedWithdraw.processedAt)}
               />
             </View>
-          </ScrollView>
+          </KeyboardAwareScrollView>
         </>
       ) : (
         <>
@@ -239,12 +233,8 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
           <ActivityIndicator color={t.primary} size="large" />
         </View>
       ) : (
-        <ScrollView
-          contentContainerStyle={[
-            styles.content,
-            { paddingBottom: insets.nestedScrollPaddingBottom },
-          ]}
-          keyboardShouldPersistTaps="handled"
+        <KeyboardAwareScrollView
+          contentContainerStyle={styles.content}
         >
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>Số dư khả dụng</Text>
@@ -338,7 +328,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
           )}
 
           <Text style={styles.label}>Số tiền rút (đ)</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             style={styles.input}
             keyboardType="number-pad"
             value={amountText}
@@ -348,7 +338,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
           />
 
           <Text style={styles.label}>Số tài khoản</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             style={styles.input}
             keyboardType="number-pad"
             value={accountNumber}
@@ -358,7 +348,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
           />
 
           <Text style={styles.label}>Tên chủ tài khoản</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             style={styles.input}
             autoCapitalize="characters"
             value={accountName}
@@ -422,7 +412,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
               </Pressable>
             ))
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       )}
         </>
       )}

@@ -1,9 +1,7 @@
 const ShopCategory = require("../models/ShopCategory");
-const ShopProfile = require("../models/ShopProfile");
-const SellerVerification = require("../models/SellerVerification");
 const { normalizeCategoryId, isValidCategoryId } = require("../utils/categoryId");
 
-const CATEGORY_SORT = { CreatedAt: 1, _id: 1 };
+const CATEGORY_SORT = { IsDeleted: -1, CreatedAt: 1, _id: 1 };
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -69,7 +67,7 @@ async function getShopCategoryNameMap(categoryIds = []) {
   );
 }
 
-async function createCategory({ name, description, isDeleted }) {
+async function createCategory({ name, description }) {
   const categoryName = pickString(name);
   if (!categoryName) {
     throw createServiceError("Vui lòng nhập tên danh mục.");
@@ -77,19 +75,27 @@ async function createCategory({ name, description, isDeleted }) {
 
   const existing = await ShopCategory.findOne({ name: categoryName });
   if (existing) {
+    if (Number(existing.IsDeleted) === 0) {
+      existing.name = categoryName;
+      existing.description = pickString(description);
+      existing.IsDeleted = 1;
+      existing.UpdatedAt = new Date();
+      await existing.save();
+      return { category: toPublicCategory(existing), restored: true };
+    }
     throw createServiceError("Tên danh mục đã tồn tại.");
   }
 
   const category = await ShopCategory.create({
     name: categoryName,
     description: pickString(description),
-    IsDeleted: Number(isDeleted) === 0 ? 0 : 1,
+    IsDeleted: 1,
   });
 
-  return toPublicCategory(category);
+  return { category: toPublicCategory(category), restored: false };
 }
 
-async function updateCategory(categoryId, { name, description, isDeleted }) {
+async function updateCategory(categoryId, { name, description }) {
   const category = await ShopCategory.findById(categoryId);
   if (!category) {
     throw createServiceError("Không tìm thấy danh mục.", 404);
@@ -110,9 +116,6 @@ async function updateCategory(categoryId, { name, description, isDeleted }) {
 
   category.name = categoryName;
   category.description = pickString(description);
-  if (isDeleted !== undefined) {
-    category.IsDeleted = Number(isDeleted) === 0 ? 0 : 1;
-  }
   category.UpdatedAt = new Date();
   await category.save();
   await ShopCategory.updateOne({ _id: category._id }, { $unset: { icon: "" } });
@@ -126,20 +129,28 @@ async function deleteCategory(categoryId) {
     throw createServiceError("Không tìm thấy danh mục.", 404);
   }
 
-  const [shopCount, verificationCount] = await Promise.all([
-    ShopProfile.countDocuments({ categoryId: category._id }),
-    SellerVerification.countDocuments({ categoryId: category._id }),
-  ]);
-
-  if (shopCount > 0 || verificationCount > 0) {
-    throw createServiceError(
-      `Không thể xóa danh mục đang được ${shopCount + verificationCount} cửa hàng/đơn đăng ký sử dụng.`,
-      400
-    );
+  if (Number(category.IsDeleted) === 0) {
+    return toPublicCategory(category);
   }
 
-  await category.deleteOne();
-  return { id: categoryId };
+  category.IsDeleted = 0;
+  category.UpdatedAt = new Date();
+  await category.save();
+  return toPublicCategory(category);
+}
+
+async function restoreCategory(categoryId) {
+  const category = await ShopCategory.findById(categoryId);
+  if (!category) {
+    throw createServiceError("Không tìm thấy danh mục.", 404);
+  }
+  if (Number(category.IsDeleted) !== 0) {
+    return toPublicCategory(category);
+  }
+  category.IsDeleted = 1;
+  category.UpdatedAt = new Date();
+  await category.save();
+  return toPublicCategory(category);
 }
 
 module.exports = {
@@ -149,4 +160,5 @@ module.exports = {
   createCategory,
   updateCategory,
   deleteCategory,
+  restoreCategory,
 };

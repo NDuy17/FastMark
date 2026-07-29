@@ -6,10 +6,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 
 export function createVariant() {
   return {
@@ -222,7 +223,7 @@ export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) 
 
       <View style={styles.field}>
         <Text style={styles.label}>Tên biến thể</Text>
-        <TextInput
+        <KeyboardAwareTextInput
           value={variant.variantName}
           onChangeText={(value) => onChange({ ...variant, variantName: value, error: '' })}
           placeholder="VD: 500g, 1kg, Loại 1"
@@ -234,7 +235,7 @@ export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) 
       <View style={styles.row}>
         <View style={[styles.field, styles.halfField]}>
           <Text style={styles.label}>Giá (đ)</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={variant.price}
             onChangeText={(value) => onChange({ ...variant, price: value, error: '' })}
             placeholder="35000"
@@ -245,7 +246,7 @@ export function VariantBlock({ variant, index, onChange, onRemove, canRemove }) 
         </View>
         <View style={[styles.field, styles.halfField]}>
           <Text style={styles.label}>Số lượng</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={variant.quantity}
             onChangeText={(value) => onChange({ ...variant, quantity: value, error: '' })}
             placeholder="100"

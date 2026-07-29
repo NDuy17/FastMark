@@ -16,6 +16,11 @@ const {
   activeSubscriptionFilter,
 } = require("../constants");
 const { removeVietnameseDiacritics } = require("../utils/sanitizeFileName");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+  resolveShopAvatar,
+} = require("../utils/shopIdentity");
 
 const EARTH_RADIUS_METERS = 6371000;
 const MAX_SEARCH_RADIUS_METERS = 30000;
@@ -271,14 +276,12 @@ function toPublicStore(
   followCount = 0,
   totalLikes = 0
 ) {
-  // Một identity: tên / @ lấy từ User (buyer), shop chỉ là storefront.
+  // Tên / @ lấy từ ShopProfile (fallback User cho shop cũ).
   const ownerName = pickString(user?.FullName) || pickString(user?.UserName) || "";
   const ownerUsername = pickString(user?.UserName) || "";
-  const shopDisplayName =
-    ownerName ||
-    shop.shopName ||
-    (shop.shopUsername ? `@${shop.shopUsername}` : "") ||
-    "Gian hàng Fastmark";
+  const shopDisplayName = resolveShopDisplayName(shop, user);
+  const shopUsername = resolveShopUsername(shop, user);
+  const shopAvatar = resolveShopAvatar(shop, user);
 
   const systemAddress = pickShopText(
     shop,
@@ -290,7 +293,6 @@ function toPublicStore(
   );
   const openTime = pickShopText(shop, "openTime", "open_time");
   const closeTime = pickShopText(shop, "closeTime", "close_time");
-  const shopUsername = ownerUsername || pickShopText(shop, "shopUsername", "shop_username");
   const pinHours = Boolean(shop.pinHours);
   // Hiện giờ công khai khi shop đã có giờ mở/đóng cửa.
   const showHours = Boolean(openTime && closeTime);
@@ -308,7 +310,7 @@ function toPublicStore(
     shopName: shopDisplayName,
     shop_username: shopUsername,
     shopUsername,
-    fullName: ownerName || shopDisplayName,
+    fullName: shopDisplayName,
     userName: shopUsername,
     categoryId: shop.categoryId ? String(shop.categoryId) : "",
     categoryName,
@@ -338,8 +340,10 @@ function toPublicStore(
     total_likes: Number(totalLikes) || 0,
     owner_user_id: shop.userId ? String(shop.userId) : "",
     ownerUserId: shop.userId ? String(shop.userId) : "",
-    image_url: user?.Avatar || "",
-    cover_image_url: user?.Avatar || "",
+    image_url: shopAvatar,
+    cover_image_url: shopAvatar,
+    shopAvatar,
+    avatar: shopAvatar,
     distance_meters: Math.round(distanceMeters),
     is_registered_shop: true,
     depositPercent,
@@ -609,13 +613,22 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
     throw error;
   }
 
-  const productCount = await Product.countDocuments(activeProductFilter({ ShopId: shop._id }));
+  const { SHOP_STATUS } = require("../constants");
+
+  // Gian hàng bị khóa — vẫn trả metadata để client hiển thị màn khóa.
+  const isShopLocked = Number(shop.status) === SHOP_STATUS.BLOCKED;
+
+  const productCount = isShopLocked
+    ? 0
+    : await Product.countDocuments(activeProductFilter({ ShopId: shop._id }));
   const categoryNameMap = await getShopCategoryNameMap([shop.categoryId]);
   const followCount = Number(shop.followersCount) || 0;
-  const likeAgg = await Product.aggregate([
-    { $match: activeProductFilter({ ShopId: shop._id }) },
-    { $group: { _id: null, total: { $sum: { $ifNull: ["$LikeCount", 0] } } } },
-  ]);
+  const likeAgg = isShopLocked
+    ? []
+    : await Product.aggregate([
+        { $match: activeProductFilter({ ShopId: shop._id }) },
+        { $group: { _id: null, total: { $sum: { $ifNull: ["$LikeCount", 0] } } } },
+      ]);
   const totalLikes = Number(likeAgg?.[0]?.total) || 0;
 
   let distanceMeters = 0;
@@ -636,7 +649,7 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
   }
 
   const category = resolveShopCategory(categoryNameMap, shop.categoryId);
-  return toPublicStore(
+  const store = toPublicStore(
     shop,
     seller,
     productCount,
@@ -645,6 +658,14 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
     followCount,
     totalLikes
   );
+  if (isShopLocked) {
+    store.status = SHOP_STATUS.BLOCKED;
+    store.isShopLocked = true;
+    store.isLocked = true;
+    store.product_count = 0;
+    store.total_products = 0;
+  }
+  return store;
 }
 
 async function listPublicProductsByShopId(shopId) {
@@ -653,6 +674,11 @@ async function listPublicProductsByShopId(shopId) {
     const error = new Error("Không tìm thấy gian hàng.");
     error.statusCode = 404;
     throw error;
+  }
+
+  const { SHOP_STATUS } = require("../constants");
+  if (Number(shop.status) === SHOP_STATUS.BLOCKED) {
+    return [];
   }
 
   const products = await Product.find(activeProductFilter({ ShopId: shop._id }))

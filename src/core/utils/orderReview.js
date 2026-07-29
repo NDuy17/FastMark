@@ -1,7 +1,7 @@
 import { Alert } from 'react-native';
 
 import { submitBuyerReviewOnBackend } from '../../api/reviewApi';
-import { markOrderAsReviewed } from '../../hooks/useReviewedOrderCodes';
+import { markOrderAsReviewed, getReviewForOrder } from '../../hooks/useReviewedOrderCodes';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 
 import {
@@ -28,6 +28,10 @@ export function canReviewPurchaseOrder(order) {
 }
 
 export function canReviewReservationOrder(order) {
+  const reasonCode = String(order?.cancelReason || '').trim();
+  if (reasonCode === 'buyer_forfeit') {
+    return false;
+  }
   return (
     order?.status === RESERVATION_STATUS.COMPLETED ||
     order?.status === RESERVATION_STATUS.AUTO_COMPLETED ||
@@ -45,16 +49,91 @@ export function canReviewOrder(order) {
   return canReviewReservationOrder(order);
 }
 
+export function hasOrderReviewSubmitted(order) {
+  return order?.hasReviewed === true;
+}
+
+export function hasActiveReviewOnOrder(order, reviewsByOrderId = null) {
+  if (order?.buyerReview?.id) {
+    return true;
+  }
+  if (order?.hasActiveReview === true || order?.buyerReviewId) {
+    return true;
+  }
+  if (reviewsByOrderId) {
+    const review = getReviewForOrder(order, reviewsByOrderId);
+    return Boolean(review?.id);
+  }
+  return false;
+}
+
 export function canShowReviewButton(order, reviewedOrderCodes) {
   if (!canReviewOrder(order)) {
     return false;
   }
-  const key = String(order?.orderCode || order?.id || '').trim();
-  return Boolean(key && !reviewedOrderCodes?.has(key));
+  if (hasOrderReviewSubmitted(order)) {
+    return false;
+  }
+  if (hasActiveReviewOnOrder(order)) {
+    return false;
+  }
+  const key = String(order?.orderCode || order?.id || order?.reservationId || '').trim();
+  if (order?.hasReviewed === undefined && key && reviewedOrderCodes?.has(key)) {
+    return false;
+  }
+  return true;
 }
 
-export function isOrderAlreadyReviewed(order, reviewedOrderCodes) {
-  const key = String(order?.orderCode || order?.id || '').trim();
+/** Còn bản ghi Review active trong DB theo reservationId → hiện「Xem đánh giá」. */
+export function canViewExistingReview(order, reviewsByOrderId) {
+  if (!canReviewOrder(order)) {
+    return false;
+  }
+  return hasActiveReviewOnOrder(order, reviewsByOrderId);
+}
+
+export function buildViewReviewPayload(order, reviewsByOrderId, extras = {}) {
+  const mergeExtras = (review) => ({
+    ...review,
+    storeName: extras.storeName || order?.storeName || review.storeName || '',
+    productName:
+      extras.productName ||
+      order?.product?.productName ||
+      order?.productName ||
+      review.productName ||
+      '',
+    shopId: extras.shopId || (order?.shopId ? String(order.shopId) : review.shopId || ''),
+  });
+
+  if (order?.buyerReview?.id) {
+    return mergeExtras(order.buyerReview);
+  }
+
+  const stored = getReviewForOrder(order, reviewsByOrderId);
+  if (stored?.id) {
+    return mergeExtras(stored);
+  }
+
+  const reviewId = String(order?.buyerReviewId || '').trim();
+  const reservationId = String(
+    order?.id || order?.reservationId || order?.orderCode || ''
+  ).trim();
+  if (!reviewId && !reservationId) {
+    return null;
+  }
+
+  return mergeExtras({
+    id: reviewId || undefined,
+    reservationId,
+    orderCode: reservationId,
+  });
+}
+
+export function isOrderAlreadyReviewed(order, reviewedOrderCodes, reviewsByOrderId = null) {
+  if (reviewsByOrderId) {
+    return canViewExistingReview(order, reviewsByOrderId);
+  }
+  const key = String(order?.orderCode || order?.id || order?.reservationId || '').trim();
   return Boolean(key && reviewedOrderCodes?.has(key));
 }
 
@@ -106,7 +185,10 @@ export async function submitShopReview({
       imageUrl,
     });
 
-    markOrderAsReviewed({ orderCode: resolvedReservationId, id: resolvedReservationId });
+    markOrderAsReviewed(
+      { orderCode: resolvedReservationId, id: resolvedReservationId },
+      review
+    );
     return review;
   } catch (error) {
     if (error.statusCode === 409) {

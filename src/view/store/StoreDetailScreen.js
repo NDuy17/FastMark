@@ -1,16 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  ActivityIndicator,
-  Image,
-  Linking,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 
@@ -47,6 +36,7 @@ import CircularBackButton from '../shared/components/CircularBackButton';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import FollowConnectionsScreen from '../profile/FollowConnectionsScreen';
 import ContactActions from './components/ContactActions';
+import ProductDetailScreen from './ProductDetailScreen';
 import StarRating from './components/StarRating';
 import ReportSheet from '../shared/components/ReportSheet';
 import ReportComposeModal from '../shared/components/ReportComposeModal';
@@ -126,7 +116,6 @@ export default function StoreDetailScreen({
   originLocation: originLocationProp = null,
   onBack,
   onProductPress,
-  onOpenChat,
   onNavigateDirections,
   previewMode = false,
 }) {
@@ -146,6 +135,28 @@ export default function StoreDetailScreen({
   const [likedProducts, setLikedProducts] = useState({});
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(null);
   const [resolvedOrigin, setResolvedOrigin] = useState(null);
+  const [selectedProductId, setSelectedProductId] = useState(null);
+
+  const handleProductPress = useCallback(
+    (productId) => {
+      const nextProductId = String(productId || '').trim();
+      if (!nextProductId) {
+        return;
+      }
+
+      if (typeof onProductPress === 'function') {
+        onProductPress(nextProductId);
+        return;
+      }
+
+      setSelectedProductId(nextProductId);
+    },
+    [onProductPress]
+  );
+
+  useEffect(() => {
+    setSelectedProductId(null);
+  }, [storeId]);
 
   const originLocation = hasValidLocation(originLocationProp)
     ? originLocationProp
@@ -420,13 +431,12 @@ export default function StoreDetailScreen({
 
     log.info('StoreDetailScreen:load', { storeId });
 
-    Promise.all([
-      loadStoreById(storeId),
-      loadProductsByStoreId(storeId),
-      loadReviewsByStoreId(storeId),
-    ])
-      .then(([storeData, productData, reviewData]) => {
+    Promise.all([loadStoreById(storeId), loadProductsByStoreId(storeId)])
+      .then(async ([storeData, productData]) => {
         if (!isCurrent) return;
+
+        const reviewData = storeData ? await loadReviewsByStoreId(storeId) : [];
+
         log.ok('StoreDetailScreen:loaded', {
           storeId,
           products: productData.length,
@@ -467,24 +477,16 @@ export default function StoreDetailScreen({
     );
   }
 
-  const username = store.userName
-    ? `@${store.userName}`
-    : store.shop_username
-      ? `@${store.shop_username}`
-      : '';
-  const hoursText = formatHours(store.open_time, store.close_time);
-  const coverImage = store.cover_image_url || store.image_url;
-  const shopTitle = store.fullName || store.shop_name || store.name || 'Shop';
-  const shopInitial = getAvatarInitial(shopTitle);
-  const currentUserId = String(authProfile?.mongoUserId || authProfile?.id || '');
-  const ownerUserId = String(store.owner_user_id || '');
-  const isShopOwner = Boolean(currentUserId && ownerUserId && currentUserId === ownerUserId);
-  const productLikesTotal = products.reduce(
-    (sum, product) => sum + (Number(product.likeCount) || 0),
-    0
-  );
-  const displayLikes =
-    productLikesTotal > 0 ? productLikesTotal : Number(store.total_likes) || 0;
+  if (selectedProductId) {
+    return (
+      <ProductDetailScreen
+        productId={selectedProductId}
+        onBack={() => setSelectedProductId(null)}
+        onStorePress={() => setSelectedProductId(null)}
+        reservationSource="store"
+      />
+    );
+  }
 
   function handleReportReason(reason) {
     setReportVisible(false);
@@ -518,16 +520,67 @@ export default function StoreDetailScreen({
     }
   }
 
-  function handleOpenChat() {
-    const shopId = store.id || storeId;
-    if (!shopId) {
-      return;
-    }
-    onOpenChat?.({
-      shopId: String(shopId),
-      shopName: store.shop_name || store.fullName || store.name || 'Gian hàng',
-    });
+  const isShopLocked = Boolean(
+    store.isShopLocked || store.isLocked || Number(store.status) === 0
+  );
+
+  if (isShopLocked) {
+    const lockedTitle = store.shop_name || store.name || 'Gian hàng';
+    return (
+      <View style={[styles.loadingScreen, styles.lockedScreen]}>
+        {onBack ? (
+          <View style={[styles.lockedHeader, { paddingTop: insets.top + 8 }]}>
+            <CircularBackButton onPress={onBack} />
+          </View>
+        ) : null}
+        <View style={styles.lockedBody}>
+          <Ionicons name="lock-closed" size={40} color="#b45309" />
+          <Text style={styles.lockedTitle}>Gian hàng đã bị khóa</Text>
+          <Text style={styles.lockedSubtitle}>
+            {lockedTitle} hiện không hoạt động. Mọi đơn đang treo đã được hủy và hoàn cọc cho
+            người mua.
+          </Text>
+          <Pressable style={styles.lockedReportBtn} onPress={() => setReportVisible(true)}>
+            <Text style={styles.lockedReportBtnText}>Báo cáo cho admin</Text>
+          </Pressable>
+        </View>
+        <ReportSheet
+          visible={reportVisible}
+          onClose={() => setReportVisible(false)}
+          onSubmit={handleReportReason}
+          title="Báo cáo gian hàng bị khóa"
+        />
+        <ReportComposeModal
+          visible={composeVisible}
+          onClose={() => {
+            setComposeVisible(false);
+            setReportReason('');
+          }}
+          reason={reportReason}
+          onSubmit={handleReportComposeSubmit}
+        />
+      </View>
+    );
   }
+
+  const username = store.userName
+    ? `@${store.userName}`
+    : store.shop_username
+      ? `@${store.shop_username}`
+      : '';
+  const hoursText = formatHours(store.open_time, store.close_time);
+  const coverImage = store.cover_image_url || store.image_url;
+  const shopTitle = store.fullName || store.shop_name || store.name || 'Shop';
+  const shopInitial = getAvatarInitial(shopTitle);
+  const currentUserId = String(authProfile?.mongoUserId || authProfile?.id || '');
+  const ownerUserId = String(store.owner_user_id || '');
+  const isShopOwner = Boolean(currentUserId && ownerUserId && currentUserId === ownerUserId);
+  const productLikesTotal = products.reduce(
+    (sum, product) => sum + (Number(product.likeCount) || 0),
+    0
+  );
+  const displayLikes =
+    productLikesTotal > 0 ? productLikesTotal : Number(store.total_likes) || 0;
 
   function handleNavigateDirections() {
     const latitude = Number(store.latitude);
@@ -605,6 +658,7 @@ export default function StoreDetailScreen({
                 {shopTitle}
               </Text>
               <View style={styles.actionBtnRow}>
+                {!isShopOwner ? (
                 <Pressable
                   onPress={toggleFollow}
                   disabled={followBusy}
@@ -621,6 +675,7 @@ export default function StoreDetailScreen({
                     {isFollowing ? 'Hủy theo dõi' : '+ Theo dõi'}
                   </Text>
                 </Pressable>
+                ) : null}
               </View>
             </View>
             {username ? <Text style={styles.shopUsername}>{username}</Text> : null}
@@ -682,12 +737,11 @@ export default function StoreDetailScreen({
                 {hasCoords ? (
                   <Pressable
                     onPress={handleNavigateDirections}
-                    style={({ pressed }) => [styles.directionsChip, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.directionsBtn, pressed && styles.pressed]}
                     accessibilityRole="button"
                     accessibilityLabel="Chỉ đường"
                   >
-                    <Ionicons name="navigate" size={13} color="#076F32" />
-                    <Text style={styles.directionsChipText}>Chỉ đường</Text>
+                    <Ionicons name="navigate" size={18} color="#076F32" />
                   </Pressable>
                 ) : null}
               </View>
@@ -701,7 +755,7 @@ export default function StoreDetailScreen({
           />
 
           <View style={styles.contactActions}>
-            <ContactActions phone={store.phone} onMessage={handleOpenChat} />
+            <ContactActions phone={store.phone} />
           </View>
         </View>
         <View style={styles.tabBar}>
@@ -796,7 +850,7 @@ export default function StoreDetailScreen({
                   <Pressable
                     key={product.id}
                     style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}
-                    onPress={() => onProductPress?.(product.id)}
+                    onPress={() => handleProductPress(product.id)}
                   >
                     <View style={styles.productImageWrap}>
                       <View style={styles.productImage}>
@@ -919,6 +973,47 @@ const styles = StyleSheet.create({
   backLinkText: {
     color: '#076F32',
     fontWeight: '700',
+  },
+  lockedScreen: {
+    backgroundColor: '#fffbeb',
+    justifyContent: 'flex-start',
+  },
+  lockedHeader: {
+    paddingHorizontal: 16,
+    alignSelf: 'stretch',
+  },
+  lockedBody: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    paddingBottom: 48,
+  },
+  lockedTitle: {
+    marginTop: 16,
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  lockedSubtitle: {
+    marginTop: 10,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  lockedReportBtn: {
+    backgroundColor: '#076F32',
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  lockedReportBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
   },
   scroll: {
     flex: 1,
@@ -1125,8 +1220,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   infoLine: {
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 14,
+    lineHeight: 20,
   },
   infoLabelInline: {
     color: '#64748b',
@@ -1151,21 +1246,16 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  directionsChip: {
-    flexDirection: 'row',
+  directionsBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+    justifyContent: 'center',
     backgroundColor: '#E6F4EC',
     borderWidth: 1,
     borderColor: '#A7D9B8',
-  },
-  directionsChipText: {
-    color: '#076F32',
-    fontSize: 11,
-    fontWeight: '800',
+    flexShrink: 0,
   },
   tabBar: {
     flexDirection: 'row',

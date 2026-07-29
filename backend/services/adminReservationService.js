@@ -4,6 +4,7 @@ const ReservationAuditLog = require("../models/ReservationAuditLog");
 const User = require("../models/User");
 const ShopProfile = require("../models/ShopProfile");
 const Product = require("../models/Product");
+const ProductVariant = require("../models/ProductVariant");
 const {
   RESERVATION_STATUS,
   RESERVATION_STATUS_LABEL,
@@ -12,6 +13,7 @@ const {
   REPORT_STATUS,
   RESERVATION_REPORT_TYPES,
 } = require("../constants");
+const { getReservationReasonLabels } = require("../constants/reservationOrderFlow");
 const {
   toPublicReservation,
   refundDepositIfHeld,
@@ -19,17 +21,30 @@ const {
   processReservationLifecycle,
   releaseVariantInventory,
 } = require("./reservationService");
+const { emitOrderUpdated } = require("./orderRealtimeService");
 const reservationDisputeService = require("./reservationDisputeService");
 const Report = require("../models/Report");
+const Review = require("../models/Review");
+const {
+  buildSearchRegex,
+  buildStatusLabelEntries,
+  resolveStatusesFromLabelSearch,
+  appendUniqueOrConditions,
+} = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+} = require("../utils/adminSearchHelpers");
+const {
+  resolveShopDisplayName,
+  resolveShopAvatar,
+  resolveShopUsername,
+} = require("../utils/shopIdentity");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
-}
-
-function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function pickString(value) {
@@ -71,6 +86,10 @@ function parseDate(value, endOfDay = false) {
 function resolveTabStatusFilter(tab) {
   const normalized = pickString(tab).toLowerCase();
   switch (normalized) {
+    case "pending":
+    case "pending_confirmation":
+    case "waiting_confirmation":
+      return [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION];
     case "disputes":
     case "dispute":
       return [RESERVATION_STATUS.DISPUTED];
@@ -90,6 +109,10 @@ function resolveTabStatusFilter(tab) {
         RESERVATION_STATUS.REFUNDED,
         RESERVATION_STATUS.DISPUTE_RESOLVED,
       ];
+    case "seller_cancelled":
+    case "seller_cancel_after_accept":
+      // Filter đặc biệt trong buildListFilter (flag cancelledBySellerAfterAccept).
+      return null;
     default:
       return null;
   }
@@ -110,24 +133,65 @@ async function resolveSellerShopIds(sellerId) {
   return shops.map((shop) => shop._id);
 }
 
+async function buildProductReservationMatch(objectId) {
+  if (!objectId) {
+    return null;
+  }
+
+  const variantIds = await ProductVariant.find({ ProductId: objectId }).distinct("_id");
+  const conditions = [{ productId: objectId }];
+  if (variantIds.length) {
+    conditions.push({ variantId: { $in: variantIds } });
+  }
+
+  return { $or: conditions };
+}
+
+const ADMIN_RESERVATION_STATUS_SEARCH = [
+  ...buildStatusLabelEntries(RESERVATION_STATUS_LABEL),
+  { label: 'Hoàn thành', statuses: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED] },
+  { label: 'Đã hủy', statuses: [RESERVATION_STATUS.REJECTED, RESERVATION_STATUS.REFUNDED, RESERVATION_STATUS.DISPUTE_RESOLVED] },
+  { label: 'Giữ hàng', statuses: [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION, RESERVATION_STATUS.WAITING_PICKUP] },
+  { label: 'Tranh chấp', statuses: [RESERVATION_STATUS.DISPUTED] },
+  { label: 'Chờ xác nhận', statuses: [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION] },
+];
+
+function buildReservationCodeSearchConditions(search) {
+  return buildObjectIdSearchConditions(search);
+}
+
 async function buildListFilter(query = {}) {
   const filter = {};
   const search = pickString(query.search);
   const buyerId = toObjectId(query.buyerId);
+  const productId = toObjectId(query.productId);
   const sellerId = pickString(query.sellerId);
   const dateFrom = parseDate(query.dateFrom);
   const dateTo = parseDate(query.dateTo, true);
+  const tabNormalized = pickString(query.tab).toLowerCase();
 
-  const tabStatuses = resolveTabStatusFilter(query.tab);
-  const statusRaw = pickString(query.status);
-  if (tabStatuses?.length) {
-    filter.status = tabStatuses.length === 1 ? tabStatuses[0] : { $in: tabStatuses };
-  } else if (statusRaw !== "" && Number.isFinite(Number(statusRaw))) {
-    filter.status = Number(statusRaw);
+  if (tabNormalized === "seller_cancelled" || tabNormalized === "seller_cancel_after_accept") {
+    filter.cancelledBySellerAfterAccept = true;
+  } else {
+    const tabStatuses = resolveTabStatusFilter(query.tab);
+    const statusRaw = pickString(query.status);
+    if (tabStatuses?.length) {
+      filter.status = tabStatuses.length === 1 ? tabStatuses[0] : { $in: tabStatuses };
+    } else if (statusRaw !== "" && Number.isFinite(Number(statusRaw))) {
+      filter.status = Number(statusRaw);
+    }
   }
 
   if (buyerId) {
     filter.userId = buyerId;
+  }
+
+  if (productId) {
+    const productMatch = await buildProductReservationMatch(productId);
+    if (productMatch) {
+      filter.$and = Array.isArray(filter.$and) ? filter.$and : [];
+      filter.$and.push(productMatch);
+    }
   }
 
   if (sellerId) {
@@ -150,32 +214,56 @@ async function buildListFilter(query = {}) {
   }
 
   if (search) {
-    const regex = new RegExp(escapeRegex(search), "i");
-    const matchedUsers = await User.find({
-      $or: [{ FullName: regex }, { UserName: regex }, { Email: regex }, { Phone: regex }],
-    })
-      .select("_id")
-      .lean();
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
 
-    const matchedUserIds = matchedUsers.map((item) => item._id);
-    const shops = matchedUserIds.length
-      ? await ShopProfile.find({ userId: { $in: matchedUserIds } }).select("_id").lean()
-      : [];
+    if (regex) {
+      const matchedUsers = await findUsersBySearchRegex(User, regex);
 
-    const orConditions = [
-      { userId: { $in: matchedUserIds } },
-      { shopId: { $in: shops.map((item) => item._id) } },
-      { note: regex },
-      { cancelReason: regex },
-      { disputeReason: regex },
-      { disputeDescription: regex },
-    ];
+      const matchedUserIds = matchedUsers.map((item) => item._id);
+      const [shopsByOwner, shopsByName, matchedProducts] = await Promise.all([
+        matchedUserIds.length
+          ? ShopProfile.find({ userId: { $in: matchedUserIds } }).select("_id").lean()
+          : [],
+        ShopProfile.find({ $or: [{ shopName: regex }, { shopUsername: regex }] })
+          .select("_id")
+          .lean(),
+        Product.find({ ProductName: regex }).select("_id").lean(),
+      ]);
 
-    if (mongoose.Types.ObjectId.isValid(search)) {
-      orConditions.push({ _id: new mongoose.Types.ObjectId(search) });
+      const shopIds = [
+        ...new Set(
+          [...shopsByOwner, ...shopsByName].map((item) => String(item._id)).filter(Boolean)
+        ),
+      ].map((id) => new mongoose.Types.ObjectId(id));
+
+      orConditions.push(
+        { userId: { $in: matchedUserIds } },
+        { shopId: { $in: shopIds } },
+        { productId: { $in: matchedProducts.map((item) => item._id) } },
+        { note: regex },
+        { cancelReason: regex },
+        { cancelNote: regex },
+        { disputeReason: regex },
+        { disputeDescription: regex }
+      );
     }
 
-    filter.$or = orConditions;
+    orConditions.push(...buildReservationCodeSearchConditions(search));
+
+    const matchedStatuses = resolveStatusesFromLabelSearch(search, ADMIN_RESERVATION_STATUS_SEARCH);
+    if (matchedStatuses.length) {
+      orConditions.push({ status: { $in: matchedStatuses } });
+    }
+
+    if (!productId && mongoose.Types.ObjectId.isValid(search)) {
+      orConditions.push({ _id: new mongoose.Types.ObjectId(search) });
+      orConditions.push({ productId: new mongoose.Types.ObjectId(search) });
+    }
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
 
   return filter;
@@ -195,6 +283,7 @@ async function getReservationStats(extraFilter = {}) {
     pendingSellerConfirmation,
     rejected,
     disputeResolved,
+    sellerCancelledAfterAccept,
   ] = await Promise.all([
     Reservation.countDocuments(base),
     Reservation.countDocuments({ ...base, status: RESERVATION_STATUS.WAITING_PICKUP }),
@@ -211,6 +300,7 @@ async function getReservationStats(extraFilter = {}) {
       ...base,
       status: RESERVATION_STATUS.DISPUTE_RESOLVED,
     }),
+    Reservation.countDocuments({ ...base, cancelledBySellerAfterAccept: true }),
   ]);
 
   const cancelled = rejected + refunded + disputeResolved;
@@ -227,16 +317,30 @@ async function getReservationStats(extraFilter = {}) {
     rejected,
     disputeResolved,
     cancelled,
+    sellerCancelledAfterAccept,
   };
 }
 
-function mapListItem(reservation, { buyer, shop, shopOwner, product } = {}) {
-  const shopName =
-    shop?.shopName ||
-    shopOwner?.FullName ||
-    shopOwner?.UserName ||
-    shop?.description ||
-    "";
+function resolveLegacyProductThumbnail(product) {
+  if (!product) return "";
+  if (Array.isArray(product.Thumbnail)) {
+    return product.Thumbnail.map(pickString).filter(Boolean)[0] || "";
+  }
+  return pickString(product.Thumbnail);
+}
+
+function resolveProductThumbnail(product, imageDocs = []) {
+  if (!product) return "";
+  const { toPublicProductImages } = require("./productService");
+  const thumbs = toPublicProductImages(imageDocs).map((image) => image.imageUrl);
+  return thumbs[0] || resolveLegacyProductThumbnail(product) || "";
+}
+
+function mapListItem(reservation, { buyer, shop, shopOwner, product, productThumbnail = "" } = {}) {
+  const shopName = resolveShopDisplayName(shop, shopOwner);
+  const shopUsername = resolveShopUsername(shop, shopOwner);
+  const shopAvatar = resolveShopAvatar(shop, shopOwner);
+  const reasonLabels = getReservationReasonLabels(reservation);
 
   return {
     id: String(reservation._id),
@@ -250,6 +354,15 @@ function mapListItem(reservation, { buyer, shop, shopOwner, product } = {}) {
     pickupTime: reservation.pickupTime || null,
     note: reservation.note || "",
     cancelReason: reservation.cancelReason || "",
+    cancelNote: reservation.cancelNote || "",
+    reasonCode: reasonLabels.reasonCode || "",
+    reasonLabelBuyer: reasonLabels.buyer || "",
+    reasonLabelSeller: reasonLabels.seller || "",
+    cancelledBy: reservation.cancelledBy || "",
+    cancelledBySellerAfterAccept: Boolean(reservation.cancelledBySellerAfterAccept),
+    sellerCancelImages: Array.isArray(reservation.sellerCancelImages)
+      ? reservation.sellerCancelImages.filter(Boolean)
+      : [],
     disputeByBuyer: Boolean(reservation.disputeByBuyer),
     disputeBySeller: Boolean(reservation.disputeBySeller),
     disputedAt: reservation.disputedAt || null,
@@ -260,6 +373,8 @@ function mapListItem(reservation, { buyer, shop, shopOwner, product } = {}) {
       "",
     disputeDescription: reservation.disputeDescription || "",
     createdAt: reservation.CreatedAt || null,
+    productId: reservation.productId ? String(reservation.productId) : "",
+    variantId: reservation.variantId ? String(reservation.variantId) : "",
     buyer: buyer
       ? {
           id: String(buyer._id),
@@ -274,6 +389,8 @@ function mapListItem(reservation, { buyer, shop, shopOwner, product } = {}) {
       ? {
           id: String(shop._id),
           shopName,
+          shopUsername,
+          avatar: shopAvatar,
           userId: shop.userId ? String(shop.userId) : "",
           address: shop.addressHeThong || shop.address || "",
           phone: shopOwner?.Phone || "",
@@ -283,7 +400,7 @@ function mapListItem(reservation, { buyer, shop, shopOwner, product } = {}) {
       ? {
           id: String(product._id),
           productName: product.ProductName || "",
-          thumbnail: product.Thumbnail || "",
+          thumbnail: productThumbnail || resolveLegacyProductThumbnail(product),
         }
       : null,
   };
@@ -308,7 +425,7 @@ async function hydrateReservations(reservations) {
       : [],
     shopIds.length
       ? ShopProfile.find({ _id: { $in: shopIds } })
-          .select("userId description address shopName shopUsername")
+          .select("userId description address shopName shopUsername avatar addressHeThong")
           .lean()
       : [],
     productIds.length
@@ -330,13 +447,24 @@ async function hydrateReservations(reservations) {
   const productMap = new Map(products.map((item) => [String(item._id), item]));
   const ownerMap = new Map(owners.map((item) => [String(item._id), item]));
 
+  const { loadProductImagesByProductIds } = require("./productService");
+  const imagesByProduct = productIds.length
+    ? await loadProductImagesByProductIds(productIds)
+    : new Map();
+
   return reservations.map((item) => {
     const shop = shopMap.get(String(item.shopId || ""));
+    const product = productMap.get(String(item.productId || ""));
+    const productThumbnail = resolveProductThumbnail(
+      product,
+      imagesByProduct.get(String(item.productId || "")) || []
+    );
     return mapListItem(item, {
       buyer: userMap.get(String(item.userId || "")),
       shop,
       shopOwner: shop ? ownerMap.get(String(shop.userId || "")) : null,
-      product: productMap.get(String(item.productId || "")),
+      product,
+      productThumbnail,
     });
   });
 }
@@ -381,28 +509,57 @@ async function getBuyerStats(userId) {
       totalReservations: 0,
       successfulReservations: 0,
       previousDisputes: 0,
+      averageRating: 0,
+      reviewCount: 0,
     };
   }
 
-  const [totalReservations, successfulReservations, previousDisputes] = await Promise.all([
-    Reservation.countDocuments({ userId }),
-    Reservation.countDocuments({
-      userId,
-      status: {
-        $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED],
-      },
-    }),
-    Reservation.countDocuments({
-      userId,
-      $or: [
-        { status: RESERVATION_STATUS.DISPUTED },
-        { disputeByBuyer: true },
-        { disputeBySeller: true },
-      ],
-    }),
-  ]);
+  const [totalReservations, successfulReservations, previousDisputes, reviewAgg] =
+    await Promise.all([
+      Reservation.countDocuments({ userId }),
+      Reservation.countDocuments({
+        userId,
+        status: {
+          $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED],
+        },
+      }),
+      Reservation.countDocuments({
+        userId,
+        $or: [
+          { status: RESERVATION_STATUS.DISPUTED },
+          { disputeByBuyer: true },
+          { disputeBySeller: true },
+        ],
+      }),
+      Review.aggregate([
+        {
+          $match: {
+            userId,
+            isDeleted: { $ne: true },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            averageRating: { $avg: "$rating" },
+            reviewCount: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
 
-  return { totalReservations, successfulReservations, previousDisputes };
+  const reviewSummary = reviewAgg[0] || {};
+  const averageRating = reviewSummary.averageRating
+    ? Math.round(Number(reviewSummary.averageRating) * 10) / 10
+    : 0;
+
+  return {
+    totalReservations,
+    successfulReservations,
+    previousDisputes,
+    averageRating,
+    reviewCount: Number(reviewSummary.reviewCount) || 0,
+  };
 }
 
 async function getShopStats(shopId) {
@@ -411,10 +568,12 @@ async function getShopStats(shopId) {
       totalReservations: 0,
       completedOrders: 0,
       previousDisputes: 0,
+      averageRating: 0,
+      followersCount: 0,
     };
   }
 
-  const [totalReservations, completedOrders, previousDisputes] = await Promise.all([
+  const [totalReservations, completedOrders, previousDisputes, shop] = await Promise.all([
     Reservation.countDocuments({ shopId }),
     Reservation.countDocuments({
       shopId,
@@ -430,9 +589,16 @@ async function getShopStats(shopId) {
         { disputeBySeller: true },
       ],
     }),
+    ShopProfile.findById(shopId).select("averageRating followersCount").lean(),
   ]);
 
-  return { totalReservations, completedOrders, previousDisputes };
+  return {
+    totalReservations,
+    completedOrders,
+    previousDisputes,
+    averageRating: Number(shop?.averageRating) || 0,
+    followersCount: Number(shop?.followersCount) || 0,
+  };
 }
 
 async function getReservationDetail(reservationId) {
@@ -467,13 +633,9 @@ async function getReservationDetail(reservationId) {
       .lean();
   }
 
-  const shopName =
-    shop?.shopName ||
-    shopOwner?.FullName ||
-    shopOwner?.UserName ||
-    shop?.description ||
-    publicReservation.storeName ||
-    "";
+  const shopName = resolveShopDisplayName(shop, shopOwner);
+  const shopUsername = resolveShopUsername(shop, shopOwner);
+  const shopAvatar = resolveShopAvatar(shop, shopOwner);
 
   return {
     ...publicReservation,
@@ -481,13 +643,14 @@ async function getReservationDetail(reservationId) {
       ? {
           id: String(shop._id),
           shopName,
+          shopUsername,
           userId: shop.userId ? String(shop.userId) : "",
           fullName: shopOwner?.FullName || "",
           userName: shopOwner?.UserName || "",
           email: shopOwner?.Email || "",
           address: shop.addressHeThong || shop.address || "",
           phone: shopOwner?.Phone || "",
-          avatar: shopOwner?.Avatar || "",
+          avatar: shopAvatar,
         }
       : null,
     seller: shopOwner
@@ -600,6 +763,7 @@ async function refundToBuyer(adminUser, reservationId, { note } = {}) {
     note,
   });
 
+  await emitOrderUpdated(reservation, { action: "admin_refund_buyer" });
   return getReservationDetail(reservation._id);
 }
 
@@ -646,6 +810,7 @@ async function releaseToSeller(adminUser, reservationId, { note } = {}) {
     note,
   });
 
+  await emitOrderUpdated(reservation, { action: "admin_release_seller" });
   return getReservationDetail(reservation._id);
 }
 
@@ -688,6 +853,7 @@ async function cancelReservation(adminUser, reservationId, reason = "") {
     });
   }
 
+  await emitOrderUpdated(reservation, { action: "admin_cancel" });
   return getReservationDetail(reservationId);
 }
 

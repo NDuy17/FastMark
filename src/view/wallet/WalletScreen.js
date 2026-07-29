@@ -17,6 +17,8 @@ import { useScreenInsets } from '../../hooks/useScreenInsets';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { WALLET_TX_STATUS } from '../../model/walletModel';
 import { loadWalletViewModel } from '../../viewmodel/wallet/walletViewModel';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import WalletTransactionDetailScreen from './WalletTransactionDetailScreen';
 
 function formatTxTime(value) {
@@ -101,17 +103,15 @@ export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTran
   const [refreshing, setRefreshing] = useState(false);
   const [wallet, setWallet] = useState({ balance: 0 });
   const [transactions, setTransactions] = useState([]);
-  const [error, setError] = useState('');
   const [selectedTransaction, setSelectedTransaction] = useState(null);
 
   const load = useCallback(async () => {
-    setError('');
     try {
       const data = await loadWalletViewModel();
       setWallet(data.wallet);
       setTransactions(data.transactions || []);
     } catch (err) {
-      setError(err.message || 'Không tải được ví.');
+      showErrorAlert(err.message || 'Không tải được ví.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -121,6 +121,16 @@ export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTran
   useEffect(() => {
     load();
   }, [load]);
+
+  useResourceSocket({
+    enabled: true,
+    onResourceUpdated: (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type === 'wallet' || type === 'withdraw') {
+        load();
+      }
+    },
+  });
 
   if (selectedTransaction) {
     return (
@@ -157,8 +167,6 @@ export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTran
             />
           }
         >
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>Tổng số dư</Text>
             <Text style={styles.balanceValue}>{formatPrice(wallet.balance)}</Text>

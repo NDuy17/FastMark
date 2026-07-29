@@ -5,7 +5,12 @@ const ShopProfile = require("../models/ShopProfile");
 const { USER_STATUS } = require("../constants");
 const { SHOP_STATUS } = require("../constants");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants");
+const { NOTIFICATION_AUDIENCE, NOTIFICATION_INDEX } = require("../constants");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+  resolveShopAvatar,
+} = require("../utils/shopIdentity");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -105,9 +110,9 @@ function toClientUserCard(user, extra = {}, shop = null) {
     followingCount: Number(user.FollowingCount) || 0,
     // Tương thích UI cũ từng hiện shop khi follow seller.
     shopId: shop?._id ? String(shop._id) : "",
-    shopName: shop?.shopName || user.FullName || "",
-    shopUsername: shop?.shopUsername || user.UserName || "",
-    shopAvatar: user.Avatar || "",
+    shopName: resolveShopDisplayName(shop, user),
+    shopUsername: resolveShopUsername(shop, user),
+    shopAvatar: resolveShopAvatar(shop, user),
     address: shop?.addressHeThong || shop?.address || shop?.DiaChiHeThong || "",
     averageRating: Number(shop?.averageRating) || 0,
     totalProducts: Number(shop?.totalProducts) || 0,
@@ -224,6 +229,7 @@ async function followUser(currentUser, payload = {}) {
     title: "Có người theo dõi bạn",
     content: `${followerName} vừa theo dõi bạn.`,
     audience: NOTIFICATION_AUDIENCE.SYSTEM,
+    index: NOTIFICATION_INDEX.SYSTEM,
   });
 
   const [freshFollower, freshTarget, shop] = await Promise.all([

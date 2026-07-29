@@ -2,10 +2,15 @@ import { normalizeCategoryId } from '../core/utils/categoryId';
 
 export const ROLE_BUYER = 1;
 export const ROLE_SELLER = 2;
+export const ROLE_ADMIN = 3;
 
 export function normalizeRole(role) {
   const value = Number(role);
   return Number.isFinite(value) ? value : ROLE_BUYER;
+}
+
+export function isAdminRole(role) {
+  return normalizeRole(role) === ROLE_ADMIN;
 }
 
 export function isSellerRole(role) {
@@ -179,6 +184,22 @@ export function mergeProfile(authUser, baseProfile, updates = {}) {
       patch.walletBalance !== undefined
         ? Math.max(0, Number(patch.walletBalance) || 0)
         : Math.max(0, Number(baseProfile?.walletBalance) || 0),
+    shopStatus:
+      patch.shopStatus !== undefined
+        ? Number(patch.shopStatus)
+        : baseProfile?.shopStatus !== undefined
+          ? Number(baseProfile.shopStatus)
+          : 1,
+    shopId:
+      patch.shopId !== undefined
+        ? cleanText(patch.shopId)
+        : baseProfile?.shopId || '',
+    status:
+      patch.status !== undefined
+        ? Number(patch.status)
+        : baseProfile?.status !== undefined
+          ? Number(baseProfile.status)
+          : 1,
     updatedAt: nowIso(),
   };
 }
@@ -194,7 +215,7 @@ export function mapShopSettingsToProfilePatch(shop) {
     categoryId: cleanText(shop.categoryId),
     categoryName: cleanText(shop.categoryName),
     shopDescription: cleanText(shop.description || shop.shopDescription),
-    shopAvatar: cleanText(shop.avatar || shop.shopAvatar || ''),
+    shopAvatar: cleanText(shop.shopAvatar || shop.avatar || ''),
     shopAddress: cleanText(shop.address),
     shopSystemAddress: cleanText(shop.systemAddress),
     shopPhone: cleanText(shop.shopPhone),
@@ -202,6 +223,8 @@ export function mapShopSettingsToProfilePatch(shop) {
     closeTime: cleanText(shop.closeTime),
     isOpen: Number(shop.isOpen) === 1 ? 1 : 0,
     pinHours: Boolean(shop.pinHours),
+    shopStatus: Number(shop.status ?? shop.shopStatus ?? 1),
+    shopId: cleanText(shop.id || shop.shopId),
   };
 }
 
@@ -259,5 +282,8 @@ export function mapBackendUserToProfile(backendUser, authUser) {
     closeTime: backendUser?.closeTime || '',
     isOpen: backendUser?.isOpen ?? 1,
     walletBalance: backendUser?.walletBalance ?? 0,
+    status: backendUser?.status ?? 1,
+    shopStatus: backendUser?.shopStatus ?? 1,
+    shopId: backendUser?.shopId ? String(backendUser.shopId) : '',
   });
 }

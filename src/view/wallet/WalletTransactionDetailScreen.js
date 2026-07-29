@@ -14,6 +14,7 @@ import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { WALLET_TX_STATUS, normalizeWalletTransaction } from '../../model/walletModel';
 import { loadWalletTransactionDetailViewModel } from '../../viewmodel/wallet/walletViewModel';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 
 function formatTxTime(value) {
@@ -56,7 +57,6 @@ export default function WalletTransactionDetailScreen({
 }) {
   const insets = useScreenInsets();
   const [loading, setLoading] = useState(!initialTransaction);
-  const [error, setError] = useState('');
   const [transaction, setTransaction] = useState(() =>
     initialTransaction ? normalizeWalletTransaction(initialTransaction) : null
   );
@@ -64,19 +64,18 @@ export default function WalletTransactionDetailScreen({
   const load = useCallback(async () => {
     const id = transactionId || initialTransaction?.id;
     if (!id) {
-      setError('Không tìm thấy giao dịch.');
+      showErrorAlert('Không tìm thấy giao dịch.');
       setLoading(false);
       return;
     }
 
-    setError('');
     setLoading(true);
     try {
       const data = await loadWalletTransactionDetailViewModel(id);
       setTransaction(data.transaction);
     } catch (err) {
       if (!initialTransaction) {
-        setError(err.message || 'Không tải được chi tiết giao dịch.');
+        showErrorAlert(err.message || 'Không tải được chi tiết giao dịch.');
       }
     } finally {
       setLoading(false);
@@ -114,9 +113,9 @@ export default function WalletTransactionDetailScreen({
         <View style={styles.center}>
           <ActivityIndicator size="large" color={t.primary} />
         </View>
-      ) : error && !item ? (
+      ) : !item ? (
         <View style={styles.center}>
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.errorText}>Không tải được chi tiết giao dịch.</Text>
           <Pressable onPress={load} style={styles.retryBtn}>
             <Text style={styles.retryText}>Thử lại</Text>
           </Pressable>

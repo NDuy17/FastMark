@@ -6,6 +6,7 @@ module.exports = {
   createProductCategory: productCategoryService.createCategory,
   updateProductCategory: productCategoryService.updateCategory,
   deleteProductCategory: productCategoryService.deleteCategory,
+  restoreProductCategory: productCategoryService.restoreCategory,
   uploadProductCategoryIcon: productCategoryService.uploadCategoryIcon,
   assertProductCategoryExists: productCategoryService.assertProductCategoryExists,
   getProductCategoryNameMap: productCategoryService.getProductCategoryNameMap,
@@ -14,6 +15,7 @@ module.exports = {
   createShopCategory: shopCategoryService.createCategory,
   updateShopCategory: shopCategoryService.updateCategory,
   deleteShopCategory: shopCategoryService.deleteCategory,
+  restoreShopCategory: shopCategoryService.restoreCategory,
   assertShopCategoryExists: shopCategoryService.assertShopCategoryExists,
   getShopCategoryNameMap: shopCategoryService.getShopCategoryNameMap,
 

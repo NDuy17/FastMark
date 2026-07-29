@@ -6,7 +6,9 @@ import { formatOrderCode } from '../../../core/utils/orderCode';
  * Shared order list card header (buyer + seller):
  * ID · status
  * [image] product name
- *         variant | price | qty
+ *         variant name
+ *         unit price · x qty · line total (seller priceRowMeta)
+ *         variant | price | qty (default)
  * party / totals / extra lines below via children or props
  */
 export default function OrderItemHeader({
@@ -14,26 +16,40 @@ export default function OrderItemHeader({
   statusLabel,
   statusBadgeStyle,
   statusTextStyle,
+  statusTrailing = null,
   thumbnail = '',
   productName = 'Sản phẩm',
   variantName = '',
   quantity = 0,
   unitPriceText = '',
   partyLine = '',
+  hideVariant = false,
+  priceRowMeta = false,
+  lineTotalText = '',
+  orderCodeStyle,
+  unitPriceStyle,
   children = null,
 }) {
   const name = productName || 'Sản phẩm';
-  const detailLine = [variantName, unitPriceText, quantity ? `SL: ${quantity}` : '']
-    .filter(Boolean)
-    .join('  |  ');
+  const detailParts = [
+    hideVariant ? '' : variantName,
+    unitPriceText,
+    quantity ? `SL: ${quantity}` : '',
+  ].filter(Boolean);
+  const detailLine = detailParts.join('  |  ');
 
   return (
     <>
       <View style={styles.idRow}>
-        <Text style={styles.orderCode}>{formatOrderCode(id)}</Text>
-        {statusLabel ? (
-          <View style={[styles.statusBadge, statusBadgeStyle]}>
-            <Text style={[styles.statusBadgeText, statusTextStyle]}>{statusLabel}</Text>
+        <Text style={[styles.orderCode, orderCodeStyle]}>{formatOrderCode(id)}</Text>
+        {statusLabel || statusTrailing ? (
+          <View style={styles.statusGroup}>
+            {statusLabel ? (
+              <View style={[styles.statusBadge, statusBadgeStyle]}>
+                <Text style={[styles.statusBadgeText, statusTextStyle]}>{statusLabel}</Text>
+              </View>
+            ) : null}
+            {statusTrailing}
           </View>
         ) : null}
       </View>
@@ -50,7 +66,30 @@ export default function OrderItemHeader({
           <Text style={styles.productTitle} numberOfLines={2}>
             {name}
           </Text>
-          {detailLine ? (
+          {priceRowMeta ? (
+            <>
+              {variantName ? (
+                <Text style={styles.variantLine} numberOfLines={1}>
+                  {variantName}
+                </Text>
+              ) : null}
+              <View style={styles.priceRow}>
+                {unitPriceText ? (
+                  <Text style={[styles.unitPrice, unitPriceStyle]} numberOfLines={1}>
+                    {unitPriceText}
+                  </Text>
+                ) : null}
+                {quantity ? (
+                  <Text style={styles.qtyMark} numberOfLines={1}>
+                    x{quantity}
+                  </Text>
+                ) : null}
+                <Text style={styles.lineTotal} numberOfLines={1}>
+                  {lineTotalText || unitPriceText}
+                </Text>
+              </View>
+            </>
+          ) : detailLine ? (
             <Text style={styles.detailLine} numberOfLines={2}>
               {detailLine}
             </Text>
@@ -88,6 +127,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
+  statusGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    flexShrink: 1,
+  },
   statusBadgeText: {
     fontSize: 11,
     fontWeight: '800',
@@ -99,8 +144,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   thumb: {
-    width: 64,
-    height: 64,
+    width: 80,
+    height: 80,
     borderRadius: 12,
     backgroundColor: '#e2e8f0',
   },
@@ -117,7 +162,7 @@ const styles = StyleSheet.create({
   productInfo: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 2,
     paddingTop: 2,
   },
   productTitle: {
@@ -126,11 +171,40 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 20,
   },
+  variantLine: {
+    color: '#94a3b8',
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 16,
+  },
   detailLine: {
     color: '#64748b',
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 18,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+    gap: 10,
+  },
+  unitPrice: {
+    color: '#076F32',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  qtyMark: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  lineTotal: {
+    flex: 1,
+    textAlign: 'right',
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '800',
   },
   partyLine: {
     color: '#334155',

@@ -1,7 +1,8 @@
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Review = require("../models/Review");
-const ReviewImage = require("../models/ReviewImage");
 const Reservation = require("../models/Reservation");
+const ReviewImage = require("../models/ReviewImage");
 const Product = require("../models/Product");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
@@ -322,11 +323,19 @@ async function createBuyerReview(user, payload = {}) {
     shopId: payload.shopId || payload.storeId || payload.store_id,
   });
 
+  if (reservation.hasReviewed) {
+    throw createServiceError("Bạn đã đánh giá đơn hàng này.", 409);
+  }
+
   const existing = await Review.findOne({
     reservationId: reservation._id,
     isDeleted: { $ne: true },
   });
   if (existing) {
+    await Reservation.updateOne(
+      { _id: reservation._id },
+      { $set: { hasReviewed: true } }
+    );
     throw createServiceError("Bạn đã đánh giá đơn hàng này.", 409);
   }
 
@@ -346,6 +355,10 @@ async function createBuyerReview(user, payload = {}) {
 
   const imageDocs = await replaceReviewImages(review._id, collectImageInputs(payload));
   await refreshShopReviewStats(shopId);
+  await Reservation.updateOne(
+    { _id: reservation._id },
+    { $set: { hasReviewed: true } }
+  );
 
   return toPublicReview(review, {
     user,
@@ -419,6 +432,69 @@ async function deleteBuyerReview(user, reviewId) {
   return { id: String(review._id) };
 }
 
+async function loadActiveReviewsByReservationIds(reservationIds = [], userId = null) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(reservationIds) ? reservationIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (!ids.length) {
+    return new Map();
+  }
+
+  const objectIds = ids
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (!objectIds.length) {
+    return new Map();
+  }
+
+  const query = {
+    reservationId: { $in: objectIds },
+    isDeleted: { $ne: true },
+  };
+  if (userId) {
+    query.userId = userId;
+  }
+
+  const rows = await Review.find(query).sort({ CreatedAt: -1 }).lean();
+  if (!rows.length) {
+    return new Map();
+  }
+
+  const imagesByReview = await loadReviewImagesMap(rows.map((row) => row._id));
+  const byReservation = new Map();
+
+  rows.forEach((row) => {
+    const reservationKey = String(row.reservationId);
+    if (byReservation.has(reservationKey)) {
+      return;
+    }
+    const images = imagesByReview.get(String(row._id)) || [];
+    byReservation.set(reservationKey, {
+      id: String(row._id),
+      reservationId: reservationKey,
+      orderCode: reservationKey,
+      rating: Number(row.rating) || 0,
+      comment: row.comment || "",
+      createdAt: row.CreatedAt || null,
+      images,
+      imageUrl: images[0]?.imageUrl || "",
+    });
+  });
+
+  return byReservation;
+}
+
+async function loadActiveReviewIdsByReservationIds(reservationIds = []) {
+  const reviews = await loadActiveReviewsByReservationIds(reservationIds);
+  return new Map(
+    [...reviews.entries()].map(([reservationId, review]) => [reservationId, review.id])
+  );
+}
+
 module.exports = {
   listBuyerReviews,
   createBuyerReview,
@@ -426,5 +502,7 @@ module.exports = {
   deleteBuyerReview,
   refreshShopReviewStats,
   loadReviewImagesMap,
+  loadActiveReviewIdsByReservationIds,
+  loadActiveReviewsByReservationIds,
   toPublicReview,
 };

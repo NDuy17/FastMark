@@ -59,6 +59,10 @@ export function useChatSocket({
         handlersRef.current.onMessageNew?.(payload);
       });
 
+      socket.on('message_sent', (payload) => {
+        handlersRef.current.onMessageNew?.(payload);
+      });
+
       socket.on('message:read', (payload) => {
         handlersRef.current.onMessageRead?.(payload);
       });

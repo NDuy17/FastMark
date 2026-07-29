@@ -1,10 +1,23 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
+import { getSellerStatsOnBackend, uploadShopAvatarOnBackend } from '../../api/sellerOpsApi';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
+import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { pickImageBase64 } from '../../core/utils/pickImageBase64';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import { getCurrentUserIdToken } from '../../repository/authRepository';
 import {
   selectAuthProfile,
   selectCanSwitchToSeller,
@@ -12,6 +25,8 @@ import {
   selectSellerVerification,
   selectUserRole,
 } from '../../viewmodel/auth/authSelectors';
+import { applyShopSettingsToProfile } from '../../viewmodel/auth/authSlice';
+import AvatarBadge from '../shared/components/AvatarBadge';
 import { getSellerRegisterButtonLabel } from './sellerRegistrationFlow';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
 
@@ -27,14 +42,55 @@ const HUB_ITEMS = [
   { key: 'banner', label: 'Banner', icon: 'images-outline', action: 'banner' },
 ];
 
+function formatDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '—';
+  return date.toLocaleDateString('vi-VN');
+}
+
+function OverviewStatCard({ icon, label, value, subValue }) {
+  return (
+    <View style={styles.overviewStatCard}>
+      <View style={styles.overviewStatIcon}>
+        <Ionicons name={icon} size={16} color={t.primary} />
+      </View>
+      <Text style={styles.overviewStatValue}>{value}</Text>
+      <Text style={styles.overviewStatLabel}>{label}</Text>
+      {subValue ? <Text style={styles.overviewStatSub}>{subValue}</Text> : null}
+    </View>
+  );
+}
+
+function EditableShopAvatar({ name, uri, onPress, isUploading }) {
+  return (
+    <View style={styles.shopAvatarWrap}>
+      <AvatarBadge name={name} uri={uri} size={88} />
+      <Pressable
+        disabled={isUploading}
+        onPress={onPress}
+        style={({ pressed }) => [styles.shopAvatarEditBtn, pressed && styles.avatarEditPressed]}
+      >
+        {isUploading ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Ionicons name="camera" size={14} color="#fff" />
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
 export default function ShopTabHomeScreen({
   shopSettings = null,
   unreadNotificationsCount = 0,
+  isVisible = false,
   onStartRegister,
   onOpenHub,
   onOpenWallet,
-  onOpenWalletTopUp,
+  onShopSettingsUpdated,
 }) {
+  const dispatch = useDispatch();
   const insets = useScreenInsets();
   const profile = useSelector(selectAuthProfile);
   const role = useSelector(selectUserRole);
@@ -43,35 +99,105 @@ export default function ShopTabHomeScreen({
   const verification = useSelector(selectSellerVerification);
   const registerLabel = getSellerRegisterButtonLabel({ role, verification });
 
+  const [stats, setStats] = useState(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [isUploadingShopAvatar, setIsUploadingShopAvatar] = useState(false);
+
   const isPending = verification?.status === SELLER_VERIFICATION_STATUS.PENDING;
   const isRejected = verification?.status === SELLER_VERIFICATION_STATUS.REJECTED;
   const showManageHub = Boolean(canSwitchToSeller && isSeller);
   const notificationBadgeCount = Math.max(0, Number(unreadNotificationsCount) || 0);
-  const shopName = profile?.fullName || shopSettings?.shopName || 'Gian hàng của bạn';
-  const subscriptionActive = Boolean(
-    shopSettings?.subscriptionActive || profile?.subscriptionActive
-  );
+  const shopName = shopSettings?.shopName || profile?.shopName || 'Gian hàng của bạn';
+  const shopUsername = shopSettings?.shopUsername || profile?.shopUsername || '';
   const purchasedAt = shopSettings?.ngayMua || profile?.ngayMua || null;
   const expiresAt =
     shopSettings?.subscriptionExpiresAt ||
     shopSettings?.ngayHetHan ||
     profile?.subscriptionExpiresAt ||
     null;
+  const avatarUrl =
+    (isRemoteAvatarUrl(shopSettings?.shopAvatar) && shopSettings.shopAvatar) ||
+    (isRemoteAvatarUrl(profile?.shopAvatar) && profile.shopAvatar) ||
+    '';
 
-  function formatDate(value) {
-    if (!value) return '—';
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return '—';
-    return date.toLocaleDateString('vi-VN');
+  const loadStats = useCallback(async () => {
+    if (!showManageHub) {
+      return;
+    }
+
+    setIsLoadingStats(true);
+    try {
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) {
+        return;
+      }
+      const data = await getSellerStatsOnBackend(idToken);
+      setStats(data);
+    } catch {
+      setStats(null);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  }, [showManageHub]);
+
+  async function handlePickShopAvatar() {
+    try {
+      const picked = await pickImageBase64();
+      if (!picked) {
+        return;
+      }
+
+      setIsUploadingShopAvatar(true);
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) {
+        throw new Error('Phiên đăng nhập đã hết hạn.');
+      }
+
+      const updated = await uploadShopAvatarOnBackend({
+        idToken,
+        imageBase64: picked.imageBase64,
+        mimeType: picked.mimeType,
+      });
+
+      if (updated) {
+        dispatch(applyShopSettingsToProfile(updated));
+        onShopSettingsUpdated?.(updated);
+      }
+
+      Alert.alert('Thành công', 'Đã cập nhật ảnh gian hàng.');
+    } catch (pickError) {
+      Alert.alert('Lỗi', pickError.message || 'Không upload được ảnh gian hàng.');
+    } finally {
+      setIsUploadingShopAvatar(false);
+    }
   }
 
+  useEffect(() => {
+    if (!isVisible || !showManageHub) {
+      return;
+    }
+    loadStats();
+  }, [isVisible, showManageHub, loadStats]);
+
+  const reservations = stats?.reservations || {};
+  const orderCount = String(reservations.total ?? 0);
+  const productCount = String(stats?.totalProducts ?? profile?.totalProducts ?? 0);
+  const ratingValue =
+    Number(stats?.averageRating ?? profile?.averageRating ?? 0) > 0
+      ? Number(stats?.averageRating ?? profile?.averageRating).toFixed(1)
+      : '—';
+  const reviewCount = stats?.totalReviews ?? profile?.totalReviews ?? 0;
+
   return (
-    <View style={[styles.screen, { paddingTop: insets.contentPaddingTop }]}>
+    <View style={styles.screen}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: insets.tabRootScrollPaddingBottom },
+          {
+            paddingTop: 8,
+            paddingBottom: insets.tabRootScrollPaddingBottom,
+          },
         ]}
       >
         <View style={styles.header}>
@@ -81,7 +207,7 @@ export default function ShopTabHomeScreen({
           <View style={styles.headerCopy}>
             <Text style={styles.title}>Gian hàng</Text>
             <Text style={styles.subtitle} numberOfLines={1}>
-              {showManageHub ? shopName : 'Mở gian hàng và bán hàng trên FastMark'}
+              {showManageHub ? 'Quản lý cửa hàng của bạn' : 'Mở gian hàng và bán hàng trên FastMark'}
             </Text>
           </View>
           {showManageHub ? (
@@ -106,7 +232,7 @@ export default function ShopTabHomeScreen({
                 {notificationBadgeCount > 0 ? (
                   <View style={styles.headerBadge}>
                     <Text style={styles.headerBadgeText}>
-                      {notificationBadgeCount > 9 ? '9+' : String(notificationBadgeCount)}
+                      {notificationBadgeCount > 99 ? '99+' : String(notificationBadgeCount)}
                     </Text>
                   </View>
                 ) : null}
@@ -146,50 +272,76 @@ export default function ShopTabHomeScreen({
           </View>
         ) : (
           <>
-            <Pressable
-              style={({ pressed }) => [styles.statusCard, pressed && styles.pressed]}
-              onPress={() => onOpenHub?.('subscription')}
-            >
-              <View style={styles.statusCardHeader}>
-                <Text style={styles.statusTitle}>{shopName}</Text>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </View>
-              {subscriptionActive ? (
-                <View style={styles.planMeta}>
-                  <Text style={styles.statusMeta}>Ngày mua: {formatDate(purchasedAt)}</Text>
-                  <Text style={styles.statusMeta}>Hết hạn: {formatDate(expiresAt)}</Text>
-                  <Text style={styles.statusLink}>Xem chi tiết các gói đã mua</Text>
+            <View style={styles.shopCard}>
+              <View style={styles.shopCardMain}>
+                <EditableShopAvatar
+                  name={shopName}
+                  uri={avatarUrl}
+                  onPress={handlePickShopAvatar}
+                  isUploading={isUploadingShopAvatar}
+                />
+
+                <View style={styles.shopCardInfo}>
+                  <Text style={styles.shopName} numberOfLines={1}>
+                    {shopName}
+                  </Text>
+                  {shopUsername ? (
+                    <Text style={styles.shopUsername} numberOfLines={1}>
+                      @{shopUsername}
+                    </Text>
+                  ) : null}
+                  <View style={styles.shopMetaRow}>
+                    <Ionicons name="calendar-outline" size={13} color="#64748b" />
+                    <Text style={styles.shopMetaText}>
+                      Ngày tham gia: {formatDate(purchasedAt)}
+                    </Text>
+                  </View>
+                  <View style={styles.shopMetaRow}>
+                    <Ionicons name="time-outline" size={13} color="#64748b" />
+                    <Text style={styles.shopMetaText}>Hết hạn: {formatDate(expiresAt)}</Text>
+                  </View>
+                  <Pressable
+                    style={({ pressed }) => [styles.shopWalletRow, pressed && styles.pressed]}
+                    onPress={() => onOpenWallet?.()}
+                  >
+                    <Ionicons name="wallet-outline" size={13} color={t.primary} />
+                    <Text style={styles.shopWalletRowLabel}>Ví FastMark:</Text>
+                    <Text style={styles.shopWalletRowBalance}>
+                      {formatPrice(profile?.walletBalance || 0)}
+                    </Text>
+                  </Pressable>
                 </View>
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [styles.packagesRow, pressed && styles.pressed]}
+                onPress={() => onOpenHub?.('subscription')}
+              >
+                <Ionicons name="bag-handle-outline" size={18} color={t.primary} />
+                <Text style={styles.packagesRowText}>Xem chi tiết các gói đã mua</Text>
+                <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+              </Pressable>
+            </View>
+
+            <View style={styles.overviewSection}>
+              <Text style={styles.sectionTitle}>Tổng quan gian hàng</Text>
+
+              {isLoadingStats && !stats ? (
+                <ActivityIndicator color={t.primary} style={styles.statsLoader} />
               ) : (
-                <Text style={styles.statusSub}>
-                  Chưa có gói — gian hàng đang ẩn công khai
-                </Text>
+                <View style={styles.overviewGrid}>
+                  <OverviewStatCard icon="bag-handle-outline" label="Đơn hàng" value={orderCount} />
+                  <OverviewStatCard icon="cube-outline" label="Sản phẩm" value={productCount} />
+                  <OverviewStatCard
+                    icon="star-outline"
+                    label={reviewCount ? `Đánh giá (${reviewCount})` : 'Đánh giá'}
+                    value={ratingValue}
+                  />
+                </View>
               )}
-            </Pressable>
+            </View>
 
             <Text style={styles.sectionTitle}>Quản lý gian hàng</Text>
-
-            <Pressable
-              style={({ pressed }) => [styles.walletCard, pressed && styles.pressed]}
-              onPress={() => onOpenWallet?.()}
-            >
-              <View style={styles.walletCardTop}>
-                <Ionicons name="wallet-outline" size={18} color="#fff" />
-                <Text style={styles.walletCardTitle}>Ví FastMark</Text>
-              </View>
-              <Text style={styles.walletCardBalance}>
-                {formatPrice(profile?.walletBalance || 0)}
-              </Text>
-              <Pressable
-                onPress={(event) => {
-                  event?.stopPropagation?.();
-                  onOpenWalletTopUp?.();
-                }}
-                hitSlop={8}
-              >
-                <Text style={styles.walletCardCta}>Nạp tiền ngay →</Text>
-              </Pressable>
-            </Pressable>
 
             <View style={styles.hubGrid}>
               {HUB_ITEMS.map((item) => (
@@ -215,11 +367,10 @@ export default function ShopTabHomeScreen({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f8fafb',
+    backgroundColor: '#f4f7f6',
   },
   content: {
     paddingHorizontal: 16,
-    paddingTop: 8,
   },
   pressed: {
     opacity: 0.88,
@@ -248,9 +399,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerActionBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ffffff',
@@ -261,17 +412,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -2,
     right: -2,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
     backgroundColor: '#ef4444',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 3,
+    paddingHorizontal: 4,
   },
   headerBadgeText: {
     color: '#ffffff',
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '800',
   },
   title: {
@@ -328,82 +479,160 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
-  statusCard: {
+  shopCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 18,
+    borderColor: '#e8f0eb',
+    marginBottom: 14,
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  statusCardHeader: {
+  shopCardMain: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
+    alignItems: 'flex-start',
+    gap: 14,
+    padding: 14,
   },
-  statusTitle: {
+  shopAvatarWrap: {
+    width: 88,
+    height: 88,
+    position: 'relative',
+  },
+  shopAvatarEditBtn: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#076F32',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  avatarEditPressed: {
+    opacity: 0.85,
+  },
+  shopCardInfo: {
     flex: 1,
-    fontSize: 17,
+    minWidth: 0,
+  },
+  shopName: {
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
-  planMeta: {
-    marginTop: 6,
-    gap: 2,
-  },
-  statusSub: {
-    marginTop: 6,
+  shopUsername: {
+    marginTop: 2,
     fontSize: 13,
-    lineHeight: 18,
-    color: t.primaryDark,
     fontWeight: '700',
+    color: '#64748b',
   },
-  statusMeta: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#475569',
+  shopMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  shopMetaText: {
+    fontSize: 11,
     fontWeight: '600',
+    color: '#64748b',
+    flexShrink: 1,
   },
-  statusLink: {
-    marginTop: 8,
+  shopWalletRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  shopWalletRowLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  shopWalletRowBalance: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     color: t.primary,
   },
+  packagesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  packagesRowText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  overviewSection: {
+    marginBottom: 16,
+  },
   sectionTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 12,
   },
-  walletCard: {
-    marginBottom: 14,
-    backgroundColor: t.primaryDark,
-    borderRadius: 16,
-    padding: 16,
+  statsLoader: {
+    paddingVertical: 24,
   },
-  walletCardTop: {
+  overviewGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 8,
   },
-  walletCardTitle: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
+  overviewStatCard: {
+    width: '31%',
+    flexGrow: 1,
+    minWidth: '30%',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e8f0eb',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    alignItems: 'center',
   },
-  walletCardBalance: {
-    color: '#ffffff',
-    fontSize: 28,
-    fontWeight: '800',
-    marginTop: 8,
+  overviewStatIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: t.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
   },
-  walletCardCta: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 13,
+  overviewStatValue: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  overviewStatLabel: {
+    marginTop: 2,
+    fontSize: 10,
     fontWeight: '700',
+    color: '#64748b',
+    textAlign: 'center',
+  },
+  overviewStatSub: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94a3b8',
   },
   hubGrid: {
     flexDirection: 'row',

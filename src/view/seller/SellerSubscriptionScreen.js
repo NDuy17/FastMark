@@ -16,6 +16,8 @@ import {
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
+import WalletBalanceTopUpBar from '../shared/components/WalletBalanceTopUpBar';
 
 function formatExpiry(value) {
   if (!value) return '';
@@ -92,6 +94,16 @@ export default function SellerSubscriptionScreen({ onBack, onOpenWallet, onOpenB
     load();
   }, [load]);
 
+  useResourceSocket({
+    enabled: true,
+    onResourceUpdated: (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type === 'subscription' || type === 'wallet') {
+        load();
+      }
+    },
+  });
+
   async function handlePurchase(plan) {
     const planName = plan.name || plan.label || 'gói';
     Alert.alert(
@@ -144,12 +156,10 @@ export default function SellerSubscriptionScreen({ onBack, onOpenWallet, onOpenB
         </View>
       ) : (
         <>
-          <View style={styles.walletRow}>
-            <Text style={styles.walletLabel}>Số dư ví</Text>
-            <Pressable onPress={() => onOpenWallet?.()}>
-              <Text style={styles.walletValue}>{formatPrice(data?.walletBalance ?? 0)}</Text>
-            </Pressable>
-          </View>
+          <WalletBalanceTopUpBar
+            balance={data?.walletBalance ?? 0}
+            onTopUp={() => onOpenWallet?.()}
+          />
 
           {purchases.length > 0 ? (
             <>
@@ -301,14 +311,6 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.88,
   },
-  walletRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  walletLabel: { color: '#64748b', fontWeight: '600' },
-  walletValue: { color: t.primary, fontWeight: '800', fontSize: 16 },
   sectionLabel: {
     fontSize: 13,
     fontWeight: '800',

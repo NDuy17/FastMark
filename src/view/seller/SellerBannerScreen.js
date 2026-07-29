@@ -22,7 +22,10 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
+import WalletBalanceTopUpBar from '../shared/components/WalletBalanceTopUpBar';
+import { BOTTOM_SHEET_BORDER, BottomSheetDismissOverlay, BottomSheetHandle, BottomSheetPanel } from '../shared/components/bottomSheetChrome';
 
 const BANNER_TARGET_TYPE = {
   PRODUCT: 1,
@@ -136,6 +139,16 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
   useEffect(() => {
     load();
   }, [load]);
+
+  useResourceSocket({
+    enabled: true,
+    onResourceUpdated: (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type === 'banner' || type === 'wallet') {
+        load();
+      }
+    },
+  });
 
   useEffect(() => {
     (async () => {
@@ -422,14 +435,15 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
           ) : null}
         </View>
 
-        <Modal visible={showProductPicker} transparent animationType="slide">
-          <View style={styles.modalBackdrop}>
-            <View
+        <Modal visible={showProductPicker} transparent animationType="slide" onRequestClose={() => setShowProductPicker(false)}>
+          <BottomSheetDismissOverlay onClose={() => setShowProductPicker(false)}>
+            <BottomSheetPanel
               style={[
                 styles.modalCard,
                 { paddingBottom: Math.max(insets.bottom, 12) + 8 },
               ]}
             >
+              <BottomSheetHandle />
               <Text style={styles.modalTitle}>Chọn sản phẩm của gian hàng</Text>
               <ScrollView
                 style={styles.modalList}
@@ -474,8 +488,8 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
               >
                 <Text style={styles.modalCloseText}>Đóng</Text>
               </Pressable>
-            </View>
-          </View>
+            </BottomSheetPanel>
+          </BottomSheetDismissOverlay>
         </Modal>
       </ProfileSubScreen>
     );
@@ -489,12 +503,10 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
         </View>
       ) : (
         <>
-          <View style={styles.walletRow}>
-            <Text style={styles.walletLabel}>Số dư ví</Text>
-            <Pressable onPress={() => onOpenWallet?.()}>
-              <Text style={styles.walletValue}>{formatPrice(data?.walletBalance ?? 0)}</Text>
-            </Pressable>
-          </View>
+          <WalletBalanceTopUpBar
+            balance={data?.walletBalance ?? 0}
+            onTopUp={() => onOpenWallet?.()}
+          />
 
           <Text style={styles.sectionTitle}>Mua thêm gói</Text>
           <Text style={styles.sectionHint}>Có thể mua nhiều gói để treo song song.</Text>
@@ -577,14 +589,6 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
 
 const styles = StyleSheet.create({
   centered: { paddingVertical: 40, alignItems: 'center' },
-  walletRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  walletLabel: { color: '#64748b', fontWeight: '600' },
-  walletValue: { color: t.primary, fontWeight: '800', fontSize: 16 },
   sectionTitle: {
     fontSize: 15,
     fontWeight: '800',
@@ -710,18 +714,14 @@ const styles = StyleSheet.create({
   planName: { fontWeight: '800', color: '#0f172a', fontSize: 15 },
   planMeta: { color: '#64748b', marginTop: 4 },
   planDescription: { color: '#475569', marginTop: 6, fontSize: 13 },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
-    justifyContent: 'flex-end',
-  },
   modalCard: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
+    ...BOTTOM_SHEET_BORDER,
     maxHeight: '70%',
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 10,
   },
   modalTitle: { fontWeight: '800', fontSize: 16, marginBottom: 10 },
   modalList: { maxHeight: 360 },

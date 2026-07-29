@@ -1,7 +1,9 @@
 const Notification = require("../models/Notification.js");
 const {
   NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
   normalizeNotificationAudience,
+  normalizeNotificationIndex,
 } = require("../constants");
 const { emitUserEvent } = require("../socket");
 const { sendPushToUser } = require("./pushNotificationService");
@@ -39,7 +41,7 @@ function buildAudienceListFilter(audience) {
   };
 }
 
-async function createNotification(userId, { title, content, audience } = {}) {
+async function createNotification(userId, { title, content, audience, index, isAdminBroadcast } = {}) {
   if (!userId) {
     return null;
   }
@@ -48,12 +50,18 @@ async function createNotification(userId, { title, content, audience } = {}) {
     audience,
     NOTIFICATION_AUDIENCE.SYSTEM
   );
+  const normalizedIndex = normalizeNotificationIndex(
+    index,
+    NOTIFICATION_INDEX.SYSTEM
+  );
   const now = new Date();
   const notification = await Notification.create({
     userId,
     title: String(title || "").trim(),
     content: String(content || "").trim(),
     audience: normalizedAudience,
+    index: normalizedIndex,
+    isAdminBroadcast: Boolean(isAdminBroadcast),
     isRead: 0,
     CreatedAt: now,
     UpdatedAt: now,
@@ -64,11 +72,14 @@ async function createNotification(userId, { title, content, audience } = {}) {
     title: notification.title,
     content: notification.content,
     audience: notification.audience,
+    index: notification.index,
+    isAdminBroadcast: Boolean(notification.isAdminBroadcast),
     isRead: notification.isRead,
     createdAt: notification.CreatedAt,
   };
 
   emitUserEvent(String(userId), "notification:new", payload);
+  emitUserEvent(String(userId), "notification_created", payload);
 
   sendPushToUser(userId, {
     title: notification.title,
@@ -92,6 +103,8 @@ function toClientNotification(notification) {
     content: notification.content || "",
     body: notification.content || "",
     audience: notification.audience || NOTIFICATION_AUDIENCE.SYSTEM,
+    index: normalizeNotificationIndex(notification.index, NOTIFICATION_INDEX.SYSTEM),
+    isAdminBroadcast: Boolean(notification.isAdminBroadcast),
     isRead: Number(notification.isRead) === 1,
     createdAt: notification.CreatedAt || null,
   };
@@ -126,6 +139,37 @@ async function listNotificationsForUser(userId, { page = 1, limit = 50, audience
   };
 }
 
+async function countUnreadNotifications(userId, audience) {
+  if (!userId) {
+    return 0;
+  }
+
+  return Notification.countDocuments({
+    userId,
+    isRead: { $ne: 1 },
+    ...buildAudienceListFilter(audience || NOTIFICATION_AUDIENCE.BUYER),
+  });
+}
+
+async function emitNotificationReadEvent(userId, { id, audience, all = false } = {}) {
+  if (!userId) {
+    return;
+  }
+
+  const normalizedAudience = normalizeNotificationAudience(
+    audience,
+    NOTIFICATION_AUDIENCE.BUYER
+  );
+  const unreadCount = await countUnreadNotifications(userId, normalizedAudience);
+
+  emitUserEvent(String(userId), "notification:read", {
+    id: id ? String(id) : "",
+    unreadCount,
+    audience: normalizedAudience,
+    all: Boolean(all),
+  });
+}
+
 async function markNotificationAsRead(userId, notificationId, { audience } = {}) {
   if (!userId || !notificationId) {
     const error = new Error("Thiếu thông báo.");
@@ -152,6 +196,11 @@ async function markNotificationAsRead(userId, notificationId, { audience } = {})
     throw error;
   }
 
+  await emitNotificationReadEvent(userId, {
+    id: notification._id,
+    audience: notification.audience || audience,
+  });
+
   return toClientNotification(notification);
 }
 
@@ -170,6 +219,11 @@ async function markAllNotificationsAsRead(userId, { audience } = {}) {
     { $set: { isRead: 1, UpdatedAt: now } }
   );
 
+  await emitNotificationReadEvent(userId, {
+    audience: audience || NOTIFICATION_AUDIENCE.BUYER,
+    all: true,
+  });
+
   return { updated: result.modifiedCount || 0 };
 }
 
@@ -178,5 +232,7 @@ module.exports = {
   listNotificationsForUser,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  countUnreadNotifications,
   NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
 };

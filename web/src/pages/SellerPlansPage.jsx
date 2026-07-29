@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Eye, Pencil, Trash2, Wallet } from 'lucide-react';
 
 import {
   createSellerPlan,
@@ -6,19 +7,20 @@ import {
   listSellerPlans,
   updateSellerPlan,
 } from '../api/sellerPlanApi';
+import AdminPageShell from '../components/admin/AdminPageShell';
+import AdminPagination from '../components/admin/AdminPagination';
+import DataTableShell from '../components/admin/DataTableShell';
+import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { formatPrice } from '../utils/format';
 
 const emptyForm = {
   name: '',
   description: '',
   durationDays: '',
   price: '',
-  isActive: true,
 };
-
-function formatPrice(value) {
-  return `${Number(value || 0).toLocaleString('vi-VN')}đ`;
-}
 
 function formatDuration(plan) {
   const days = Number(plan.durationDays) || 0;
@@ -57,9 +59,6 @@ function PlanDetailDialog({ plan, onClose }) {
           <DetailField label="Tên gói">{plan.name || plan.label || ''}</DetailField>
           <DetailField label="Thời hạn">{formatDuration(plan)}</DetailField>
           <DetailField label="Giá">{formatPrice(plan.price)}</DetailField>
-          <DetailField label="Trạng thái">
-            {plan.isActive ? 'Đang bán' : 'Ngừng bán'}
-          </DetailField>
           <DetailField label="Mô tả">{plan.description || ''}</DetailField>
         </dl>
       </div>
@@ -78,6 +77,8 @@ export default function SellerPlansPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionId, setActionId] = useState('');
   const [selectedPlan, setSelectedPlan] = useState(null);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -110,7 +111,6 @@ export default function SellerPlansPage() {
       description: plan.description || '',
       durationDays: Number(plan.durationDays) || 30,
       price: Number(plan.price) || 0,
-      isActive: plan.isActive !== false,
     });
   }
 
@@ -144,15 +144,14 @@ export default function SellerPlansPage() {
         description: String(form.description || '').trim(),
         durationDays,
         price,
-        isActive: Boolean(form.isActive),
       };
 
       if (editingId) {
         await updateSellerPlan(token, editingId, payload);
         setSuccessMessage('Cập nhật gói thành công.');
       } else {
-        await createSellerPlan(token, payload);
-        setSuccessMessage('Tạo gói thành công.');
+        const result = await createSellerPlan(token, payload);
+        setSuccessMessage(result.message || 'Tạo gói thành công.');
       }
       resetForm();
       await loadItems();
@@ -163,40 +162,42 @@ export default function SellerPlansPage() {
     }
   }
 
-  async function handleToggle(plan) {
+  async function handleDelete(plan) {
+    const confirmed = window.confirm(
+      `Xóa gói "${plan.name || plan.label}"?\nGói sẽ ẩn khỏi admin và app. Thêm lại đúng tên sẽ tự khôi phục.`
+    );
+    if (!confirmed) return;
     setActionId(plan.id);
     setError('');
     try {
       const token = await getIdToken();
-      await updateSellerPlan(token, plan.id, { isActive: !plan.isActive });
-      setSuccessMessage(plan.isActive ? 'Đã ngừng bán gói.' : 'Đã kích hoạt gói.');
-      await loadItems();
-    } catch (toggleError) {
-      setError(toggleError.message || 'Không đổi trạng thái gói.');
-    } finally {
-      setActionId('');
-    }
-  }
-
-  async function handleDelete(plan) {
-    const confirmed = window.confirm(`Ngừng bán gói "${plan.name || plan.label}"?`);
-    if (!confirmed) return;
-    setActionId(plan.id);
-    try {
-      const token = await getIdToken();
       await deleteSellerPlan(token, plan.id);
-      setSuccessMessage('Đã ngừng bán gói.');
+      setSuccessMessage('Đã xóa gói.');
       if (editingId === plan.id) resetForm();
       await loadItems();
     } catch (deleteError) {
-      setError(deleteError.message || 'Không ngừng bán được gói.');
+      setError(deleteError.message || 'Không xóa được gói.');
     } finally {
       setActionId('');
     }
   }
 
+  const totalPages = Math.max(1, Math.ceil(items.length / limit));
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * limit;
+    return items.slice(start, start + limit);
+  }, [items, limit, page]);
+
   return (
-    <div className="page">
+    <AdminPageShell
+      icon={Wallet}
+      title="Quản lý gói Seller"
+      description="Tạo và cấu hình các gói đăng ký gian hàng cho người bán trên FastMark."
+      stats={[
+        { label: 'Tổng gói', value: loading ? '…' : items.length, icon: Wallet, tone: 'green' },
+        { label: 'Đang bán', value: loading ? '…' : items.length, icon: Wallet, tone: 'blue' },
+      ]}
+    >
       {error ? <p className="error-banner">{error}</p> : null}
       {successMessage ? <p className="success-banner">{successMessage}</p> : null}
 
@@ -210,8 +211,8 @@ export default function SellerPlansPage() {
           ) : null}
         </div>
 
-        <form className="category-form" onSubmit={handleSubmit}>
-          <div className="category-form-row category-form-row-4">
+        <form className="category-form category-form-compact" onSubmit={handleSubmit}>
+          <div className="category-form-row category-form-row-3">
             <label>
               Tên gói
               <input
@@ -244,19 +245,6 @@ export default function SellerPlansPage() {
                 required
               />
             </label>
-            <label>
-              Trạng thái
-              <select
-                className="category-select"
-                value={form.isActive ? 1 : 0}
-                onChange={(event) =>
-                  setForm((c) => ({ ...c, isActive: Number(event.target.value) === 1 }))
-                }
-              >
-                <option value={1}>Đang bán</option>
-                <option value={0}>Ngừng bán</option>
-              </select>
-            </label>
           </div>
           <label>
             Mô tả
@@ -275,24 +263,40 @@ export default function SellerPlansPage() {
         </form>
       </section>
 
-      <section className="table-card">
-        <table className="data-table">
+      <DataTableShell
+        title="Danh sách gói"
+        pagination={
+          <AdminPagination
+            page={page}
+            totalPages={totalPages}
+            total={items.length}
+            label="gói"
+            limit={limit}
+            onLimitChange={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+            loading={loading}
+            onPageChange={setPage}
+          />
+        }
+      >
+        <table className="data-table admin-data-table">
           <thead>
             <tr>
               <th>Gói</th>
               <th>Thời hạn</th>
               <th>Giá</th>
-              <th>Trạng thái</th>
               <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={5}>Đang tải...</td></tr>
+              <tr><td colSpan={4} className="table-empty">Đang tải...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={5}>Chưa có gói. Tạo gói mới (ví dụ 30 ngày / 100.000đ).</td></tr>
+              <tr><td colSpan={4} className="table-empty">Chưa có gói. Tạo gói mới (ví dụ 30 ngày / 100.000đ).</td></tr>
             ) : (
-              items.map((plan) => (
+              paginatedItems.map((plan) => (
                 <tr key={plan.id}>
                   <td>
                     <strong>{plan.name || plan.label}</strong>
@@ -300,46 +304,39 @@ export default function SellerPlansPage() {
                   </td>
                   <td>{formatDuration(plan)}</td>
                   <td>{formatPrice(plan.price)}</td>
-                  <td>
-                    <span className={plan.isActive ? 'badge badge-success' : 'badge badge-neutral'}>
-                      {plan.isActive ? 'Đang bán' : 'Ngừng bán'}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="action-row">
-                      <button type="button" className="detail-btn" onClick={() => setSelectedPlan(plan)}>
-                        Chi tiết
-                      </button>
-                      <button type="button" onClick={() => startEdit(plan)}>
-                        Sửa
-                      </button>
-                      <button
-                        type="button"
-                        disabled={actionId === plan.id}
-                        onClick={() => handleToggle(plan)}
-                      >
-                        {plan.isActive ? 'Ngừng bán' : 'Kích hoạt'}
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-btn"
-                        disabled={actionId === plan.id}
-                        onClick={() => handleDelete(plan)}
-                      >
-                        Ẩn
-                      </button>
-                    </div>
+                  <td className="col-actions">
+                    <TableIconActions
+                      actions={[
+                        {
+                          icon: Eye,
+                          label: 'Chi tiết gói',
+                          onClick: () => setSelectedPlan(plan),
+                        },
+                        {
+                          icon: Pencil,
+                          label: 'Sửa gói',
+                          onClick: () => startEdit(plan),
+                        },
+                        {
+                          icon: Trash2,
+                          label: 'Xóa gói',
+                          variant: 'danger',
+                          disabled: actionId === plan.id,
+                          onClick: () => handleDelete(plan),
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
-      </section>
+      </DataTableShell>
 
       {selectedPlan ? (
         <PlanDetailDialog plan={selectedPlan} onClose={() => setSelectedPlan(null)} />
       ) : null}
-    </div>
+    </AdminPageShell>
   );
 }

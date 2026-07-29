@@ -8,8 +8,11 @@ exports.listBanks = async (req, res) => {
 
 exports.createBank = async (req, res) => {
   try {
-    const bank = await bankService.createBank(req.body);
-    return success(res, { message: "Đã thêm ngân hàng.", data: { bank } });
+    const { bank, restored } = await bankService.createBank(req.body);
+    return success(res, {
+      message: restored ? "Đã khôi phục ngân hàng." : "Đã thêm ngân hàng.",
+      data: { bank, restored: Boolean(restored) },
+    });
   } catch (error) {
     return fail(res, {
       status: error.statusCode || 500,
@@ -38,6 +41,18 @@ exports.deleteBank = async (req, res) => {
     return fail(res, {
       status: error.statusCode || 500,
       message: error.message || "Không tắt được ngân hàng.",
+    });
+  }
+};
+
+exports.restoreBank = async (req, res) => {
+  try {
+    const bank = await bankService.restoreBank(req.params.id);
+    return success(res, { message: "Đã khôi phục ngân hàng.", data: { bank } });
+  } catch (error) {
+    return fail(res, {
+      status: error.statusCode || 500,
+      message: error.message || "Không khôi phục được ngân hàng.",
     });
   }
 };

@@ -21,7 +21,7 @@ export async function fetchProductsByStoreId(storeId) {
     log.ok('fetchProductsByStoreId:node-api', { storeId, count: products.length });
     return products.map(normalizeProduct);
   } catch (error) {
-    log.fail('fetchProductsByStoreId:node-api-failed', error);
+    log.warn('fetchProductsByStoreId:node-api-failed', error?.message || error);
     return [];
   }
 }

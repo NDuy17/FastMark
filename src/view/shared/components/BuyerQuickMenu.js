@@ -10,12 +10,10 @@ import ProfileSideDrawer from './ProfileSideDrawer';
  * Nút 3 gạch + drawer bên phải (kiểu TikTok).
  */
 export default function BuyerQuickMenu({
-  sellerButtonLabel = 'Đăng ký người bán',
   onEditAccount,
   onOpenWallet,
   onOpenFavoriteProducts,
   onOpenReport,
-  onSellerAction,
   onLogout,
   style,
   buttonStyle,
@@ -48,28 +46,17 @@ export default function BuyerQuickMenu({
       },
       {
         key: 'edit',
-        icon: 'person-outline',
+        icon: 'create-outline',
         label: 'Chỉnh sửa hồ sơ',
         onPress: onEditAccount,
       },
       {
         key: 'report',
-        icon: 'flag-outline',
-        label: 'Report',
+        icon: 'shield-checkmark-outline',
+        label: 'Báo cáo',
         onPress: onOpenReport,
       },
     ].filter((item) => typeof item.onPress === 'function');
-
-    const businessItems = sellerButtonLabel
-      ? [
-          {
-            key: 'seller',
-            icon: 'storefront-outline',
-            label: sellerButtonLabel,
-            onPress: onSellerAction,
-          },
-        ]
-      : [];
 
     const settingsItems = [
       {
@@ -85,9 +72,6 @@ export default function BuyerQuickMenu({
       personalItems.length
         ? { key: 'personal', title: 'Công cụ cá nhân', items: personalItems }
         : null,
-      businessItems.length
-        ? { key: 'business', title: 'Bán hàng', items: businessItems }
-        : null,
       settingsItems.length ? { key: 'settings', title: 'Tài khoản', items: settingsItems } : null,
     ].filter(Boolean);
   }, [
@@ -96,8 +80,6 @@ export default function BuyerQuickMenu({
     onOpenFavoriteProducts,
     onOpenReport,
     onOpenWallet,
-    onSellerAction,
-    sellerButtonLabel,
   ]);
 
   return (

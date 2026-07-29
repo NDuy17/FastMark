@@ -3,8 +3,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const KEY = '@fastmark/resume_reservation';
 
 /**
- * Lưu ngữ cảnh giữ hàng trước khi sang nạp ví PayOS,
- * để sau khi nạp xong mở lại đúng sản phẩm + modal.
+ * Lưu ngữ cảnh giữ hàng trước khi sang nạp ví,
+ * để Back hoặc nạp xong mở lại đúng sản phẩm + modal.
+ *
+ * @param {{
+ *   productId: string,
+ *   variantId?: string|null,
+ *   quantity?: number,
+ *   source?: 'home'|'map'|'products'|'profile',
+ *   storeId?: string|null,
+ * }} payload
  */
 export async function saveReservationResume(payload) {
   if (!payload?.productId) {
@@ -17,6 +25,7 @@ export async function saveReservationResume(payload) {
       variantId: payload.variantId ? String(payload.variantId) : null,
       quantity: Math.max(1, Number(payload.quantity) || 1),
       source: payload.source || 'home',
+      storeId: payload.storeId ? String(payload.storeId) : null,
       savedAt: Date.now(),
     })
   );

@@ -1,13 +1,22 @@
 const ShopProfile = require("../models/ShopProfile");
 const { getWalletBalance } = require("./walletService");
+const { resolveShopDisplayName, resolveShopUsername, resolveShopAvatar } = require("../utils/shopIdentity");
 
-async function getShopStatsForUser(userId) {
+async function getShopStatsForUser(userId, userDoc = null) {
   const shop = await ShopProfile.findOne({ userId })
     .populate("categoryId", "categoryName")
     .sort({ CreatedAt: -1 });
 
+  const owner =
+    userDoc ||
+    (await User.findById(userId).select("FullName UserName Phone Avatar FollowersCount").lean());
+
   if (!shop) {
     return {
+      shopId: '',
+      shopStatus: 1,
+      shopName: '',
+      shopUsername: '',
       categoryId: '',
       categoryName: '',
       totalProducts: 0,
@@ -29,6 +38,11 @@ async function getShopStatsForUser(userId) {
   }
 
   return {
+    shopId: shop._id ? String(shop._id) : '',
+    shopStatus: Number(shop.status ?? 1),
+    shopName: resolveShopDisplayName(shop, owner),
+    shopUsername: resolveShopUsername(shop, owner),
+    shopAvatar: resolveShopAvatar(shop, owner),
     categoryId: shop.categoryId?._id
       ? String(shop.categoryId._id)
       : shop.categoryId
@@ -55,7 +69,7 @@ async function getShopStatsForUser(userId) {
 
 async function buildPublicUserProfile(user) {
   const [shopStats, wallet] = await Promise.all([
-    getShopStatsForUser(user._id),
+    getShopStatsForUser(user._id, user),
     getWalletBalance(user._id).catch(() => ({ balance: 0 })),
   ]);
 
@@ -77,10 +91,10 @@ async function buildPublicUserProfile(user) {
   return {
     ...publicUser,
     ...storefrontStats,
-    // Shop dùng chung avatar với user.
-    shopAvatar: publicUser.avatar || "",
-    shopName: publicUser.fullName || '',
-    shopUsername: publicUser.userName || '',
+    // Avatar cá nhân và avatar gian hàng tách riêng.
+    shopAvatar: storefrontStats.shopAvatar || "",
+    shopName: storefrontStats.shopName || '',
+    shopUsername: storefrontStats.shopUsername || '',
     followersCount,
     followingCount: Number(publicUser.followingCount) || 0,
     walletBalance: Math.max(0, Number(wallet.balance) || 0),

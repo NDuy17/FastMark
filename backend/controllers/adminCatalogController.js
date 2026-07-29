@@ -22,6 +22,13 @@ function pickBodyValue(body, keys) {
   return "";
 }
 
+function pickDateRangeQuery(query) {
+  return {
+    from: pickQueryValue(query, ["from", "dateFrom"]),
+    to: pickQueryValue(query, ["to", "dateTo"]),
+  };
+}
+
 exports.listShops = async (req, res) => {
   const data = await adminCatalogService.listShops({
     search: pickQueryValue(req.query, ["search", "q"]),
@@ -30,6 +37,7 @@ exports.listShops = async (req, res) => {
     categoryId: pickQueryValue(req.query, ["categoryId"]),
     page: req.query.page,
     limit: req.query.limit,
+    ...pickDateRangeQuery(req.query),
   });
   return success(res, { data });
 };
@@ -62,6 +70,7 @@ exports.listProducts = async (req, res) => {
     categoryId: pickQueryValue(req.query, ["categoryId"]),
     page: req.query.page,
     limit: req.query.limit,
+    ...pickDateRangeQuery(req.query),
   });
   return success(res, { data });
 };
@@ -82,8 +91,9 @@ exports.showProduct = async (req, res) => {
 };
 
 exports.deleteProduct = async (req, res) => {
-  const product = await adminCatalogService.deleteProduct(req.params.id);
-  return success(res, { message: "Đã xóa (ẩn) sản phẩm.", data: { product } });
+  const reason = pickBodyValue(req.body, ["reason", "violationReason"]);
+  const product = await adminCatalogService.deleteProduct(req.params.id, reason);
+  return success(res, { message: "Đã gỡ sản phẩm và thông báo cho shop.", data: { product } });
 };
 
 exports.listReservations = async (req, res) => {

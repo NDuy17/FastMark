@@ -221,6 +221,19 @@ export async function setProductPromotionOnBackend({ idToken, productId, payload
   return parsed.data?.product;
 }
 
+export async function clearProductPromotionOnBackend({ idToken, productId }) {
+  const response = await apiRequest(
+    API_ENDPOINTS.productPromotion(productId),
+    {
+      method: 'DELETE',
+      headers: await authHeaders(idToken),
+    },
+    AUTH_TIMEOUT_MS
+  );
+  const parsed = await parseApiResponse(response);
+  return parsed.data?.product;
+}
+
 export async function listMyPromotionProductsOnBackend(idToken, { limit = 100 } = {}) {
   const response = await apiRequest(
     `${API_ENDPOINTS.productsPromotionsMine}?limit=${limit}`,

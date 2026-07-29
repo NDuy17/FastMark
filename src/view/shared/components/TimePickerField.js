@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   Platform,
@@ -12,6 +12,12 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatTimeString, parseTimeString } from '../../../core/utils/timeFormat';
+import {
+  BOTTOM_SHEET_BORDER,
+  BottomSheetDismissOverlay,
+  BottomSheetHandle,
+  BottomSheetPanel,
+} from './bottomSheetChrome';
 
 export default function TimePickerField({
   label,
@@ -23,21 +29,22 @@ export default function TimePickerField({
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [draftDate, setDraftDate] = useState(() => parseTimeString(value, placeholder));
+  const draftRef = useRef(draftDate);
   const hasValue = Boolean(String(value || '').trim());
   const displayValue = hasValue ? String(value).trim() : placeholder;
-  const pickerDate = useMemo(
-    () => parseTimeString(value, placeholder),
-    [placeholder, value]
-  );
 
   useEffect(() => {
     if (!showPicker) {
-      setDraftDate(parseTimeString(value, placeholder));
+      const next = parseTimeString(value, placeholder);
+      draftRef.current = next;
+      setDraftDate(next);
     }
   }, [placeholder, showPicker, value]);
 
   function openPicker() {
-    setDraftDate(parseTimeString(value, placeholder));
+    const next = parseTimeString(value, placeholder);
+    draftRef.current = next;
+    setDraftDate(next);
     setShowPicker(true);
   }
 
@@ -46,27 +53,23 @@ export default function TimePickerField({
   }
 
   function confirmPicker() {
-    onChange?.(formatTimeString(draftDate));
+    onChange?.(formatTimeString(draftRef.current));
     closePicker();
   }
 
-  function handleAndroidChange(event, selectedDate) {
-    // Android: chỉ cập nhật khi user bấm OK (không phải dismiss).
-    if (event?.type === 'dismissed') {
-      setShowPicker(false);
-      return;
-    }
-
-    setShowPicker(false);
+  function handleIosPickerChange(_event, selectedDate) {
     if (selectedDate) {
-      onChange?.(formatTimeString(selectedDate));
+      draftRef.current = selectedDate;
+      setDraftDate(selectedDate);
     }
   }
 
-  function handleIosChange(_event, selectedDate) {
-    if (selectedDate) {
-      setDraftDate(selectedDate);
+  function handleAndroidChange(event, selectedDate) {
+    setShowPicker(false);
+    if (event?.type === 'dismissed' || !selectedDate) {
+      return;
     }
+    onChange?.(formatTimeString(selectedDate));
   }
 
   if (Platform.OS === 'web') {
@@ -111,23 +114,24 @@ export default function TimePickerField({
 
       {Platform.OS === 'android' && showPicker ? (
         <DateTimePicker
-          value={pickerDate}
+          value={draftDate}
           mode="time"
           is24Hour
-          display="default"
+          display="spinner"
           onChange={handleAndroidChange}
         />
       ) : null}
 
       {Platform.OS === 'ios' ? (
         <Modal visible={showPicker} transparent animationType="slide" onRequestClose={closePicker}>
-          <Pressable style={styles.modalBackdrop} onPress={closePicker}>
-            <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <BottomSheetDismissOverlay onClose={closePicker}>
+            <BottomSheetPanel style={styles.modalSheet}>
+              <BottomSheetHandle compact />
               <View style={styles.modalHeader}>
                 <Pressable onPress={closePicker} hitSlop={8}>
                   <Text style={styles.modalActionText}>Hủy</Text>
                 </Pressable>
-                <Text style={styles.modalTitle}>{label}</Text>
+                <Text style={styles.modalTitle}>{label || 'Chọn giờ'}</Text>
                 <Pressable onPress={confirmPicker} hitSlop={8}>
                   <Text style={[styles.modalActionText, styles.modalActionPrimary]}>Xong</Text>
                 </Pressable>
@@ -137,11 +141,11 @@ export default function TimePickerField({
                 mode="time"
                 is24Hour
                 display="spinner"
-                onChange={handleIosChange}
-                style={styles.iosPicker}
+                onChange={handleIosPickerChange}
+                style={styles.picker}
               />
-            </Pressable>
-          </Pressable>
+            </BottomSheetPanel>
+          </BottomSheetDismissOverlay>
         </Modal>
       ) : null}
     </View>
@@ -225,15 +229,12 @@ const styles = StyleSheet.create({
     minHeight: 48,
     borderWidth: 1,
   },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-  },
   modalSheet: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
+    ...BOTTOM_SHEET_BORDER,
+    paddingTop: 10,
     paddingBottom: 24,
   },
   modalHeader: {
@@ -258,7 +259,7 @@ const styles = StyleSheet.create({
   modalActionPrimary: {
     color: '#076F32',
   },
-  iosPicker: {
+  picker: {
     alignSelf: 'center',
   },
 });

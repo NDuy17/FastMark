@@ -1,13 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -20,7 +12,8 @@ import { clearAuthFeedback, registerUser } from '../../viewmodel/auth/authSlice'
 import { checkRegisterAvailabilityOnBackend } from '../../api/authBackendApi';
 import { validateRegisterForm } from '../../viewmodel/auth/authFormValidation';
 import { getGoogleAuthSetupError } from '../../viewmodel/auth/googleAuthConfig';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import { showErrorAlert, showAdminAccountAlert, isAdminAccountMessage, resolveAuthAlertMessage } from '../../core/utils/appAlert';
+import AuthFormScreen from './components/AuthFormScreen';
 import AuthDivider from './components/AuthDivider';
 import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
@@ -39,17 +32,31 @@ export default function RegisterScreen({ onGoLogin, onGoBack }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [localError, setLocalError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
 
   const isLoading = actionStatus === 'loading';
   const isDisabled = isLoading || Boolean(configError);
   const googleSetupError = getGoogleAuthSetupError();
-  const displayError = configError || localError || error;
 
   useEffect(() => {
     dispatch(clearAuthFeedback());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (configError) {
+      showErrorAlert(configError);
+    }
+  }, [configError]);
+
+  useEffect(() => {
+    if (error) {
+      if (isAdminAccountMessage(error)) {
+        showAdminAccountAlert();
+        return;
+      }
+      showErrorAlert(error);
+    }
+  }, [error]);
 
   function setFieldError(field, message) {
     setFieldErrors((current) => ({ ...current, [field]: message }));
@@ -173,11 +180,10 @@ export default function RegisterScreen({ onGoLogin, onGoBack }) {
     });
 
     if (validationError) {
-      setLocalError(validationError);
+      showErrorAlert(validationError);
       return;
     }
 
-    setLocalError('');
     dispatch(
       registerUser({
         fullName: fullName.trim(),
@@ -189,180 +195,140 @@ export default function RegisterScreen({ onGoLogin, onGoBack }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.headerRow}>
-          <CircularBackButton
-            onPress={onGoBack}
-            variant="surface"
-            size={40}
-            style={styles.backButton}
-          />
-          <Text style={styles.headerTitle}>Đăng ký tài khoản mới</Text>
-        </View>
+    <AuthFormScreen title="Đăng ký tài khoản mới" onBack={onGoBack}>
+      <View style={styles.card}>
+        <AuthInput
+          label="Họ và tên"
+          value={fullName}
+          onChangeText={(value) => {
+            setFullName(value);
+            setFieldError('fullName', '');
+          }}
+          onBlur={validateFullNameField}
+          error={fieldErrors.fullName || ''}
+          autoCapitalize="words"
+          autoComplete="name"
+        />
 
-        <View style={styles.card}>
-          <AuthInput
-            label="Họ và tên"
-            value={fullName}
-            onChangeText={(value) => {
-              setFullName(value);
-              setLocalError('');
-              setFieldError('fullName', '');
+        <AuthInput
+          label="Username"
+          value={userName}
+          onChangeText={(value) => {
+            setUserName(value);
+            setFieldError('userName', '');
+          }}
+          onBlur={validateUserNameField}
+          error={fieldErrors.userName || ''}
+          autoCapitalize="none"
+          autoComplete="username"
+        />
+
+        <AuthInput
+          label="Email"
+          value={email}
+          onChangeText={(value) => {
+            setEmail(value);
+            setFieldError('email', '');
+          }}
+          onBlur={validateEmailField}
+          error={fieldErrors.email || ''}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoComplete="email"
+        />
+
+        <AuthInput
+          label="Mật khẩu"
+          value={password}
+          onChangeText={(value) => {
+            setPassword(value);
+            setFieldError('password', '');
+          }}
+          onBlur={validatePasswordField}
+          error={fieldErrors.password || ''}
+          secureTextEntry
+          autoCapitalize="none"
+          autoComplete="new-password"
+        />
+
+        <AuthInput
+          label="Xác nhận mật khẩu"
+          value={confirmPassword}
+          onChangeText={(value) => {
+            setConfirmPassword(value);
+            setFieldError('confirmPassword', '');
+          }}
+          onBlur={validateConfirmPasswordField}
+          error={fieldErrors.confirmPassword || ''}
+          secureTextEntry
+          autoCapitalize="none"
+          autoComplete="new-password"
+        />
+
+        <Pressable
+          style={styles.termsRow}
+          onPress={() => setAcceptedTerms((value) => !value)}
+        >
+          <View style={[styles.checkbox, acceptedTerms ? styles.checkboxChecked : null]}>
+            {acceptedTerms ? <Text style={styles.checkmark}>✓</Text> : null}
+          </View>
+          <Text style={styles.termsText}>
+            <Text>Tôi đồng ý với các </Text>
+            <Text style={styles.termsLink}>Điều khoản dịch vụ</Text>
+            <Text> và </Text>
+            <Text style={styles.termsLink}>Chính sách bảo mật</Text>
+            <Text> của FastMark.</Text>
+          </Text>
+        </Pressable>
+
+        {successMessage ? (
+          <View style={[styles.alertBox, styles.alertSuccess]}>
+            <Text style={[styles.alertText, styles.alertTextSuccess]}>{successMessage}</Text>
+          </View>
+        ) : null}
+
+        <Pressable
+          disabled={isDisabled}
+          onPress={handleSubmit}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            (pressed || isLoading) && styles.primaryButtonPressed,
+            isDisabled && styles.primaryButtonDisabled,
+          ]}
+        >
+          <Text style={styles.primaryButtonText}>
+            {isLoading ? 'Đang đăng ký...' : 'Đăng ký'}
+          </Text>
+        </Pressable>
+
+        <AuthDivider label="Hoặc đăng ký bằng" />
+
+        {googleSetupError ? (
+          <View style={styles.hintBox}>
+            <Text style={styles.hintText}>{googleSetupError}</Text>
+          </View>
+        ) : null}
+
+        <GoogleSignInButton
+          disabled={isLoading}
+            onError={(message) => {
+              const text = resolveAuthAlertMessage(message);
+              if (!text) {
+                return;
+              }
+              if (isAdminAccountMessage(text)) {
+                showAdminAccountAlert();
+                return;
+              }
+              showErrorAlert(text);
             }}
-            onBlur={validateFullNameField}
-            error={fieldErrors.fullName}
-            autoCapitalize="words"
-            autoComplete="name"
-          />
-
-          <AuthInput
-            label="Username"
-            value={userName}
-            onChangeText={(value) => {
-              setUserName(value);
-              setLocalError('');
-              setFieldError('userName', '');
-            }}
-            onBlur={validateUserNameField}
-            error={fieldErrors.userName}
-            autoCapitalize="none"
-            autoComplete="username"
-          />
-
-          <AuthInput
-            label="Email"
-            value={email}
-            onChangeText={(value) => {
-              setEmail(value);
-              setLocalError('');
-              setFieldError('email', '');
-            }}
-            onBlur={validateEmailField}
-            error={fieldErrors.email}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoComplete="email"
-          />
-
-          <AuthInput
-            label="Mật khẩu"
-            value={password}
-            onChangeText={(value) => {
-              setPassword(value);
-              setLocalError('');
-              setFieldError('password', '');
-            }}
-            onBlur={validatePasswordField}
-            error={fieldErrors.password}
-            secureTextEntry
-            autoCapitalize="none"
-            autoComplete="new-password"
-          />
-
-          <AuthInput
-            label="Xác nhận mật khẩu"
-            value={confirmPassword}
-            onChangeText={(value) => {
-              setConfirmPassword(value);
-              setLocalError('');
-              setFieldError('confirmPassword', '');
-            }}
-            onBlur={validateConfirmPasswordField}
-            error={fieldErrors.confirmPassword}
-            secureTextEntry
-            autoCapitalize="none"
-            autoComplete="new-password"
-          />
-
-          <Pressable
-            style={styles.termsRow}
-            onPress={() => setAcceptedTerms((value) => !value)}
-          >
-            <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
-              {acceptedTerms ? <Text style={styles.checkmark}>✓</Text> : null}
-            </View>
-            <Text style={styles.termsText}>
-              Tôi đồng ý với các <Text style={styles.termsLink}>Điều khoản dịch vụ</Text> và{' '}
-              <Text style={styles.termsLink}>Chính sách bảo mật</Text> của FastMark.
-            </Text>
-          </Pressable>
-
-          {displayError ? (
-            <View style={styles.alertBox}>
-              <Text style={styles.alertText}>{displayError}</Text>
-            </View>
-          ) : null}
-
-          {successMessage ? (
-            <View style={[styles.alertBox, styles.alertSuccess]}>
-              <Text style={[styles.alertText, styles.alertTextSuccess]}>{successMessage}</Text>
-            </View>
-          ) : null}
-
-          <Pressable
-            disabled={isDisabled}
-            onPress={handleSubmit}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              (pressed || isLoading) && styles.primaryButtonPressed,
-              isDisabled && styles.primaryButtonDisabled,
-            ]}
-          >
-            <Text style={styles.primaryButtonText}>
-              {isLoading ? 'Đang đăng ký...' : 'Đăng ký'}
-            </Text>
-          </Pressable>
-
-          <AuthDivider label="Hoặc đăng ký bằng" />
-
-          {googleSetupError ? (
-            <View style={styles.hintBox}>
-              <Text style={styles.hintText}>{googleSetupError}</Text>
-            </View>
-          ) : null}
-
-          <GoogleSignInButton disabled={isLoading} onError={setLocalError} />
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        />
+      </View>
+    </AuthFormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: AUTH_COLORS.background,
-  },
-  content: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 36,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: AUTH_COLORS.text,
-  },
-  backButton: {
-    borderWidth: 1,
-    borderColor: AUTH_COLORS.border,
-    backgroundColor: '#ffffff',
-  },
   card: {
     paddingVertical: 8,
   },
@@ -462,18 +428,5 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#92400e',
     fontWeight: '600',
-  },
-  footerLinkWrap: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  footerText: {
-    fontSize: 14,
-    color: AUTH_COLORS.textMuted,
-    fontWeight: '500',
-  },
-  footerLink: {
-    color: AUTH_COLORS.primary,
-    fontWeight: '800',
   },
 });

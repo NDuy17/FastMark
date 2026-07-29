@@ -22,19 +22,20 @@ import {
 import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { searchRegisteredShops } from '../../repository/searchShopRepository';
 import { loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { normalizeProduct } from '../../model/productModel';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import InboxScreen from '../inbox/InboxScreen';
 import ProductCard from '../shared/components/ProductCard';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 
 const SEARCH_DEBOUNCE_MS = 400;
 const NEARBY_RADIUS_METERS = 5000;
+const ALL_PRODUCTS_RADIUS_METERS = 20000;
 const UNLIMITED_SEARCH_RADIUS = 0;
 const SEARCH_TABS = [
   { key: 'products', label: 'Sản phẩm' },
@@ -60,10 +61,11 @@ export default function ProductsScreen({
   onNavigationStateChange,
   onOpenBuyerOrders,
   onOpenWalletTopUp,
-  onOpenChat,
   onNavigateDirections,
   focusRequest = null,
   onBack = null,
+  resumeReserveRequest = null,
+  onResumeReserveHandled,
 }) {
   const insets = useScreenInsets();
   const scrollRef = useRef(null);
@@ -75,39 +77,24 @@ export default function ProductsScreen({
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentLocation, setCurrentLocation] = useState(null);
-  const [locationError, setLocationError] = useState('');
   const [isLocating, setIsLocating] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState('');
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState(null);
-  const [chatOpenRequest, setChatOpenRequest] = useState(null);
   const [likedProducts, setLikedProducts] = useState({});
   const [searchTab, setSearchTab] = useState('products');
   const [shops, setShops] = useState([]);
   const [isLoadingShops, setIsLoadingShops] = useState(false);
-  const [shopsError, setShopsError] = useState('');
   const [browseNearbyShops, setBrowseNearbyShops] = useState(false);
   const [autoFocusSearch, setAutoFocusSearch] = useState(false);
   const searchInputRef = useRef(null);
 
   const isSearching = Boolean(debouncedSearch) || browseNearbyShops;
 
-  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
-    if (!shopId) {
-      return;
-    }
-    setChatOpenRequest({
-      shopId: String(shopId),
-      shopName: shopName || 'Gian hàng',
-      at: Date.now(),
-    });
-  }, []);
-
   useEffect(() => {
-    onNavigationStateChange?.(Boolean(selectedProductId || selectedStoreId || chatOpenRequest));
-  }, [chatOpenRequest, onNavigationStateChange, selectedProductId, selectedStoreId]);
+    onNavigationStateChange?.(Boolean(selectedProductId || selectedStoreId));
+  }, [onNavigationStateChange, selectedProductId, selectedStoreId]);
 
   useEffect(() => {
     if (searchTimerRef.current) {
@@ -128,7 +115,6 @@ export default function ProductsScreen({
       if (!browseNearbyShops) {
         setSearchTab('products');
         setShops([]);
-        setShopsError('');
       }
     } else {
       setBrowseNearbyShops(false);
@@ -137,11 +123,10 @@ export default function ProductsScreen({
 
   const loadLocation = useCallback(async () => {
     setIsLocating(true);
-    setLocationError('');
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
-        setLocationError('Cần quyền vị trí để xem sản phẩm gần bạn.');
+        showErrorAlert('Cần quyền vị trí để xem sản phẩm gần bạn.');
         setCurrentLocation(null);
         return;
       }
@@ -151,7 +136,7 @@ export default function ProductsScreen({
       });
       setCurrentLocation(normalizeExpoLocation(position));
     } catch {
-      setLocationError('Không lấy được vị trí hiện tại.');
+      showErrorAlert('Không lấy được vị trí hiện tại.');
       setCurrentLocation(null);
     } finally {
       setIsLocating(false);
@@ -249,14 +234,12 @@ export default function ProductsScreen({
       } else {
         setIsLoading(true);
       }
-      setLoadError('');
-
       try {
         const [rows, promoRows] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
-            radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : NEARBY_RADIUS_METERS,
+            radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : ALL_PRODUCTS_RADIUS_METERS,
             categoryId: selectedCategoryId,
             search: debouncedSearch,
             limit: 200,
@@ -302,7 +285,7 @@ export default function ProductsScreen({
         );
       } catch (error) {
         setProducts([]);
-        setLoadError(error.message || 'Không tải được sản phẩm.');
+        showErrorAlert(error.message || 'Không tải được sản phẩm.');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -322,8 +305,6 @@ export default function ProductsScreen({
       if (!refresh) {
         setIsLoadingShops(true);
       }
-      setShopsError('');
-
       try {
         if (browseNearbyShops && !debouncedSearch) {
           const nearby = await loadNearbyRegisteredShops({
@@ -345,7 +326,7 @@ export default function ProductsScreen({
         }
       } catch (error) {
         setShops([]);
-        setShopsError(error.message || 'Không tìm được gian hàng.');
+        showErrorAlert(error.message || 'Không tìm được gian hàng.');
       } finally {
         setIsLoadingShops(false);
       }
@@ -408,6 +389,14 @@ export default function ProductsScreen({
     scrollRef.current?.scrollTo?.({ y: 0, animated: true });
   }, [focusRequest]);
 
+  useEffect(() => {
+    if (!resumeReserveRequest?.productId || !resumeReserveRequest?.at) {
+      return;
+    }
+    setSelectedStoreId(null);
+    setSelectedProductId(String(resumeReserveRequest.productId));
+  }, [resumeReserveRequest?.at, resumeReserveRequest?.productId]);
+
   function handleSelectCategory(categoryId) {
     setSelectedCategoryId((current) => (current === categoryId ? '' : categoryId));
   }
@@ -415,22 +404,6 @@ export default function ProductsScreen({
   function handleOpenProduct(productId) {
     setSelectedStoreId(null);
     setSelectedProductId(productId);
-  }
-
-  if (chatOpenRequest) {
-    return (
-      <InboxScreen
-        buyerView
-        messagesOnly
-        chatRequest={chatOpenRequest}
-        onBack={() => setChatOpenRequest(null)}
-        onViewShop={(shopId) => {
-          setChatOpenRequest(null);
-          setSelectedProductId(null);
-          setSelectedStoreId(String(shopId));
-        }}
-      />
-    );
   }
 
   if (selectedStoreId) {
@@ -443,7 +416,6 @@ export default function ProductsScreen({
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
-        onOpenChat={handleOpenChatLocal}
         onNavigateDirections={onNavigateDirections}
       />
     );
@@ -453,14 +425,24 @@ export default function ProductsScreen({
     return (
       <ProductDetailScreen
         productId={selectedProductId}
-        onBack={() => setSelectedProductId(null)}
+        onBack={() => {
+          setSelectedProductId(null);
+          onResumeReserveHandled?.();
+        }}
         onStorePress={(storeId) => setSelectedStoreId(storeId)}
-        onOpenChat={handleOpenChatLocal}
         onOrderSuccess={(tab) => {
           setSelectedProductId(null);
           onOpenBuyerOrders?.(tab);
         }}
         onOpenTopUp={onOpenWalletTopUp}
+        reservationSource="products"
+        resumeReserveRequest={
+          resumeReserveRequest &&
+          String(resumeReserveRequest.productId) === String(selectedProductId)
+            ? resumeReserveRequest
+            : null
+        }
+        onResumeReserveConsumed={onResumeReserveHandled}
       />
     );
   }
@@ -532,14 +514,6 @@ export default function ProductsScreen({
               );
             })}
           </View>
-
-          {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
-          {searchTab === 'products' && loadError ? (
-            <Text style={styles.errorText}>{loadError}</Text>
-          ) : null}
-          {searchTab === 'shops' && shopsError ? (
-            <Text style={styles.errorText}>{shopsError}</Text>
-          ) : null}
 
           {searchTab === 'products' ? (
             isLoading || isLocating ? (
@@ -651,9 +625,6 @@ export default function ProductsScreen({
               />
             ))}
           </ScrollView>
-
-          {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
-          {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
 
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Sản phẩm gần bạn</Text>

@@ -39,7 +39,9 @@ function toPlanDto(doc) {
 }
 
 async function listAdminPlans() {
-  const rows = await SellerPlan.find({}).sort({ price: 1, CreatedAt: 1 }).limit(100);
+  const rows = await SellerPlan.find({ isActive: true })
+    .sort({ price: 1, CreatedAt: 1 })
+    .limit(100);
   return rows.map(toPlanDto);
 }
 
@@ -75,6 +77,20 @@ async function createPlan(payload = {}) {
     throw createServiceError("Giá gói không hợp lệ.");
   }
 
+  const existing = await SellerPlan.findOne({ name });
+  if (existing) {
+    if (existing.isActive === false) {
+      existing.description = description;
+      existing.durationDays = Math.round(durationDays);
+      existing.price = price;
+      existing.isActive = true;
+      existing.UpdatedAt = new Date();
+      await existing.save();
+      return { plan: toPlanDto(existing), restored: true };
+    }
+    throw createServiceError("Tên gói đã tồn tại.");
+  }
+
   const plan = await SellerPlan.create({
     name,
     description,
@@ -82,7 +98,7 @@ async function createPlan(payload = {}) {
     price,
     isActive,
   });
-  return toPlanDto(plan);
+  return { plan: toPlanDto(plan), restored: false };
 }
 
 async function updatePlan(planId, payload = {}) {
@@ -122,12 +138,6 @@ async function updatePlan(planId, payload = {}) {
     plan.price = price;
   }
 
-  if (payload.isActive !== undefined) {
-    plan.isActive = Boolean(payload.isActive);
-  } else if (payload.status !== undefined) {
-    plan.isActive = Number(payload.status) === 1;
-  }
-
   await plan.save();
   return toPlanDto(plan);
 }
@@ -142,6 +152,19 @@ async function deletePlan(planId) {
   return toPlanDto(plan);
 }
 
+async function restorePlan(planId) {
+  const plan = await SellerPlan.findById(planId);
+  if (!plan) {
+    throw createServiceError("Không tìm thấy gói.", 404);
+  }
+  if (plan.isActive !== false) {
+    return toPlanDto(plan);
+  }
+  plan.isActive = true;
+  await plan.save();
+  return toPlanDto(plan);
+}
+
 module.exports = {
   listAdminPlans,
   listActivePlans,
@@ -149,5 +172,6 @@ module.exports = {
   createPlan,
   updatePlan,
   deletePlan,
+  restorePlan,
   toPlanDto,
 };

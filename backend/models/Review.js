@@ -43,6 +43,8 @@ const ReviewSchema = new mongoose.Schema({
 
   // Admin ẩn khỏi trang công khai.
   isHidden: { type: Boolean, default: false, index: true },
+  // Lý do admin ẩn / xóa đánh giá.
+  moderationReason: { type: String, default: "" },
   // Xóa mềm.
   isDeleted: { type: Boolean, default: false, index: true },
   // Thời điểm xóa mềm (null nếu chưa xóa).

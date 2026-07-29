@@ -2,12 +2,19 @@ const mongoose = require("mongoose");
 
 /**
  * ShopProfile — hồ sơ gian hàng gắn với User đã được duyệt seller.
- * Tên / username lấy từ User (FullName / UserName), không lưu trùng.
+ * Tên hiển thị / username shop lưu riêng (shopName / shopUsername), tách khỏi tài khoản cá nhân.
  * Muốn dùng tính năng bán hàng công khai: cần SellerSubscription Active (isActive = true).
  */
 const ShopProfileSchema = new mongoose.Schema({
   // Chủ gian hàng (ref User, Role seller).
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+
+  // Tên hiển thị gian hàng (khác họ tên tài khoản).
+  shopName: { type: String, default: "", trim: true },
+  // Handle công khai @username của gian hàng.
+  shopUsername: { type: String, default: "", trim: true, lowercase: true, index: true },
+  // Ảnh đại diện gian hàng (tách khỏi avatar tài khoản cá nhân).
+  avatar: { type: String, default: "" },
 
   // Mô tả gian hàng.
   description: { type: String, default: "" },
@@ -34,6 +41,9 @@ const ShopProfileSchema = new mongoose.Schema({
 
   // Trạng thái gian hàng: 1 = hoạt động, 0 = bị khóa (admin).
   status: { type: Number, default: 1 },
+
+  // Thời điểm bắt đầu lượt khóa gian hàng hiện tại.
+  lockedAt: { type: Date, default: null },
 
   // Đang online (presence realtime của gian hàng).
   DangHoatDong: { type: Boolean, default: false },

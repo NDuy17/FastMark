@@ -29,3 +29,15 @@ export const selectNeedsEmailVerification = (state) => {
     !profile?.verifyAccount
   );
 };
+
+/** Tài khoản bị khóa nick (User.Status = 0). */
+export const selectIsAccountLocked = (state) =>
+  state.auth.status === 'authenticated' && Number(state.auth.profile?.status) === 0;
+
+/** Gian hàng bị khóa (ShopProfile.status = 0). */
+export const selectIsShopLocked = (state) =>
+  state.auth.status === 'authenticated' && Number(state.auth.profile?.shopStatus) === 0;
+
+/** Shop bị khóa nhưng tài khoản vẫn dùng được (chỉ chặn tab gian hàng). */
+export const selectIsShopLockedOnly = (state) =>
+  selectIsShopLocked(state) && !selectIsAccountLocked(state);

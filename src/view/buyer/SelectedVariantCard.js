@@ -13,6 +13,9 @@ export default function SelectedVariantCard({
   label = 'Phân loại đã chọn',
   priceOverride = null,
   hideStock = false,
+  quantity = null,
+  attachBottom = false,
+  embedded = false,
 }) {
   if (!variant) {
     return null;
@@ -25,9 +28,16 @@ export default function SelectedVariantCard({
     priceOverride != null && Number.isFinite(Number(priceOverride))
       ? Number(priceOverride)
       : Number(variant.price) || 0;
+  const showQuantity = quantity != null && Number(quantity) > 0;
 
   return (
-    <View style={styles.box}>
+    <View
+      style={[
+        styles.box,
+        attachBottom && styles.boxAttachBottom,
+        embedded && styles.boxEmbedded,
+      ]}
+    >
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <View style={styles.row}>
         <View style={styles.thumbWrap}>
@@ -41,7 +51,10 @@ export default function SelectedVariantCard({
           <Text style={styles.name} numberOfLines={2}>
             {variant.variantName || variant.name || 'Loại'}
           </Text>
-          <Text style={styles.price}>{formatPrice(displayPrice)}</Text>
+          <View style={styles.priceRow}>
+            <Text style={styles.price}>{formatPrice(displayPrice)}</Text>
+            {showQuantity ? <Text style={styles.qtyMul}>× {quantity}</Text> : null}
+          </View>
           {hideStock ? null : (
             <Text style={styles.meta}>
               Còn lại: {remaining > 0 ? remaining : 'Hết'} · Đã bán: {sold}
@@ -60,13 +73,26 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     backgroundColor: '#E6F4EC',
-    marginBottom: 4,
+    marginBottom: 0,
+  },
+  boxAttachBottom: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+  },
+  boxEmbedded: {
+    borderWidth: 0,
+    borderRadius: 0,
+    padding: 0,
+    backgroundColor: 'transparent',
   },
   label: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#076F32',
     marginBottom: 8,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   row: {
     flexDirection: 'row',
@@ -103,8 +129,19 @@ const styles = StyleSheet.create({
   price: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#076F32',
+    color: '#0f172a',
     lineHeight: 18,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  qtyMul: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#475569',
   },
   meta: {
     fontSize: 12,

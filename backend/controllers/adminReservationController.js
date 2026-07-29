@@ -26,6 +26,7 @@ function buildListQuery(req) {
     status: pickQueryValue(req.query, ["status"]),
     tab: pickQueryValue(req.query, ["tab"]),
     buyerId: pickQueryValue(req.query, ["buyerId", "userId"]),
+    productId: pickQueryValue(req.query, ["productId"]),
     sellerId: pickQueryValue(req.query, ["sellerId", "shopId"]),
     dateFrom: pickQueryValue(req.query, ["dateFrom", "from"]),
     dateTo: pickQueryValue(req.query, ["dateTo", "to"]),

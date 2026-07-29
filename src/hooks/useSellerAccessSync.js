@@ -12,6 +12,7 @@ import {
   selectUserRole,
 } from '../viewmodel/auth/authSelectors';
 import { syncSellerAccess } from '../viewmodel/auth/authSlice';
+import { useResourceSocket } from './useResourceSocket';
 
 const PENDING_POLL_INTERVAL_MS = 15000;
 
@@ -45,6 +46,21 @@ export function useSellerAccessSync({
       isSyncingRef.current = false;
     }
   }, [dispatch, enabled]);
+
+  const handleVerificationUpdated = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim().toLowerCase();
+      if (type === 'verification') {
+        refresh();
+      }
+    },
+    [refresh]
+  );
+
+  useResourceSocket({
+    enabled,
+    onResourceUpdated: handleVerificationUpdated,
+  });
 
   // Chỉ sync seller khi cần — tránh đua token/API ngay sau login.
   useEffect(() => {

@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -15,7 +12,8 @@ import {
   resetPasswordOnBackend,
   verifyPasswordResetOtpOnBackend,
 } from '../../api/authBackendApi';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import { showErrorAlert } from '../../core/utils/appAlert';
+import AuthFormScreen from './components/AuthFormScreen';
 import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
 
@@ -65,7 +63,7 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
       setSuccessMessage('Đã gửi mã OTP đến email của bạn.');
       setStep(STEPS.OTP);
     } catch (requestError) {
-      setError(requestError.message || 'Không gửi được OTP.');
+      showErrorAlert(requestError.message || 'Không gửi được OTP.');
     } finally {
       setIsLoading(false);
     }
@@ -97,13 +95,13 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
                 )
               : 120)
         );
-        setError(
+        showErrorAlert(
           verifyError.message ||
             'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
         );
         return;
       }
-      setError(verifyError.message || 'Mã OTP không đúng.');
+      showErrorAlert(verifyError.message || 'Mã OTP không đúng.');
     } finally {
       setIsLoading(false);
     }
@@ -126,7 +124,7 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
       setSuccessMessage('Đã đặt lại mật khẩu thành công.');
       onSuccess?.();
     } catch (resetError) {
-      setError(resetError.message || 'Không đặt lại được mật khẩu.');
+      showErrorAlert(resetError.message || 'Không đặt lại được mật khẩu.');
     } finally {
       setIsLoading(false);
     }
@@ -158,21 +156,8 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
           : 'Đặt mật khẩu mới';
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.headerRow}>
-          <CircularBackButton
-            onPress={onBack}
-            variant="surface"
-            size={40}
-            style={styles.backButton}
-          />
-          <Text style={styles.headerTitle}>Quên mật khẩu</Text>
-        </View>
-
+    <AuthFormScreen title="Quên mật khẩu" onBack={onBack}>
+      <View style={styles.formContent}>
         <Text style={styles.subtitle}>
           {step === STEPS.EMAIL
             ? 'Nhập email để nhận mã OTP đặt lại mật khẩu.'
@@ -281,37 +266,14 @@ export default function ForgotPasswordScreen({ onBack, onSuccess }) {
             )}
           </Pressable>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </View>
+    </AuthFormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: AUTH_COLORS.background,
-  },
-  content: {
+  formContent: {
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 36,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: AUTH_COLORS.text,
-  },
-  backButton: {
-    borderWidth: 1,
-    borderColor: AUTH_COLORS.border,
-    backgroundColor: '#ffffff',
   },
   subtitle: {
     fontSize: 14,

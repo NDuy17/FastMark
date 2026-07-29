@@ -9,11 +9,12 @@ import {
 import * as Location from 'expo-location';
 
 import LeafletMap from '../shared/components/LeafletMap';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import AddressSearchBar from '../map/AddressSearchBar';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
 import { hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
+import { showErrorAlert } from '../../core/utils/appAlert';
 
 export default function SellerLocationPickerScreen({
   initialLocation,
@@ -114,7 +115,7 @@ export default function SellerLocationPickerScreen({
 
       applyLocation(normalizeExpoLocation(position));
     } catch (locationError) {
-      setError(locationError.message || 'Không lấy được vị trí hiện tại.');
+      showErrorAlert(locationError.message || 'Không lấy được vị trí hiện tại.');
     } finally {
       setIsLocating(false);
     }
@@ -135,13 +136,7 @@ export default function SellerLocationPickerScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.contentPaddingTop }]}>
-        <CircularBackButton onPress={onBack} variant="plain" style={styles.backButton} />
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          Chọn vị trí gian hàng
-        </Text>
-        <View style={styles.headerSpacer} />
-      </View>
+      <SubScreenHeader title="Chọn vị trí gian hàng" onBack={onBack} />
 
       <View style={styles.mapArea}>
         <LeafletMap
@@ -225,31 +220,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f4f7f6',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingBottom: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  backButton: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  headerSpacer: {
-    width: 36,
-    height: 36,
   },
   mapArea: {
     flex: 1,

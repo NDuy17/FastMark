@@ -4,6 +4,14 @@ const User = require("../models/User");
 const { SELLER_VERIFICATION_STATUS, USER_ROLE } = require("../constants");
 const { assertCategoryExists } = require("./categoryService");
 const { normalizeCategoryId } = require("../utils/categoryId");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendUniqueOrConditions,
+  resolveStatusesFromLabelSearch,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
 const { ensureDefaultUserAvatar } = require("./defaultUserAvatarService");
 const {
@@ -13,19 +21,16 @@ const {
   clearOtpSession,
   bumpOtpFailCount,
 } = require("./otpSessionStore");
-
-const PHONE_VERIFY_TTL_MS = 5 * 60 * 1000;
-const PHONE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
-const PHONE_VERIFY_MAX_ATTEMPTS = 5;
-const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
-
-function normalizeShopUsername(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function normalizeShopName(value) {
-  return String(value || "").trim().replace(/\s+/g, " ");
-}
+const {
+  pickString,
+  assertShopNameValid,
+  assertShopUsernameAvailable,
+} = require("../utils/shopIdentity");
+const {
+  isPusherConfigured,
+  sendPhoneVerificationCode,
+} = require("./pusherService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 
 function pickPayloadValue(body, keys) {
   for (const key of keys) {
@@ -36,10 +41,6 @@ function pickPayloadValue(body, keys) {
   }
 
   return undefined;
-}
-
-function pickString(value) {
-  return String(value || "").trim();
 }
 
 function normalizeSellerRegistrationPayload(body = {}) {
@@ -67,7 +68,6 @@ function normalizeSellerRegistrationPayload(body = {}) {
     shopUsername: shopUsername ?? body.shopUsername,
     shopDescription: shopDescription ?? body.shopDescription,
     categoryId: normalizeCategoryId(categoryId ?? body.categoryId),
-    // Client may still send `address` — treat as addressHeThong.
     systemAddress:
       systemAddress ?? body.systemAddress ?? body.addressHeThong ?? body.DiaChiHeThong ?? address ?? body.address,
     latitude: body.latitude ?? body.lat,
@@ -77,11 +77,14 @@ function normalizeSellerRegistrationPayload(body = {}) {
 
 function resolveCategoryFields(verification) {
   const category = verification?.categoryId;
-  if (category && typeof category === "object" && category.categoryName) {
-    return {
-      categoryId: normalizeCategoryId(category._id),
-      categoryName: category.categoryName || "",
-    };
+  if (category && typeof category === "object") {
+    const categoryName = String(category.categoryName || category.name || "").trim();
+    if (categoryName) {
+      return {
+        categoryId: normalizeCategoryId(category._id),
+        categoryName,
+      };
+    }
   }
 
   return {
@@ -90,58 +93,15 @@ function resolveCategoryFields(verification) {
   };
 }
 
-function assertShopNameValid(shopName) {
-  const normalized = normalizeShopName(shopName);
-
-  if (normalized.length < 2 || normalized.length > 80) {
-    throw createServiceError("Tên gian hàng phải từ 2-80 ký tự.");
-  }
-
-  return normalized;
-}
-
-async function assertShopUsernameAvailable(shopUsername, userId) {
-  const normalized = normalizeShopUsername(shopUsername);
-
-  if (!SHOP_USERNAME_PATTERN.test(normalized)) {
-    throw createServiceError(
-      "Tên shop phải từ 3-30 ký tự, chỉ chữ thường, số và dấu gạch dưới."
-    );
-  }
-
-  const existingUserName = await User.findOne({
-    UserName: {
-      $regex: `^${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-      $options: "i",
-    },
-  }).lean();
-  if (existingUserName) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  const existingShop = await ShopProfile.findOne({ shopUsername: normalized }).lean();
-  if (existingShop && String(existingShop.userId) !== String(userId)) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  const pendingVerification = await SellerVerification.findOne({
-    shopUsername: normalized,
-    status: SELLER_VERIFICATION_STATUS.PENDING,
-    userId: { $ne: userId },
-  }).lean();
-
-  if (pendingVerification) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  return normalized;
-}
-
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
 }
+
+const PHONE_VERIFY_TTL_MS = 5 * 60 * 1000;
+const PHONE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
+const PHONE_VERIFY_MAX_ATTEMPTS = 5;
 
 function ensureUserHasPhone(user) {
   const phone = String(user.Phone || "").trim();
@@ -202,11 +162,10 @@ function issuePhoneOtpSession(userId, targetPhone, { applyResendCooldown = true 
   return { code, session };
 }
 
-function toPhoneOtpResponse(phone, session, code) {
+function toPhoneOtpResponse(phone, session) {
   const resendWait = getPhoneResendWaitSeconds(session);
   return {
     phone,
-    verificationCode: code,
     expiresAt: session.expiresAt,
     expiresInSeconds: PHONE_VERIFY_TTL_MS / 1000,
     resendAvailableAt:
@@ -217,6 +176,28 @@ function toPhoneOtpResponse(phone, session, code) {
           : null,
     resendCooldownSeconds: resendWait || PHONE_RESEND_COOLDOWN_MS / 1000,
   };
+}
+
+async function deliverPhoneVerificationCode(phone, code) {
+  if (!isPusherConfigured()) {
+    throw createServiceError(
+      "Hệ thống gửi mã xác minh chưa được cấu hình. Liên hệ quản trị viên.",
+      503
+    );
+  }
+
+  try {
+    const sent = await sendPhoneVerificationCode(phone, code);
+    if (!sent) {
+      throw new Error("Pusher không phản hồi.");
+    }
+  } catch (error) {
+    console.warn("[phone-otp] Pusher send failed:", error?.message || error);
+    throw createServiceError(
+      "Không gửi được mã xác minh. Vui lòng thử lại sau.",
+      502
+    );
+  }
 }
 
 /** Gửi / gửi lại mã SĐT. Gửi lại: chặn 2 phút, hủy mã cũ, phát mã mới. */
@@ -253,7 +234,8 @@ async function requestSellerPhoneCode(user, phoneInput) {
   const { code, session } = issuePhoneOtpSession(user._id, targetPhone, {
     applyResendCooldown: true,
   });
-  return toPhoneOtpResponse(targetPhone, session, code);
+  await deliverPhoneVerificationCode(targetPhone, code);
+  return toPhoneOtpResponse(targetPhone, session);
 }
 
 /**
@@ -290,13 +272,14 @@ async function confirmSellerPhoneCode(user, code, phoneInput) {
     if (failCount >= PHONE_VERIFY_MAX_ATTEMPTS) {
       // Sai 5 lần → hủy mã cũ, gửi mã mới + khóa gửi lại 2 phút (như vừa gửi mã).
       const issued = issuePhoneOtpSession(user._id, phone, { applyResendCooldown: true });
+      await deliverPhoneVerificationCode(phone, issued.code);
       const error = createServiceError(
         "Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới. Có thể gửi lại sau 2 phút.",
         400
       );
       error.data = {
         mustUseNewCode: true,
-        ...toPhoneOtpResponse(phone, issued.session, issued.code),
+        ...toPhoneOtpResponse(phone, issued.session),
       };
       throw error;
     }
@@ -369,7 +352,7 @@ async function resolveVerificationImage({
 async function getMySellerVerification(user) {
   return SellerVerification.findOne({ userId: user._id })
     .sort({ CreatedAt: -1 })
-    .populate("categoryId", "categoryName");
+    .populate("categoryId", "name");
 }
 
 async function reloadVerificationById(verificationId) {
@@ -377,7 +360,7 @@ async function reloadVerificationById(verificationId) {
     return null;
   }
 
-  return SellerVerification.findById(verificationId).populate("categoryId", "categoryName");
+  return SellerVerification.findById(verificationId).populate("categoryId", "name");
 }
 
 async function promoteUserToSeller(user, verification, approvedById = null) {
@@ -397,6 +380,8 @@ async function promoteUserToSeller(user, verification, approvedById = null) {
   if (!existingShop) {
     shop = await ShopProfile.create({
       userId: user._id,
+      shopName: verification.shopName || "",
+      shopUsername: verification.shopUsername || "",
       categoryId,
       description: verification.shopDescription || verification.description || "",
       addressHeThong:
@@ -413,6 +398,12 @@ async function promoteUserToSeller(user, verification, approvedById = null) {
   } else {
     if (categoryId) {
       existingShop.categoryId = categoryId;
+    }
+    if (verification.shopName) {
+      existingShop.shopName = verification.shopName;
+    }
+    if (verification.shopUsername) {
+      existingShop.shopUsername = verification.shopUsername;
     }
     if (verification.shopDescription || verification.description) {
       existingShop.description = verification.shopDescription || verification.description;
@@ -461,6 +452,25 @@ async function syncSellerRoleFromVerification(user) {
   return verification;
 }
 
+function emitSellerVerificationUpdated(verification, action = "updated") {
+  if (!verification?._id) {
+    return;
+  }
+
+  const payload = {
+    verificationId: String(verification._id),
+    userId: verification.userId ? String(verification.userId) : "",
+    status: Number(verification.status),
+    shopName: verification.shopName || "",
+    action,
+  };
+
+  emitAdminUpdated("verification", payload);
+  if (verification.userId) {
+    emitUserResourceUpdated(verification.userId, "verification", payload);
+  }
+}
+
 async function submitSellerVerification(user, payload) {
   const normalizedPayload = normalizeSellerRegistrationPayload(payload);
 
@@ -490,20 +500,17 @@ async function submitSellerVerification(user, payload) {
     throw createServiceError("Vui lòng chọn vị trí trên bản đồ.");
   }
 
-  const shopUsername = pickString(user.UserName).toLowerCase();
-  const shopName = pickString(user.FullName) || shopUsername;
-  if (!shopName || shopName.length < 2) {
-    throw createServiceError("Tài khoản thiếu họ tên. Hãy cập nhật hồ sơ trước khi đăng ký bán.");
+  let shopName;
+  let shopUsername;
+  try {
+    shopName = assertShopNameValid(normalizedPayload.shopName);
+    shopUsername = await assertShopUsernameAvailable(normalizedPayload.shopUsername, user._id);
+  } catch (identityError) {
+    throw createServiceError(identityError.message, identityError.statusCode || 400);
   }
-  if (!shopUsername || shopUsername.length < 3) {
-    throw createServiceError("Tài khoản thiếu username. Hãy cập nhật hồ sơ trước khi đăng ký bán.");
-  }
+
   const category = await assertCategoryExists(normalizedPayload.categoryId);
   const shopDescription = String(normalizedPayload.shopDescription || "").trim();
-
-  if (!shopDescription) {
-    throw createServiceError("Vui lòng nhập giới thiệu shop.");
-  }
 
   const [cccdFrontImage, cccdBackImage, selfieImage] = await Promise.all([
     resolveVerificationImage({
@@ -537,6 +544,9 @@ async function submitSellerVerification(user, payload) {
     cccdFrontImage,
     cccdBackImage,
     selfieImage,
+    shopName,
+    shopUsername,
+    shopDescription,
     categoryId: category._id,
     addressHeThong: systemAddress,
     latitude,
@@ -554,7 +564,9 @@ async function submitSellerVerification(user, payload) {
   ) {
     existing.set(sharedFields);
     await existing.save();
-    return reloadVerificationById(existing._id);
+    const saved = await reloadVerificationById(existing._id);
+    emitSellerVerificationUpdated(saved, "submitted");
+    return saved;
   }
 
   const verification = await SellerVerification.create({
@@ -562,18 +574,126 @@ async function submitSellerVerification(user, payload) {
     ...sharedFields,
   });
 
-  return reloadVerificationById(verification._id);
+  const saved = await reloadVerificationById(verification._id);
+  emitSellerVerificationUpdated(saved, "submitted");
+  return saved;
 }
 
 async function listPendingSellerVerifications() {
   const verifications = await SellerVerification.find({
     status: SELLER_VERIFICATION_STATUS.PENDING,
   })
-    .sort({ submittedAt: 1 })
-    .populate("userId", "FullName Email Phone UserName")
-    .populate("categoryId", "categoryName");
+    .sort({ CreatedAt: 1 })
+    .populate("userId", "FullName Email Phone UserName Avatar")
+    .populate("categoryId", "name")
+    .populate("approvedBy", "FullName UserName");
 
   return verifications;
+}
+
+const ADMIN_VERIFICATION_STATUS_LABELS = {
+  [SELLER_VERIFICATION_STATUS.PENDING]: "Chờ duyệt",
+  [SELLER_VERIFICATION_STATUS.APPROVED]: "Đã duyệt",
+  [SELLER_VERIFICATION_STATUS.REJECTED]: "Từ chối",
+};
+
+async function buildAdminVerificationFilter(query = {}) {
+  const filter = {};
+  const statusRaw = query.status;
+  if (statusRaw !== undefined && statusRaw !== null && String(statusRaw).trim() !== "") {
+    const status = Number(statusRaw);
+    if (!Number.isNaN(status)) {
+      filter.status = status;
+    }
+  }
+
+  const categoryId = String(query.categoryId || "").trim();
+  if (categoryId) {
+    filter.categoryId = categoryId;
+  }
+
+  const search = String(query.search || query.q || "").trim();
+  if (search) {
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+
+    if (regex) {
+      const matchedUsers = await findUsersBySearchRegex(User, regex);
+      const userIds = matchedUsers.map((row) => row._id);
+      orConditions.push(
+        { shopName: regex },
+        { shopUsername: regex },
+        ...(userIds.length ? [{ userId: { $in: userIds } }] : [])
+      );
+    }
+
+    const matchedVerificationStatuses = resolveStatusesFromLabelSearch(search, [
+      { label: "Chờ duyệt", statuses: [SELLER_VERIFICATION_STATUS.PENDING] },
+      { label: "Đã duyệt", statuses: [SELLER_VERIFICATION_STATUS.APPROVED] },
+      { label: "Đã từ chối", statuses: [SELLER_VERIFICATION_STATUS.REJECTED] },
+    ]);
+    if (matchedVerificationStatuses.length) {
+      orConditions.push({ status: { $in: matchedVerificationStatuses } });
+    }
+
+    orConditions.push(...buildObjectIdSearchConditions(search));
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
+  }
+
+  applyCreatedAtRange(filter, query);
+  return filter;
+}
+
+function resolveAdminVerificationSort(sortKey) {
+  if (sortKey === "oldest") {
+    return { CreatedAt: 1 };
+  }
+  return { CreatedAt: -1 };
+}
+
+async function listAdminSellerVerifications(query = {}) {
+  const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Number.parseInt(query.limit, 10) || 20)
+  );
+  const filter = await buildAdminVerificationFilter(query);
+  const sort = resolveAdminVerificationSort(query.sort);
+
+  const [total, verifications, totalAll, pendingCount, approvedCount, rejectedCount] =
+    await Promise.all([
+      SellerVerification.countDocuments(filter),
+      SellerVerification.find(filter)
+        .sort(sort)
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .populate("userId", "FullName Email Phone UserName Avatar")
+        .populate("categoryId", "name")
+        .populate("approvedBy", "FullName UserName"),
+      SellerVerification.countDocuments({}),
+      SellerVerification.countDocuments({ status: SELLER_VERIFICATION_STATUS.PENDING }),
+      SellerVerification.countDocuments({ status: SELLER_VERIFICATION_STATUS.APPROVED }),
+      SellerVerification.countDocuments({ status: SELLER_VERIFICATION_STATUS.REJECTED }),
+    ]);
+
+  return {
+    items: verifications,
+    pagination: {
+      page,
+      limit: pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
+    stats: {
+      total: totalAll,
+      pending: pendingCount,
+      approved: approvedCount,
+      rejected: rejectedCount,
+    },
+  };
 }
 
 async function approveSellerVerificationByAdmin(adminUser, verificationId) {
@@ -592,6 +712,7 @@ async function approveSellerVerificationByAdmin(adminUser, verificationId) {
   }
 
   await promoteUserToSeller(sellerUser, verification, adminUser._id);
+  emitSellerVerificationUpdated(verification, "approved");
   return verification;
 }
 
@@ -616,6 +737,7 @@ async function rejectSellerVerificationByAdmin(adminUser, verificationId, reason
   verification.UpdatedAt = new Date();
   await verification.save();
 
+  emitSellerVerificationUpdated(verification, "rejected");
   return verification;
 }
 
@@ -649,16 +771,16 @@ function toPublicVerification(verification) {
       "",
     latitude: verification.latitude,
     longitude: verification.longitude,
-    // Tên/handle lấy từ User khi populate; giữ field trống để tương thích client cũ.
-    shopUsername: verification.userId?.UserName || verification.shopUsername || "",
-    shopName: verification.userId?.FullName || verification.shopName || "",
+    // Tên/handle gian hàng lưu trên hồ sơ đăng ký.
+    shopUsername: verification.shopUsername || "",
+    shopName: verification.shopName || "",
     categoryId: category.categoryId,
     categoryName: category.categoryName,
     shopDescription: verification.shopDescription || verification.description || "",
     status: verification.status,
+    statusLabel: ADMIN_VERIFICATION_STATUS_LABELS[verification.status] || "Không rõ",
     lyDoTuChoi: verification.LyDoTuChoi || "",
-    // Thời điểm trạng thái cuối = UpdatedAt.
-    submittedAt: verification.CreatedAt,
+    submittedAt: verification.submittedAt || verification.CreatedAt,
     approvedAt:
       verification.status === SELLER_VERIFICATION_STATUS.APPROVED
         ? verification.UpdatedAt
@@ -679,6 +801,7 @@ function toAdminVerification(verification) {
   }
 
   const user = verification.userId;
+  const approver = verification.approvedBy;
   return {
     ...publicData,
     user: user && typeof user === "object"
@@ -688,8 +811,17 @@ function toAdminVerification(verification) {
           email: user.Email || "",
           phone: user.Phone || "",
           userName: user.UserName || "",
+          avatar: user.Avatar || "",
         }
       : null,
+    approvedByAdmin:
+      approver && typeof approver === "object"
+        ? {
+            id: approver._id,
+            fullName: approver.FullName || "",
+            userName: approver.UserName || "",
+          }
+        : null,
   };
 }
 
@@ -702,6 +834,7 @@ module.exports = {
   submitSellerVerification,
   normalizeSellerRegistrationPayload,
   listPendingSellerVerifications,
+  listAdminSellerVerifications,
   approveSellerVerificationByAdmin,
   rejectSellerVerificationByAdmin,
   toPublicVerification,

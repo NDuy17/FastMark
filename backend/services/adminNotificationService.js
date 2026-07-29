@@ -2,7 +2,8 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const { USER_ROLE } = require("../constants");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants");
+const { NOTIFICATION_AUDIENCE, NOTIFICATION_INDEX } = require("../constants");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 
 const AUDIENCE = {
   ALL: "all",
@@ -32,12 +33,16 @@ function pickString(value) {
   return String(value || "").trim();
 }
 
-function buildAudienceFilter(audience) {
+const ShopProfile = require("../models/ShopProfile");
+
+async function buildAudienceFilter(audience) {
   switch (audience) {
     case AUDIENCE.BUYER:
-      return { Role: USER_ROLE.BUYER, Status: 1 };
-    case AUDIENCE.SELLER:
-      return { Role: USER_ROLE.SELLER, Status: 1 };
+      return { Role: { $in: [USER_ROLE.BUYER, USER_ROLE.SELLER] }, Status: 1 };
+    case AUDIENCE.SELLER: {
+      const ownerIds = await ShopProfile.distinct("userId");
+      return { _id: { $in: ownerIds.filter(Boolean) }, Status: 1 };
+    }
     case AUDIENCE.ALL:
     default:
       return { Role: { $in: [USER_ROLE.BUYER, USER_ROLE.SELLER] }, Status: 1 };
@@ -73,7 +78,7 @@ async function sendSystemNotification(adminUser, { title, content, audience = AU
     throw createServiceError("Đối tượng nhận thông báo không hợp lệ.");
   }
 
-  const recipients = await User.find(buildAudienceFilter(normalizedAudience))
+  const recipients = await User.find(await buildAudienceFilter(normalizedAudience))
     .select("_id")
     .lean();
 
@@ -88,6 +93,8 @@ async function sendSystemNotification(adminUser, { title, content, audience = AU
         title: normalizedTitle,
         content: normalizedContent,
         audience: mapSystemAudienceToNotificationAudience(normalizedAudience),
+        index: NOTIFICATION_INDEX.SYSTEM,
+        isAdminBroadcast: true,
       });
       if (created) {
         inAppCount += 1;
@@ -114,11 +121,19 @@ async function sendSystemNotification(adminUser, { title, content, audience = AU
 /**
  * Lịch sử gửi broadcast: gộp Notification theo (title, content, audience, phút gửi).
  */
-async function listBroadcastHistory({ page = 1, limit = 20 } = {}) {
+async function listBroadcastHistory({ page = 1, limit = 20, from = "", to = "" } = {}) {
   const currentPage = Math.max(1, Number(page) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(limit) || 20));
 
-  const rows = await Notification.aggregate([
+  const pipeline = [];
+  pipeline.push({ $match: { isAdminBroadcast: true } });
+  const dateMatch = {};
+  applyCreatedAtRange(dateMatch, { from, to });
+  if (Object.keys(dateMatch).length) {
+    pipeline.push({ $match: dateMatch });
+  }
+
+  pipeline.push(
     {
       $group: {
         _id: {
@@ -142,7 +157,9 @@ async function listBroadcastHistory({ page = 1, limit = 20 } = {}) {
         total: [{ $count: "count" }],
       },
     },
-  ]);
+  );
+
+  const rows = await Notification.aggregate(pipeline);
 
   const items = (rows[0]?.items || []).map((row) => ({
     title: row._id.title || "",

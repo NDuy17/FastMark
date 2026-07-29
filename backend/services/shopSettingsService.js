@@ -1,73 +1,22 @@
 const ShopProfile = require("../models/ShopProfile");
-const SellerVerification = require("../models/SellerVerification");
 const User = require("../models/User");
 const { SHOP_OPEN } = require("../constants");
-const { SELLER_VERIFICATION_STATUS } = require("../constants");
 const { isSubscriptionActive } = require("../constants");
-
-const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
+const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const {
+  pickString,
+  resolveShopDisplayName,
+  resolveShopUsername,
+  resolveShopAvatar,
+  assertShopNameValid,
+  assertShopUsernameAvailable,
+  normalizeShopUsername,
+} = require("../utils/shopIdentity");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
-}
-
-function pickString(value) {
-  return String(value || "").trim();
-}
-
-function normalizeShopName(value) {
-  return pickString(value).replace(/\s+/g, " ");
-}
-
-function normalizeShopUsername(value) {
-  return pickString(value).toLowerCase();
-}
-
-function assertShopNameValid(shopName) {
-  const normalized = normalizeShopName(shopName);
-  if (normalized.length < 2 || normalized.length > 80) {
-    throw createServiceError("Tên gian hàng phải từ 2-80 ký tự.");
-  }
-  return normalized;
-}
-
-async function assertShopUsernameAvailable(shopUsername, userId) {
-  const normalized = normalizeShopUsername(shopUsername);
-
-  if (!SHOP_USERNAME_PATTERN.test(normalized)) {
-    throw createServiceError(
-      "Username shop phải từ 3-30 ký tự, chỉ chữ thường, số và dấu gạch dưới."
-    );
-  }
-
-  const existingUserName = await User.findOne({
-    UserName: {
-      $regex: `^${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-      $options: "i",
-    },
-  }).lean();
-  if (existingUserName) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  const existingShop = await ShopProfile.findOne({ shopUsername: normalized }).lean();
-  if (existingShop && String(existingShop.userId) !== String(userId)) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  const pendingVerification = await SellerVerification.findOne({
-    shopUsername: normalized,
-    status: SELLER_VERIFICATION_STATUS.PENDING,
-    userId: { $ne: userId },
-  }).lean();
-
-  if (pendingVerification) {
-    throw createServiceError("Username shop đã được sử dụng.");
-  }
-
-  return normalized;
 }
 
 function toPublicShopSettings(shop, user) {
@@ -77,8 +26,10 @@ function toPublicShopSettings(shop, user) {
       ? String(shop.categoryId)
       : "";
 
-  const ownerName = pickString(user?.FullName) || pickString(user?.UserName) || "";
-  const ownerUsername = pickString(user?.UserName) || "";
+  const shopName = resolveShopDisplayName(shop, user);
+  const shopUsername = resolveShopUsername(shop, user);
+  const shopAvatar = resolveShopAvatar(shop, user);
+  const ownerAvatar = pickString(user?.Avatar) || "";
   const systemAddress = pickString(shop.addressHeThong || shop.DiaChiHeThong || shop.address);
   const depositPercent = Math.max(
     0,
@@ -88,17 +39,17 @@ function toPublicShopSettings(shop, user) {
   return {
     id: shop._id,
     shopId: shop._id,
-    // Identity từ User — không lưu tên/handle riêng trên shop.
-    shopUsername: ownerUsername,
-    shopName: ownerName,
-    fullName: ownerName,
-    userName: ownerUsername,
+    shopName,
+    shopUsername,
+    shopAvatar,
+    fullName: pickString(user?.FullName) || "",
+    userName: pickString(user?.UserName) || "",
+    avatar: ownerAvatar,
+    userAvatar: ownerAvatar,
     categoryId,
     categoryName: shop.categoryId?.categoryName || "",
     description: shop.description || "",
     shopDescription: shop.description || "",
-    avatar: pickString(user?.Avatar) || "",
-    shopAvatar: pickString(user?.Avatar) || "",
     systemAddress,
     addressHeThong: systemAddress,
     address: systemAddress,
@@ -113,7 +64,6 @@ function toPublicShopSettings(shop, user) {
     followersCount: Number(user?.FollowersCount) || 0,
     depositPercent,
     cocTien: depositPercent,
-    // QR cố định — payload JSON: {"shopId":"<qrCodeValue>"}
     qrCodeValue: pickString(shop.qrCodeValue) || String(shop._id),
     qrPayload: JSON.stringify({
       shopId: pickString(shop.qrCodeValue) || String(shop._id),
@@ -131,7 +81,6 @@ async function getShopForSeller(user) {
   if (!shop) {
     throw createServiceError("Chưa có gian hàng.", 404);
   }
-  // Đảm bảo mỗi shop có 1 QR cố định (mặc định = shopId).
   if (!pickString(shop.qrCodeValue)) {
     shop.qrCodeValue = String(shop._id);
     shop.UpdatedAt = new Date();
@@ -182,7 +131,6 @@ function normalizeTime(value) {
     return "";
   }
 
-  // Chấp nhận HH:mm, H:mm, HH:mm:ss (cắt giây).
   const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
   if (!match) {
     throw createServiceError("Giờ mở/đóng cửa phải theo định dạng HH:mm.");
@@ -196,6 +144,29 @@ function normalizeTime(value) {
 async function updateShopSettings(user, payload) {
   const shop = await getShopForSeller(user);
   const freshUser = await User.findById(user._id);
+
+  if (payload.shopName !== undefined || payload.storeName !== undefined) {
+    try {
+      shop.shopName = assertShopNameValid(payload.shopName ?? payload.storeName);
+    } catch (nameError) {
+      throw createServiceError(nameError.message, nameError.statusCode || 400);
+    }
+  }
+
+  if (payload.shopUsername !== undefined || payload.storeUsername !== undefined) {
+    const nextUsername = payload.shopUsername ?? payload.storeUsername;
+    const normalizedCurrent = normalizeShopUsername(shop.shopUsername);
+    const normalizedNext = normalizeShopUsername(nextUsername);
+    if (normalizedNext && normalizedNext !== normalizedCurrent) {
+      try {
+        shop.shopUsername = await assertShopUsernameAvailable(normalizedNext, user._id);
+      } catch (usernameError) {
+        throw createServiceError(usernameError.message, usernameError.statusCode || 400);
+      }
+    } else if (normalizedNext) {
+      shop.shopUsername = normalizedNext;
+    }
+  }
 
   if (payload.description !== undefined || payload.shopDescription !== undefined) {
     shop.description = pickString(payload.description ?? payload.shopDescription);
@@ -284,9 +255,34 @@ async function checkShopUsernameAvailability(user, shopUsername) {
   }
 }
 
+async function uploadShopAvatar(user, avatarPayload) {
+  if (!avatarPayload?.buffer?.length) {
+    throw createServiceError("Thiếu file ảnh đại diện gian hàng.", 400);
+  }
+
+  const shop = await getShopForSeller(user);
+  const extension = resolveFileExtension(avatarPayload.mimeType, avatarPayload.originalName);
+  const fileName = `${user.FirebaseUID || user._id}-shop-${Date.now()}.${extension}`;
+  const uploadResult = await uploadImageToSupabase({
+    buffer: avatarPayload.buffer,
+    mimeType: avatarPayload.mimeType || "image/jpeg",
+    folder: "shop-avatars",
+    fileName,
+  });
+
+  shop.avatar = uploadResult.publicUrl;
+  shop.UpdatedAt = new Date();
+  await shop.save();
+
+  const savedShop = await ShopProfile.findById(shop._id).populate("categoryId", "categoryName");
+  const freshUser = await User.findById(user._id);
+  return toPublicShopSettings(savedShop || shop, freshUser);
+}
+
 module.exports = {
   getShopSettings,
   updateShopSettings,
+  uploadShopAvatar,
   checkShopUsernameAvailability,
   getShopForSeller,
   toPublicShopSettings,

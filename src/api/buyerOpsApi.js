@@ -26,7 +26,7 @@ async function authHeaders(idToken) {
 }
 
 export async function getBuyerOrdersOnBackend({ idToken, tab, search }) {
-  const params = new URLSearchParams({ tab: tab || 'holding' });
+  const params = new URLSearchParams({ tab: tab || 'pending' });
   if (search) {
     params.set('search', search);
   }

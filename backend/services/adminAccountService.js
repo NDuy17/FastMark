@@ -6,10 +6,41 @@ const Product = require("../models/Product");
 const Reservation = require("../models/Reservation");
 const Report = require("../models/Report");
 const Review = require("../models/Review");
-const { USER_ROLE, SELLER_VERIFICATION_STATUS } = require("../constants");
+const { USER_ROLE, SELLER_VERIFICATION_STATUS, RESERVATION_STATUS } = require("../constants");
 const { USER_STATUS } = require("../constants");
 const { SHOP_STATUS } = require("../constants");
 const { PRODUCT_STATUS } = require("../constants");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendUniqueOrConditions,
+  buildStatusLabelEntries,
+  resolveStatusesFromLabelSearch,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
+
+const CANCELLED_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.REJECTED,
+  RESERVATION_STATUS.REFUNDED,
+  RESERVATION_STATUS.DISPUTE_RESOLVED,
+];
+
+const COMPLETED_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.COMPLETED,
+  RESERVATION_STATUS.AUTO_COMPLETED,
+];
+
+const DISPUTE_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.DISPUTED,
+  RESERVATION_STATUS.DISPUTE_RESOLVED,
+];
+const { cancelActiveReservationsForAccountLock } = require("./reservationService");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+  resolveShopAvatar,
+} = require("../utils/shopIdentity");
 
 const ROLE_LABELS = {
   [USER_ROLE.BUYER]: "Người mua",
@@ -52,7 +83,7 @@ function activeProductFilter(extra = {}) {
   };
 }
 
-function toAdminUserBase(user) {
+function toAdminUserBase(user, shop = null) {
   return {
     id: String(user._id),
     userId: String(user._id),
@@ -62,14 +93,19 @@ function toAdminUserBase(user) {
     email: user.Email || "",
     phone: user.Phone || "",
     role: user.Role,
-    roleLabel: ROLE_LABELS[user.Role] || "Không rõ",
+    roleLabel:
+      user.Role === USER_ROLE.ADMIN
+        ? ROLE_LABELS[USER_ROLE.ADMIN]
+        : shop
+          ? "Người mua · Có gian hàng"
+          : "Người mua",
     status: user.Status,
     statusLabel: STATUS_LABELS[user.Status] || "Không rõ",
     bio: "",
     createdAt: user.CreatedAt || null,
     updatedAt: user.UpdatedAt || null,
     lastActiveAt: user.LanHoatDongCuoi || null,
-    followersCount: 0,
+    followersCount: Number(user.FollowersCount) || 0,
     followingCount: user.FollowingCount || 0,
     verifyAccount: Boolean(user.VerifyAccount),
     sellerPhoneVerified: require("../models/User").isPhoneVerified(user),
@@ -83,8 +119,9 @@ function toAdminShopSummary(shop, owner = null) {
 
   return {
     id: String(shop._id),
-    shopName: owner?.FullName || owner?.UserName || shop.shopName || "",
-    shopUsername: owner?.UserName || shop.shopUsername || "",
+    shopName: resolveShopDisplayName(shop, owner),
+    shopUsername: resolveShopUsername(shop, owner),
+    avatar: resolveShopAvatar(shop, owner),
     status: shop.status,
     statusLabel: shop.status === SHOP_STATUS.ACTIVE ? "Hoạt động" : "Đã khóa",
     averageRating: Number(shop.averageRating) || 0,
@@ -138,7 +175,7 @@ function toAdminVerificationSummary(verification) {
 }
 
 function toAdminAccountListItem(user, shop, verification) {
-  const base = toAdminUserBase(user);
+  const base = toAdminUserBase(user, shop);
   const shopSummary = toAdminShopSummary(shop, user);
   const verificationSummary = toAdminVerificationSummary(verification);
 
@@ -187,20 +224,22 @@ function sortAccountItems(items, sortKey) {
   return sorted;
 }
 
-async function buildUserMatchFilter({ search, role, status, verificationStatus }) {
+async function buildUserMatchFilter({ search, role, status, verificationStatus, hasShop }) {
   const andConditions = [];
   const normalizedRole = pickString(role);
+  const normalizedHasShop = pickString(hasShop);
   const normalizedStatus = pickString(status);
   const normalizedVerificationStatus = pickString(verificationStatus);
   const keyword = pickString(search);
 
-  if (
-    normalizedRole &&
-    [USER_ROLE.BUYER, USER_ROLE.SELLER].includes(Number(normalizedRole))
-  ) {
-    andConditions.push({ Role: Number(normalizedRole) });
-  } else {
-    andConditions.push({ Role: { $in: [USER_ROLE.BUYER, USER_ROLE.SELLER] } });
+  andConditions.push({ Role: { $in: [USER_ROLE.BUYER, USER_ROLE.SELLER] } });
+
+  if (normalizedHasShop === "1" || normalizedRole === "2") {
+    const shopUserIds = await ShopProfile.distinct("userId");
+    andConditions.push({ _id: { $in: shopUserIds.filter(Boolean) } });
+  } else if (normalizedHasShop === "0") {
+    const shopUserIds = await ShopProfile.distinct("userId");
+    andConditions.push({ _id: { $nin: shopUserIds.filter(Boolean) } });
   }
 
   if (normalizedStatus !== "") {
@@ -208,29 +247,55 @@ async function buildUserMatchFilter({ search, role, status, verificationStatus }
   }
 
   if (keyword) {
-    const escaped = escapeRegex(keyword);
-    const shopMatches = await ShopProfile.find({
-      $or: [
-        { shopName: { $regex: escaped, $options: "i" } },
-        { shopUsername: { $regex: escaped, $options: "i" } },
-      ],
-    })
-      .select("userId")
-      .lean();
+    const regex = buildSearchRegex(keyword);
+    const searchOr = [];
 
-    const shopUserIds = shopMatches.map((shop) => shop.userId).filter(Boolean);
-    const searchOr = [
-      { UserName: { $regex: escaped, $options: "i" } },
-      { FullName: { $regex: escaped, $options: "i" } },
-      { Email: { $regex: escaped, $options: "i" } },
-      { Phone: { $regex: escaped, $options: "i" } },
-    ];
+    if (regex) {
+      const shopMatches = await ShopProfile.find({
+        $or: [{ shopName: regex }, { shopUsername: regex }],
+      })
+        .select("userId")
+        .lean();
 
-    if (shopUserIds.length > 0) {
-      searchOr.push({ _id: { $in: shopUserIds } });
+      const shopUserIds = shopMatches.map((shop) => shop.userId).filter(Boolean);
+      searchOr.push(
+        { UserName: regex },
+        { FullName: regex },
+        { Email: regex },
+        { Phone: regex }
+      );
+
+      if (shopUserIds.length > 0) {
+        searchOr.push({ _id: { $in: shopUserIds } });
+      }
     }
 
-    andConditions.push({ $or: searchOr });
+    appendStatusLabelSearchConditions(searchOr, keyword, STATUS_LABELS, [], "Status");
+    const matchedRoles = resolveStatusesFromLabelSearch(keyword, buildStatusLabelEntries(ROLE_LABELS));
+    if (matchedRoles.length) {
+      searchOr.push({ Role: { $in: matchedRoles } });
+    }
+
+    const matchedVerificationStatuses = resolveStatusesFromLabelSearch(
+      keyword,
+      buildStatusLabelEntries(VERIFICATION_LABELS)
+    );
+    if (matchedVerificationStatuses.length) {
+      const verificationUserIds = await SellerVerification.find({
+        status: { $in: matchedVerificationStatuses },
+      })
+        .distinct("userId")
+        .lean();
+      if (verificationUserIds.length) {
+        searchOr.push({ _id: { $in: verificationUserIds } });
+      }
+    }
+
+    searchOr.push(...buildObjectIdSearchConditions(keyword));
+
+    if (searchOr.length) {
+      andConditions.push({ $or: searchOr });
+    }
   }
 
   if (normalizedVerificationStatus !== "") {
@@ -259,14 +324,24 @@ async function listAccounts({
   role = "",
   status = "",
   verificationStatus = "",
+  hasShop = "",
   sort = "newest",
+  from = "",
+  to = "",
   page = 1,
   limit = 20,
 } = {}) {
   const currentPage = Math.max(1, Number(page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(limit) || 20));
   const skip = (currentPage - 1) * pageSize;
-  const match = await buildUserMatchFilter({ search, role, status, verificationStatus });
+  const match = await buildUserMatchFilter({
+    search,
+    role,
+    status,
+    verificationStatus,
+    hasShop,
+  });
+  applyCreatedAtRange(match, { from, to });
 
   const users = await User.find(match).lean();
   const userIds = users.map((user) => user._id);
@@ -313,27 +388,42 @@ async function listAccounts({
   };
 }
 
-async function getAccountStats(user, shop) {
+async function getAccountStats(user) {
   const userId = user._id;
-  const shopId = shop?._id;
+  const buyerFilter = { userId };
 
-  const [productCount, reservationCount, reportCount, reviewCount] = await Promise.all([
-    shopId
-      ? Product.countDocuments(activeProductFilter({ ShopId: shopId }))
-      : Promise.resolve(0),
-    shopId ? Reservation.countDocuments({ shopId }) : Promise.resolve(0),
+  const [
+    totalOrders,
+    totalCompletedOrders,
+    totalCancelledOrders,
+    totalDisputes,
+    totalReviewsWritten,
+    totalReportsReceived,
+  ] = await Promise.all([
+    Reservation.countDocuments(buyerFilter),
+    Reservation.countDocuments({
+      ...buyerFilter,
+      status: { $in: COMPLETED_RESERVATION_STATUSES },
+    }),
+    Reservation.countDocuments({
+      ...buyerFilter,
+      status: { $in: CANCELLED_RESERVATION_STATUSES },
+    }),
+    Reservation.countDocuments({
+      ...buyerFilter,
+      status: { $in: DISPUTE_RESERVATION_STATUSES },
+    }),
+    Review.countDocuments({ userId, isDeleted: { $ne: true } }),
     Report.countDocuments({ targetUserId: userId }),
-    shopId
-      ? Review.countDocuments({ storeId: String(shopId), isDeleted: { $ne: true } })
-      : Promise.resolve(0),
   ]);
 
   return {
-    totalProducts: productCount,
-    totalReservations: reservationCount,
-    totalReportsReceived: reportCount,
-    totalReviews: reviewCount,
-    totalFollowers: shop?.followersCount || 0,
+    totalOrders,
+    totalCompletedOrders,
+    totalCancelledOrders,
+    totalDisputes,
+    totalReviewsWritten,
+    totalReportsReceived,
   };
 }
 
@@ -369,12 +459,12 @@ async function getAccountDetail(userId) {
     SellerVerification.findOne({ userId: user._id })
       .sort({ submittedAt: -1, CreatedAt: -1 })
       .lean(),
-    getAccountStats(user, shop),
+    getAccountStats(user),
     getRecentReports(user._id),
   ]);
 
   return {
-    user: toAdminUserBase(user),
+    user: toAdminUserBase(user, shop),
     shop: toAdminShopSummary(shop, user),
     verification: toAdminVerificationSummary(verification),
     stats,
@@ -413,16 +503,58 @@ async function setAccountStatus(adminUser, targetUserId, nextStatus) {
       const now = new Date();
       targetUser.Status = nextStatus;
       targetUser.UpdatedAt = now;
+      if (nextStatus === USER_STATUS.BLOCKED) {
+        targetUser.lockedAt = now;
+      } else {
+        targetUser.lockedAt = null;
+      }
       await targetUser.save({ session });
 
       const shop = await ShopProfile.findOne({ userId: targetUser._id }).session(session);
       if (shop) {
         shop.status =
           nextStatus === USER_STATUS.ACTIVE ? SHOP_STATUS.ACTIVE : SHOP_STATUS.BLOCKED;
+        if (nextStatus === USER_STATUS.BLOCKED) {
+          shop.isOpen = 0;
+          shop.permanentlyClosedAt = shop.permanentlyClosedAt || now;
+          shop.lockedAt = now;
+        } else {
+          shop.suspendedUntil = null;
+          shop.permanentlyClosedAt = null;
+          shop.visibilityRestrictedUntil = null;
+          shop.lockedAt = null;
+        }
         shop.UpdatedAt = now;
         await shop.save({ session });
       }
     });
+
+    if (nextStatus === USER_STATUS.BLOCKED) {
+      const shopAfter = await ShopProfile.findOne({ userId: targetUserId }).select("_id").lean();
+      if (shopAfter?._id) {
+        await Product.updateMany(
+          { ShopId: shopAfter._id, Status: PRODUCT_STATUS.ACTIVE },
+          { $set: { Status: PRODUCT_STATUS.HIDDEN, UpdatedAt: new Date() } }
+        );
+      }
+      try {
+        await cancelActiveReservationsForAccountLock(targetUserId);
+      } catch (error) {
+        console.error(
+          "setAccountStatus: cancel reservations on account lock failed:",
+          targetUserId,
+          error.message
+        );
+      }
+    } else if (nextStatus === USER_STATUS.ACTIVE) {
+      const shopAfter = await ShopProfile.findOne({ userId: targetUserId }).select("_id").lean();
+      if (shopAfter?._id) {
+        await Product.updateMany(
+          { ShopId: shopAfter._id, Status: PRODUCT_STATUS.HIDDEN },
+          { $set: { Status: PRODUCT_STATUS.ACTIVE, UpdatedAt: new Date() } }
+        );
+      }
+    }
 
     updatedDetail = await getAccountDetail(targetUserId);
     return updatedDetail;
@@ -436,7 +568,22 @@ async function blockAccount(adminUser, targetUserId) {
 }
 
 async function unblockAccount(adminUser, targetUserId) {
-  return setAccountStatus(adminUser, targetUserId, USER_STATUS.ACTIVE);
+  const detail = await setAccountStatus(adminUser, targetUserId, USER_STATUS.ACTIVE);
+
+  const { closePendingAccountLockAppeals, closePendingShopLockAppeals } = require("./lockAppealService");
+  const ShopProfile = require("../models/ShopProfile");
+
+  try {
+    await closePendingAccountLockAppeals(targetUserId, adminUser._id);
+    const shop = await ShopProfile.findOne({ userId: targetUserId }).select("_id").lean();
+    if (shop?._id) {
+      await closePendingShopLockAppeals(shop._id, adminUser._id);
+    }
+  } catch {
+    // Không chặn luồng mở khóa nếu đóng khiếu nại lỗi.
+  }
+
+  return detail;
 }
 
 function assertUserIsActive(user) {

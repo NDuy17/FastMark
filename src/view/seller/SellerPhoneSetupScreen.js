@@ -4,7 +4,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
@@ -16,7 +15,9 @@ import {
 } from '../../api/sellerApi';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
 import { loadUserProfile } from '../../viewmodel/auth/authSlice';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 
 function formatCountdown(secondsLeft) {
   const minutes = Math.floor(secondsLeft / 60);
@@ -102,7 +103,6 @@ export default function SellerPhoneSetupScreen({
       setVerification(data);
       setCode('');
       setStep('otp');
-      setLockedOut(false);
     } catch (sendError) {
       const payload = sendError?.payload || {};
       const cooldown =
@@ -119,7 +119,7 @@ export default function SellerPhoneSetupScreen({
         }));
       }
 
-      setError(sendError.message || 'Không gửi được mã xác minh.');
+      showErrorAlert(sendError.message || 'Không gửi được mã xác minh.');
     } finally {
       setIsSending(false);
     }
@@ -154,19 +154,18 @@ export default function SellerPhoneSetupScreen({
         setCode('');
         setVerification({
           phone: errData.phone || phone.trim(),
-          verificationCode: errData.verificationCode || '',
           expiresAt: errData.expiresAt || null,
           expiresInSeconds: errData.expiresInSeconds || 0,
           resendAvailableAt: errData.resendAvailableAt || null,
           resendCooldownSeconds: errData.resendCooldownSeconds || 0,
         });
-        setError(
+        showErrorAlert(
           confirmError.message ||
             'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
         );
         return;
       }
-      setError(confirmError.message || 'Mã xác minh không đúng.');
+      showErrorAlert(confirmError.message || 'Mã xác minh không đúng.');
     } finally {
       setIsConfirming(false);
     }
@@ -193,7 +192,7 @@ export default function SellerPhoneSetupScreen({
         </Text>
         <Text style={styles.subtitle}>
           {step === 'otp'
-            ? 'Nhập đúng mã để lưu số điện thoại. Sai 5 lần hệ thống sẽ gửi mã mới. Gửi lại thủ công bị khóa 2 phút.'
+            ? 'Nhập đúng mã đã gửi tới số điện thoại của bạn. Sai 5 lần hệ thống sẽ gửi mã mới. Gửi lại thủ công bị khóa 2 phút.'
             : 'Số chỉ được lưu vào hệ thống sau khi xác minh OTP thành công.'}
         </Text>
 
@@ -202,7 +201,7 @@ export default function SellerPhoneSetupScreen({
         ) : null}
 
         <Text style={styles.label}>Số điện thoại</Text>
-        <TextInput
+        <KeyboardAwareTextInput
           value={phone}
           editable={step === 'phone'}
           onChangeText={(value) => {
@@ -222,15 +221,8 @@ export default function SellerPhoneSetupScreen({
               <Text style={styles.phoneValue}>{phone}</Text>
             </View>
 
-            {verification?.verificationCode ? (
-              <View style={styles.codeBox}>
-                <Text style={styles.codeBoxLabel}>Mã xác minh demo</Text>
-                <Text style={styles.codeBoxValue}>{verification.verificationCode}</Text>
-              </View>
-            ) : null}
-
             <Text style={styles.label}>Mã xác minh</Text>
-            <TextInput
+            <KeyboardAwareTextInput
               value={code}
               onChangeText={(value) => {
                 setCode(value.replace(/\D/g, '').slice(0, 6));
@@ -382,27 +374,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#0f172a',
     fontWeight: '800',
-  },
-  codeBox: {
-    backgroundColor: '#E6F4EC',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#A7D9B8',
-    alignItems: 'center',
-  },
-  codeBoxLabel: {
-    fontSize: 13,
-    color: '#076F32',
-    marginBottom: 6,
-    fontWeight: '700',
-  },
-  codeBoxValue: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#076F32',
-    letterSpacing: 6,
   },
   errorText: {
     color: '#b91c1c',

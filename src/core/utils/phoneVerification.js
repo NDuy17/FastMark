@@ -8,7 +8,3 @@ export function getPhoneGateStep(profile) {
   }
   return null;
 }
-
-export function isPhoneVerifiedForTrade(profile) {
-  return getPhoneGateStep(profile) == null;
-}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Modal,
   Platform,
@@ -12,6 +12,12 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatDateString, formatIsoDateString, parseDateString } from '../../../core/utils/dateFormat';
+import {
+  BOTTOM_SHEET_BORDER,
+  BottomSheetDismissOverlay,
+  BottomSheetHandle,
+  BottomSheetPanel,
+} from './bottomSheetChrome';
 
 export default function DatePickerField({
   label,
@@ -31,7 +37,6 @@ export default function DatePickerField({
   const displayValue = hasValue
     ? formatDateString(parseDateString(value, new Date()))
     : displayPlaceholder;
-  const pickerDate = useMemo(() => parseDateString(value, new Date()), [value]);
 
   useEffect(() => {
     if (!showPicker) {
@@ -54,15 +59,7 @@ export default function DatePickerField({
     closePicker();
   }
 
-  function handleAndroidChange(event, selectedDate) {
-    closePicker();
-    if (event.type === 'dismissed' || !selectedDate) {
-      return;
-    }
-    onChange(formatValue(selectedDate));
-  }
-
-  function handleIosChange(_event, selectedDate) {
+  function handlePickerChange(_event, selectedDate) {
     if (selectedDate) {
       setDraftDate(selectedDate);
     }
@@ -104,41 +101,30 @@ export default function DatePickerField({
         </View>
       </Pressable>
 
-      {Platform.OS === 'android' && showPicker ? (
-        <DateTimePicker
-          value={pickerDate}
-          mode="date"
-          display="calendar"
-          minimumDate={minimumDate}
-          onChange={handleAndroidChange}
-        />
-      ) : null}
-
-      {Platform.OS === 'ios' ? (
-        <Modal visible={showPicker} transparent animationType="slide" onRequestClose={closePicker}>
-          <Pressable style={styles.modalBackdrop} onPress={closePicker}>
-            <Pressable style={styles.modalSheet} onPress={() => {}}>
-              <View style={styles.modalHeader}>
-                <Pressable onPress={closePicker} hitSlop={8}>
-                  <Text style={styles.modalActionText}>Hủy</Text>
-                </Pressable>
-                <Text style={styles.modalTitle}>{label || 'Chọn ngày'}</Text>
-                <Pressable onPress={confirmPicker} hitSlop={8}>
-                  <Text style={[styles.modalActionText, styles.modalActionPrimary]}>Xong</Text>
-                </Pressable>
-              </View>
-              <DateTimePicker
-                value={draftDate}
-                mode="date"
-                display="spinner"
-                minimumDate={minimumDate}
-                onChange={handleIosChange}
-                style={styles.iosPicker}
-              />
-            </Pressable>
-          </Pressable>
-        </Modal>
-      ) : null}
+      <Modal visible={showPicker} transparent animationType="slide" onRequestClose={closePicker}>
+        <BottomSheetDismissOverlay onClose={closePicker}>
+          <BottomSheetPanel style={styles.modalSheet}>
+            <BottomSheetHandle compact />
+            <View style={styles.modalHeader}>
+              <Pressable onPress={closePicker} hitSlop={8}>
+                <Text style={styles.modalActionText}>Hủy</Text>
+              </Pressable>
+              <Text style={styles.modalTitle}>{label || 'Chọn ngày'}</Text>
+              <Pressable onPress={confirmPicker} hitSlop={8}>
+                <Text style={[styles.modalActionText, styles.modalActionPrimary]}>Xong</Text>
+              </Pressable>
+            </View>
+            <DateTimePicker
+              value={draftDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
+              minimumDate={minimumDate}
+              onChange={handlePickerChange}
+              style={styles.iosPicker}
+            />
+          </BottomSheetPanel>
+        </BottomSheetDismissOverlay>
+      </Modal>
     </View>
   );
 }
@@ -196,15 +182,12 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     backgroundColor: '#ffffff',
   },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-  },
   modalSheet: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
+    ...BOTTOM_SHEET_BORDER,
+    paddingTop: 10,
     paddingBottom: 24,
   },
   modalHeader: {

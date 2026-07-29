@@ -6,8 +6,17 @@ const verifyFirebaseToken = require("../middleware/authMiddleware");
 const requireSeller = require("../middleware/sellerMiddleware");
 const requireAdmin = require("../middleware/adminMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
+const { singleImage } = require("../config/commom/upload");
 
 const router = express.Router();
+
+function optionalMultipartAvatar(req, res, next) {
+  const contentType = String(req.headers["content-type"] || "");
+  if (contentType.includes("multipart/form-data")) {
+    return singleImage("avatar")(req, res, next);
+  }
+  return next();
+}
 
 router.post(
   "/phone-code/request",
@@ -29,12 +38,23 @@ router.post(
   verifyFirebaseToken,
   asyncHandler(sellerController.submitVerification)
 );
+router.post(
+  "/shop/username-availability",
+  verifyFirebaseToken,
+  asyncHandler(sellerOpsController.checkShopUsernameAvailability)
+);
 
 router.get(
   "/verification/pending",
   verifyFirebaseToken,
   requireAdmin,
   asyncHandler(sellerController.listPendingVerifications)
+);
+router.get(
+  "/verification/admin",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(sellerController.listAdminVerifications)
 );
 router.post(
   "/verification/:id/approve",
@@ -52,10 +72,11 @@ router.post(
 router.get("/shop", verifyFirebaseToken, requireSeller, asyncHandler(sellerOpsController.getShopSettings));
 router.put("/shop", verifyFirebaseToken, requireSeller, asyncHandler(sellerOpsController.updateShopSettings));
 router.post(
-  "/shop/username-availability",
+  "/shop/avatar",
   verifyFirebaseToken,
   requireSeller,
-  asyncHandler(sellerOpsController.checkShopUsernameAvailability)
+  optionalMultipartAvatar,
+  asyncHandler(sellerOpsController.uploadShopAvatar)
 );
 
 router.get("/orders", verifyFirebaseToken, requireSeller, asyncHandler(sellerOpsController.listOrders));
@@ -83,6 +104,12 @@ router.post(
   requireSeller,
   asyncHandler(sellerOpsController.cancelReservation)
 );
+router.post(
+  "/reservations/:id/refund-dispute",
+  verifyFirebaseToken,
+  requireSeller,
+  asyncHandler(sellerOpsController.refundDisputeDeposit)
+);
 
 /** Alias: seller báo buyer no-show (cùng API /api/reports/seller-report-buyer). */
 router.post(
@@ -94,37 +121,6 @@ router.post(
     req.body = { ...req.body, reservationId: req.params.id };
     return reservationReportController.sellerReportBuyer(req, res);
   })
-);
-
-router.get(
-  "/conversations",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.listConversations)
-);
-router.get(
-  "/conversations/:id/messages",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.listMessages)
-);
-router.post(
-  "/conversations/:id/messages",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.sendMessage)
-);
-router.delete(
-  "/conversations/:id/messages/:messageId",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.deleteMessage)
-);
-router.get(
-  "/conversations/:id/peer",
-  verifyFirebaseToken,
-  requireSeller,
-  asyncHandler(sellerOpsController.getConversationPeer)
 );
 
 router.get("/stats", verifyFirebaseToken, requireSeller, asyncHandler(sellerOpsController.getStats));

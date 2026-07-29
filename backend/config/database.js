@@ -4,6 +4,7 @@ const { mongoUri } = require("./env");
 const { syncProductCollectionIndexes } = require("./syncProductIndexes");
 const { syncReviewCollectionIndexes } = require("./syncReviewIndexes");
 const { migrateUnifiedReviews } = require("./migrateUnifiedReviews");
+const { migrateReservationHasReviewed } = require("./migrateReservationHasReviewed");
 
 const connectDB = async () => {
   try {
@@ -14,6 +15,10 @@ const connectDB = async () => {
     const reviewMigration = await migrateUnifiedReviews(mongoose.connection);
     if (!reviewMigration?.skipped) {
       console.log("Unified reviews migration:", reviewMigration);
+    }
+    const hasReviewedMigration = await migrateReservationHasReviewed(mongoose.connection);
+    if (!hasReviewedMigration?.skipped) {
+      console.log("Reservation hasReviewed migration:", hasReviewedMigration);
     }
     console.log("MongoDB Connected Successfully");
   } catch (error) {

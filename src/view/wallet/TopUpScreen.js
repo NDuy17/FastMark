@@ -3,10 +3,8 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -22,6 +20,11 @@ import {
   syncTopupViewModel,
 } from '../../viewmodel/wallet/walletViewModel';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
+import KeyboardStickyFooter from '../shared/components/KeyboardStickyFooter';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
+
+const ACTIONS_BAR_ESTIMATE = 72;
 
 const PRESETS = [50000, 100000, 200000, 500000];
 const POLL_MS = 2000;
@@ -283,12 +286,9 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
     <View style={styles.screen}>
       <SubScreenHeader title="Nạp tiền" onBack={onBack} />
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.nestedScrollPaddingBottom + 72 },
-        ]}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.content}
+        extraBottomInset={ACTIONS_BAR_ESTIMATE}
       >
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Số dư hiện tại</Text>
@@ -315,7 +315,7 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
 
         <View style={styles.inputWrap}>
           <Ionicons name="wallet-outline" size={18} color={t.textMuted} />
-          <TextInput
+          <KeyboardAwareTextInput
             style={styles.input}
             value={customText}
             onChangeText={setCustomText}
@@ -337,14 +337,9 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
           </View>
           <Ionicons name="checkmark-circle" size={22} color={t.primary} />
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
-      <View
-        style={[
-          styles.footer,
-          { paddingBottom: Math.max(insets.bottomSpacing, 12) },
-        ]}
-      >
+      <KeyboardStickyFooter style={styles.footer}>
         <Pressable
           style={[styles.confirmBtn, submitting && styles.confirmBtnDisabled]}
           onPress={handleConfirm}
@@ -361,7 +356,7 @@ export default function TopUpScreen({ balance = 0, onBack, onSuccess }) {
             </View>
           )}
         </Pressable>
-      </View>
+      </KeyboardStickyFooter>
     </View>
   );
 }
@@ -463,15 +458,9 @@ const styles = StyleSheet.create({
   methodTitle: { fontSize: 15, fontWeight: '800', color: t.text },
   methodSub: { fontSize: 12, fontWeight: '600', color: t.textMuted },
   footer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     paddingHorizontal: 20,
     paddingTop: 10,
     backgroundColor: '#f8fafc',
-    borderTopWidth: 1,
-    borderTopColor: t.border,
   },
   confirmBtn: {
     minHeight: 56,

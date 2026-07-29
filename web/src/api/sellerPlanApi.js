@@ -23,12 +23,23 @@ export async function deleteSellerPlan(token, planId) {
   });
 }
 
+export async function restoreSellerPlan(token, planId) {
+  return apiRequest(`/api/admin/seller-plans/${planId}/restore`, {
+    method: 'POST',
+    token,
+  });
+}
+
 export async function listSellerSubscriptions(token, params = {}) {
   const query = new URLSearchParams();
   if (params.page) query.set('page', params.page);
   if (params.limit) query.set('limit', params.limit);
   if (params.status !== undefined && params.status !== '') query.set('status', params.status);
   if (params.search) query.set('search', params.search);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.dateFrom) query.set('dateFrom', params.dateFrom);
+  if (params.dateTo) query.set('dateTo', params.dateTo);
   const suffix = query.toString() ? `?${query}` : '';
   return apiRequest(`/api/admin/seller-subscriptions${suffix}`, { token });
 }
@@ -56,6 +67,13 @@ export async function deleteBannerPlan(token, planId) {
   });
 }
 
+export async function restoreBannerPlan(token, planId) {
+  return apiRequest(`/api/admin/banner-plans/${planId}/restore`, {
+    method: 'POST',
+    token,
+  });
+}
+
 export async function listSellerBanners(token, params = {}) {
   const query = new URLSearchParams();
   if (params.page) query.set('page', params.page);
@@ -63,6 +81,10 @@ export async function listSellerBanners(token, params = {}) {
   if (params.filter !== undefined && params.filter !== '') query.set('filter', params.filter);
   if (params.status !== undefined && params.status !== '') query.set('status', params.status);
   if (params.search) query.set('search', params.search);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.dateFrom) query.set('dateFrom', params.dateFrom);
+  if (params.dateTo) query.set('dateTo', params.dateTo);
   const suffix = query.toString() ? `?${query}` : '';
   return apiRequest(`/api/admin/seller-banners${suffix}`, { token });
 }

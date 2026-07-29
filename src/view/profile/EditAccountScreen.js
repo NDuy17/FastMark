@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
-import SubScreenHeader from '../shared/components/SubScreenHeader';
+import KeyboardFormScreen from '../shared/components/KeyboardFormScreen';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import { checkRegisterAvailabilityOnBackend } from '../../api/authBackendApi';
 
 import {
@@ -349,38 +346,33 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <KeyboardFormScreen
+      title="Sửa thông tin tài khoản"
+      onBack={onBack}
+      contentContainerStyle={styles.bodyContent}
+      headerBelow={
+        isEmailAccount ? (
+          <View style={styles.segmentedControl}>
+            <Pressable
+              style={[styles.segment, section === 'profile' && styles.segmentActive]}
+              onPress={() => setSection('profile')}
+            >
+              <Text style={[styles.segmentText, section === 'profile' && styles.segmentTextActive]}>
+                Hồ sơ
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.segment, section === 'security' && styles.segmentActive]}
+              onPress={() => setSection('security')}
+            >
+              <Text style={[styles.segmentText, section === 'security' && styles.segmentTextActive]}>
+                Mật khẩu
+              </Text>
+            </Pressable>
+          </View>
+        ) : null
+      }
     >
-      <SubScreenHeader title="Sửa thông tin tài khoản" onBack={onBack} />
-
-      {isEmailAccount ? (
-        <View style={styles.segmentedControl}>
-          <Pressable
-            style={[styles.segment, section === 'profile' && styles.segmentActive]}
-            onPress={() => setSection('profile')}
-          >
-            <Text style={[styles.segmentText, section === 'profile' && styles.segmentTextActive]}>
-              Hồ sơ
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.segment, section === 'security' && styles.segmentActive]}
-            onPress={() => setSection('security')}
-          >
-            <Text style={[styles.segmentText, section === 'security' && styles.segmentTextActive]}>
-              Mật khẩu
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      <ScrollView
-        style={styles.body}
-        contentContainerStyle={styles.bodyContent}
-        keyboardShouldPersistTaps="handled"
-      >
         {section === 'profile' ? (
           <>
             <LabeledInput
@@ -496,8 +488,7 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
         {isProfileLoading && !profile ? (
           <Text style={styles.infoText}>Đang tải dữ liệu hồ sơ...</Text>
         ) : null}
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardFormScreen>
   );
 }
 
@@ -505,7 +496,7 @@ function LabeledInput({ label, error, hint, ...props }) {
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput
+      <KeyboardAwareTextInput
         {...props}
         placeholderTextColor="#94a3b8"
         style={[styles.input, error ? styles.inputError : null]}
@@ -559,7 +550,9 @@ const styles = StyleSheet.create({
   },
   segmentedControl: {
     flexDirection: 'row',
-    margin: 16,
+    marginHorizontal: 16,
+    marginBottom: 0,
+    marginTop: 16,
     padding: 4,
     borderRadius: 10,
     backgroundColor: '#e2e8f0',
@@ -593,11 +586,7 @@ const styles = StyleSheet.create({
     color: '#076F32',
     fontWeight: '900',
   },
-  body: {
-    flex: 1,
-  },
   bodyContent: {
-    paddingHorizontal: 16,
     paddingBottom: 32,
     paddingTop: 8,
   },

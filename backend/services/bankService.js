@@ -19,7 +19,7 @@ function toPublicBank(doc) {
 }
 
 async function listBanksAdmin() {
-  const rows = await Bank.find({}).sort({ CreatedAt: 1 }).limit(200);
+  const rows = await Bank.find({ isActive: true }).sort({ CreatedAt: 1 }).limit(200);
   return rows.map(toPublicBank);
 }
 
@@ -38,15 +38,35 @@ async function createBank(payload = {}) {
     throw createServiceError("Mã ngân hàng phải từ 2 ký tự.");
   }
 
+  const existing = await Bank.findOne({ code });
+  if (existing) {
+    if (existing.isActive === false) {
+      existing.name = name;
+      existing.isActive = true;
+      existing.UpdatedAt = new Date();
+      await existing.save();
+      return { bank: toPublicBank(existing), restored: true };
+    }
+    throw createServiceError("Mã ngân hàng đã tồn tại.");
+  }
+
   try {
     const bank = await Bank.create({
       name,
       code,
       isActive: payload.isActive !== false && payload.isActive !== 0,
     });
-    return toPublicBank(bank);
+    return { bank: toPublicBank(bank), restored: false };
   } catch (error) {
     if (error?.code === 11000) {
+      const duplicate = await Bank.findOne({ code });
+      if (duplicate?.isActive === false) {
+        duplicate.name = name;
+        duplicate.isActive = true;
+        duplicate.UpdatedAt = new Date();
+        await duplicate.save();
+        return { bank: toPublicBank(duplicate), restored: true };
+      }
       throw createServiceError("Mã ngân hàng đã tồn tại.");
     }
     throw error;
@@ -71,9 +91,6 @@ async function updateBank(bankId, payload = {}) {
     }
     bank.code = code;
   }
-  if (payload.isActive !== undefined) {
-    bank.isActive = Boolean(payload.isActive);
-  }
 
   bank.UpdatedAt = new Date();
   try {
@@ -92,8 +109,22 @@ async function deleteBank(bankId) {
   if (!bank) {
     throw createServiceError("Không tìm thấy ngân hàng.", 404);
   }
-  // Soft-disable thay vì xóa cứng để giữ lịch sử rút tiền.
+  // Xóa mềm — user không chọn được khi rút tiền mới.
   bank.isActive = false;
+  bank.UpdatedAt = new Date();
+  await bank.save();
+  return toPublicBank(bank);
+}
+
+async function restoreBank(bankId) {
+  const bank = await Bank.findById(bankId);
+  if (!bank) {
+    throw createServiceError("Không tìm thấy ngân hàng.", 404);
+  }
+  if (bank.isActive !== false) {
+    return toPublicBank(bank);
+  }
+  bank.isActive = true;
   bank.UpdatedAt = new Date();
   await bank.save();
   return toPublicBank(bank);
@@ -106,4 +137,5 @@ module.exports = {
   createBank,
   updateBank,
   deleteBank,
+  restoreBank,
 };

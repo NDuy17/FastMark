@@ -3,13 +3,10 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 
@@ -20,6 +17,11 @@ import {
 } from '../../api/reviewApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import StarRating from '../store/components/StarRating';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
+import KeyboardStickyFooter from '../shared/components/KeyboardStickyFooter';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
+
+const ACTIONS_BAR_ESTIMATE = 72;
 
 function formatDateTime(iso) {
   if (!iso) return '';
@@ -199,41 +201,46 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
       )}
 
       <Modal visible={Boolean(editingReview)} transparent animationType="fade">
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Sửa đánh giá</Text>
-            <Text style={styles.modalLabel}>Số sao</Text>
-            <View style={styles.ratingRow}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Pressable key={star} onPress={() => setEditRating(star)}>
-                  <Text style={[styles.starButton, editRating >= star && styles.starButtonActive]}>
-                    {editRating >= star ? '★' : '☆'}
-                  </Text>
-                </Pressable>
-              ))}
+        <View style={styles.modalOverlay}>
+          <KeyboardAwareScrollView
+            contentContainerStyle={styles.modalScrollContent}
+            extraBottomInset={ACTIONS_BAR_ESTIMATE}
+            nestedScrollPadding={false}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Sửa đánh giá</Text>
+              <Text style={styles.modalLabel}>Số sao</Text>
+              <View style={styles.ratingRow}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Pressable key={star} onPress={() => setEditRating(star)}>
+                    <Text style={[styles.starButton, editRating >= star && styles.starButtonActive]}>
+                      {editRating >= star ? '★' : '☆'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.modalLabel}>Nội dung</Text>
+              <KeyboardAwareTextInput
+                value={editComment}
+                onChangeText={setEditComment}
+                style={styles.input}
+                multiline
+                placeholder="Nhập đánh giá..."
+                placeholderTextColor="#94a3b8"
+              />
             </View>
-            <Text style={styles.modalLabel}>Nội dung</Text>
-            <TextInput
-              value={editComment}
-              onChangeText={setEditComment}
-              style={styles.input}
-              multiline
-              placeholder="Nhập đánh giá..."
-              placeholderTextColor="#94a3b8"
-            />
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setEditingReview(null)}>
-                <Text style={styles.modalCancelText}>Hủy</Text>
-              </Pressable>
-              <Pressable style={styles.modalSave} onPress={saveEdit}>
-                <Text style={styles.modalSaveText}>Lưu</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
+          </KeyboardAwareScrollView>
+
+          <KeyboardStickyFooter style={styles.modalActions}>
+            <Pressable style={styles.modalCancel} onPress={() => setEditingReview(null)}>
+              <Text style={styles.modalCancelText}>Hủy</Text>
+            </Pressable>
+            <Pressable style={styles.modalSave} onPress={saveEdit}>
+              <Text style={styles.modalSaveText}>Lưu</Text>
+            </Pressable>
+          </KeyboardStickyFooter>
+        </View>
       </Modal>
     </View>
   );
@@ -348,7 +355,10 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
-    alignItems: 'center',
+    position: 'relative',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     padding: 20,
   },
@@ -395,7 +405,8 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 14,
+    paddingHorizontal: 20,
+    paddingTop: 12,
   },
   modalCancel: {
     flex: 1,

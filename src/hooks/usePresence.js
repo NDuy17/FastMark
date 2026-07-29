@@ -13,13 +13,13 @@ import { selectAuthStatus } from '../viewmodel/auth/authSelectors';
  * Presence cá nhân (người mua). Chỉ online khi đang ở chế độ buyer.
  * Khi chuyển sang seller → đánh dấu offline để không còn "Đang hoạt động" phía tài khoản cá nhân.
  */
-export function usePresence(appMode = APP_MODE_BUYER) {
+export function usePresence(appMode = APP_MODE_BUYER, { enabled = true } = {}) {
   const authStatus = useSelector(selectAuthStatus);
   const appStateRef = useRef(AppState.currentState);
   const isBuyerMode = appMode !== APP_MODE_SELLER;
 
   useEffect(() => {
-    if (authStatus !== 'authenticated') {
+    if (!enabled || authStatus !== 'authenticated') {
       return undefined;
     }
 
@@ -68,10 +68,8 @@ export function usePresence(appMode = APP_MODE_BUYER) {
 
     return () => {
       isActive = false;
-      if (isBuyerMode) {
-        markOffline();
-      }
+      markOffline();
       subscription.remove();
     };
-  }, [authStatus, isBuyerMode]);
+  }, [authStatus, enabled, isBuyerMode]);
 }

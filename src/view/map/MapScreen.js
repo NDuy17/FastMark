@@ -20,8 +20,7 @@ import DirectionsScreen from './DirectionsScreen';
 import AddressSearchBar from './AddressSearchBar';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import InboxScreen from '../inbox/InboxScreen';
-import ReservationModal from '../buyer/ReservationModal';
+import ReservationScreen from '../buyer/ReservationScreen';
 import { calculateDistanceMeters, formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { loadNearbyRegisteredShops, reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
 import { loadStoreById } from '../../viewmodel/store/storeViewModel';
@@ -72,11 +71,13 @@ function MapCategoryOption({ category, selected, onPress }) {
 export default function MapScreen({
   children,
   focusStoreRequest,
-  onOpenChat,
   onClearFocus,
   onPickupCompleted,
   onOpenBuyerOrders,
   onOpenWalletTopUp,
+  resumeReserveRequest = null,
+  onResumeReserveHandled,
+  keepNestedAcrossTabs = false,
   onNavigationStateChange,
   isScreenActive = true,
 }) {
@@ -97,8 +98,7 @@ export default function MapScreen({
   const [registeredShops, setRegisteredShops] = useState([]);
   const [isScanningShops, setIsScanningShops] = useState(false);
   const [storeNav, setStoreNav] = useState(null);
-  const [chatOpenRequest, setChatOpenRequest] = useState(null);
-  const [reserveModal, setReserveModal] = useState(null);
+  const [activeReservation, setActiveReservation] = useState(null);
   const [directionsSession, setDirectionsSession] = useState(null);
   const [routeDistanceById, setRouteDistanceById] = useState({});
   const [isShopPanelExpanded, setIsShopPanelExpanded] = useState(false);
@@ -169,29 +169,34 @@ export default function MapScreen({
 
   useEffect(() => {
     onNavigationStateChange?.(
-      Boolean(isScreenActive && (storeNav || directionsSession || chatOpenRequest))
+      Boolean(
+        isScreenActive &&
+          (storeNav || directionsSession || activeReservation)
+      )
     );
-  }, [chatOpenRequest, directionsSession, isScreenActive, onNavigationStateChange, storeNav]);
+  }, [activeReservation, directionsSession, isScreenActive, onNavigationStateChange, storeNav]);
 
   useEffect(() => {
-    if (isScreenActive) {
+    if (isScreenActive || keepNestedAcrossTabs) {
       return;
     }
     setStoreNav(null);
     setDirectionsSession(null);
-    setChatOpenRequest(null);
-  }, [isScreenActive]);
+    setActiveReservation(null);
+  }, [isScreenActive, keepNestedAcrossTabs]);
 
-  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
-    if (!shopId) {
+  useEffect(() => {
+    if (!resumeReserveRequest?.productId || !resumeReserveRequest?.at) {
       return;
     }
-    setChatOpenRequest({
-      shopId: String(shopId),
-      shopName: shopName || 'Gian hàng',
-      at: Date.now(),
+    setStoreNav({
+      screen: 'product',
+      productId: String(resumeReserveRequest.productId),
+      storeId: resumeReserveRequest.storeId
+        ? String(resumeReserveRequest.storeId)
+        : undefined,
     });
-  }, []);
+  }, [resumeReserveRequest?.at, resumeReserveRequest?.productId, resumeReserveRequest?.storeId]);
 
   const openStore = useCallback((storeId) => {
     setMenuVisible(false);
@@ -810,6 +815,18 @@ export default function MapScreen({
     return formatDistance(meters);
   }
 
+  function formatNearbyDistance(distanceMeters) {
+    const distance = Number(distanceMeters);
+    if (!Number.isFinite(distance)) {
+      return '--';
+    }
+    if (distance >= 1000) {
+      const km = (distance / 1000).toFixed(distance >= 10000 ? 1 : 2);
+      return `Cách ${km}km`;
+    }
+    return `Cách ${Math.round(distance)}m`;
+  }
+
   function adjustRadius(delta) {
     const base = selectedRadius == null ? 0 : Number(selectedRadius) || 0;
     const next = Math.max(0, Math.min(RADIUS_SLIDER_MAX, base + delta));
@@ -856,17 +873,21 @@ export default function MapScreen({
 
   let screenContent;
 
-  if (chatOpenRequest) {
+  if (activeReservation) {
     screenContent = (
-      <InboxScreen
-        buyerView
-        messagesOnly
-        chatRequest={chatOpenRequest}
-        onBack={() => setChatOpenRequest(null)}
-        onViewShop={(shopId) => {
-          setChatOpenRequest(null);
-          openStore(shopId);
+      <ReservationScreen
+        product={activeReservation.product}
+        store={activeReservation.store}
+        preselectedVariantId={activeReservation.preselectedVariantId}
+        onBack={() => setActiveReservation(null)}
+        onSuccess={() => {
+          setActiveReservation(null);
+          setStoreNav(null);
+          onOpenBuyerOrders?.(RESERVATION_TAB.PENDING);
         }}
+        onOpenTopUp={onOpenWalletTopUp}
+        resumeSource="map"
+        resumeStoreId={storeNav?.storeId || activeReservation?.store?.id || null}
       />
     );
   } else if (directionsSession) {
@@ -883,7 +904,6 @@ export default function MapScreen({
         originLocation={originLocation}
         onBack={closeStoreNav}
         onProductPress={openProduct}
-        onOpenChat={handleOpenChatLocal}
         onNavigateDirections={startDirectionsToStore}
       />
     );
@@ -893,10 +913,18 @@ export default function MapScreen({
         productId={storeNav.productId}
         onBack={goBackStoreNav}
         onStorePress={openStore}
-        onOpenChat={handleOpenChatLocal}
         onOpenTopUp={onOpenWalletTopUp}
+        reservationSource="map"
+        reservationStoreId={storeNav.storeId || null}
+        resumeReserveRequest={
+          resumeReserveRequest &&
+          String(resumeReserveRequest.productId) === String(storeNav.productId)
+            ? resumeReserveRequest
+            : null
+        }
+        onResumeReserveConsumed={onResumeReserveHandled}
         onReserve={(product, store, selectedVariant) =>
-          setReserveModal({
+          setActiveReservation({
             product: { ...product, id: product.id || storeNav.productId },
             store,
             preselectedVariantId: selectedVariant?.id || null,
@@ -1090,18 +1118,16 @@ export default function MapScreen({
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.nearbyList}
               renderItem={({ item: restaurant }) => {
-                const username = restaurant.shop_username
-                  ? `@${String(restaurant.shop_username).replace(/^@/, '')}`
-                  : '';
                 const categoryLabel =
                   restaurant.category_name ||
                   TYPE_LABEL[restaurant.type] ||
                   'Gian hàng';
-                const systemAddress =
-                  restaurant.system_address || restaurant.address || 'Chưa có địa chỉ hệ thống';
                 const productCount = Number(restaurant.total_products ?? restaurant.product_count ?? 0);
-                const reviewCount = Number(restaurant.review_count ?? 0);
-                const distanceLabel = formatDistance(restaurant.distance_meters);
+                const rating = Number(restaurant.rating_avg ?? restaurant.averageRating ?? 0);
+                const distanceLabel = formatNearbyDistance(restaurant.distance_meters);
+                const avatarUrl = isRemoteAvatarUrl(restaurant.image_url)
+                  ? restaurant.image_url
+                  : '';
 
                 return (
                   <Pressable
@@ -1113,31 +1139,29 @@ export default function MapScreen({
                   >
                     <AvatarBadge
                       name={restaurant.shop_name || restaurant.name || 'S'}
-                      uri={
-                        isRemoteAvatarUrl(restaurant.image_url)
-                          ? restaurant.image_url
-                          : ''
-                      }
-                      size={56}
+                      uri={avatarUrl}
+                      size={52}
                       style={styles.nearbyThumb}
                     />
                     <View style={styles.nearbyCardBody}>
-                      <View style={styles.nearbyCardTitleRow}>
-                        <Text style={styles.nearbyName} numberOfLines={1}>
-                          {restaurant.name}
+                      <Text style={styles.nearbyName} numberOfLines={1}>
+                        {restaurant.name}
+                      </Text>
+                      <View style={styles.nearbyMetricsRow}>
+                        <Ionicons name="star" size={11} color="#eab308" />
+                        <Text style={styles.nearbyRating}>
+                          {rating > 0 ? rating.toFixed(1) : 'Mới'}
                         </Text>
-                        <Text style={styles.nearbyDistance}>{distanceLabel}</Text>
+                        <Text style={styles.nearbyMetricSep}>·</Text>
+                        <Text style={styles.nearbyMetricText}>{productCount} sản phẩm</Text>
+                        <Text style={styles.nearbyMetricSep}>·</Text>
+                        <Text style={styles.nearbyMetricText}>{distanceLabel}</Text>
                       </View>
-                      <Text style={styles.nearbyMetaLine} numberOfLines={1}>
-                        {[username, categoryLabel].filter(Boolean).join(' · ') || 'Chưa có username'}
-                      </Text>
-                      <Text style={styles.nearbyAddress} numberOfLines={2}>
-                        {systemAddress}
-                      </Text>
-                      <Text style={styles.nearbyStats} numberOfLines={1}>
-                        {productCount} sản phẩm · {reviewCount} đánh giá
+                      <Text style={styles.nearbyCategory} numberOfLines={1}>
+                        {categoryLabel}
                       </Text>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
                   </Pressable>
                 );
               }}
@@ -1149,24 +1173,7 @@ export default function MapScreen({
     );
   }
 
-  return (
-    <>
-      {screenContent}
-      <ReservationModal
-        visible={Boolean(reserveModal)}
-        product={reserveModal?.product}
-        store={reserveModal?.store}
-        preselectedVariantId={reserveModal?.preselectedVariantId}
-        onClose={() => setReserveModal(null)}
-        onSuccess={() => {
-          setReserveModal(null);
-          setStoreNav(null);
-          onOpenBuyerOrders?.(RESERVATION_TAB.HOLDING);
-        }}
-        onOpenTopUp={onOpenWalletTopUp}
-      />
-    </>
-  );
+  return <>{screenContent}</>;
 }
 
 const styles = StyleSheet.create({
@@ -1236,26 +1243,25 @@ const styles = StyleSheet.create({
   nearbyList: {
     paddingHorizontal: 12,
     paddingBottom: 8,
-    gap: 8,
   },
   nearbyCard: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    gap: 10,
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 8,
   },
   nearbyCardPressed: {
     opacity: 0.85,
-    backgroundColor: '#f0fdfa',
+    backgroundColor: '#fafafa',
   },
   nearbyThumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 52,
+    height: 52,
+    borderRadius: 10,
     flexShrink: 0,
   },
   nearbyCardBody: {
@@ -1263,45 +1269,38 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 2,
   },
-  nearbyCardTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   nearbyName: {
-    flex: 1,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
-    lineHeight: 18,
+    lineHeight: 17,
   },
-  nearbyDistance: {
+  nearbyMetricsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    flexWrap: 'wrap',
+  },
+  nearbyRating: {
     fontSize: 11,
-    fontWeight: '800',
-    color: '#076F32',
-    backgroundColor: '#E6F4EC',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  nearbyMetaLine: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#076F32',
-    lineHeight: 16,
-  },
-  nearbyAddress: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 16,
-  },
-  nearbyStats: {
-    marginTop: 2,
-    fontSize: 12,
     fontWeight: '700',
-    color: '#334155',
-    lineHeight: 16,
+    color: '#64748b',
+  },
+  nearbyMetricSep: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#cbd5e1',
+  },
+  nearbyMetricText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  nearbyCategory: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#94a3b8',
+    lineHeight: 14,
   },
   mapFab: {
     position: 'absolute',

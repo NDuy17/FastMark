@@ -17,7 +17,7 @@ export async function fetchReviewsByStoreId(storeId) {
     log.ok('fetchReviewsByStoreId:node-api', { storeId, count: reviews.length });
     return reviews.map(normalizeReview);
   } catch (error) {
-    log.fail('fetchReviewsByStoreId:node-api-failed', error);
+    log.warn('fetchReviewsByStoreId:node-api-failed', error?.message || error);
     return [];
   }
 }

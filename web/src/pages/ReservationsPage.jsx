@@ -1,12 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  Eye,
+  ShoppingBag,
+  XCircle,
+} from 'lucide-react';
 
 import {
   getReservationStats,
   listReservations,
 } from '../api/reservationAdminApi';
-import DashboardDateRange from '../components/DashboardDateRange';
+import AdminDetailTabs from '../components/admin/AdminDetailTabs';
+import AdminFilterPanel from '../components/admin/AdminFilterPanel';
+import AdminPageShell from '../components/admin/AdminPageShell';
+import AdminPagination from '../components/admin/AdminPagination';
+import DataTableShell from '../components/admin/DataTableShell';
+import { TableSttCell, TableSttHeader } from '../components/admin/TableStt';
+import TableIconActions from '../components/ui/TableIconActions';
+import AdminDateFilter from '../components/admin/AdminDateFilter';
+import { EmptyState } from '../components/ui/Feedback';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useAdminOrderSocket } from '../hooks/useAdminOrderSocket';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { formatDateActivity, formatPrice } from '../utils/format';
+import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 
 const STATUS_LABELS = {
   0: 'Chờ shop xác nhận',
@@ -32,16 +53,27 @@ const STATUS_OPTIONS = [
 ];
 
 const TABS = [
-  { value: 'all', label: 'Tất cả', tabParam: '', statsKey: 'total' },
-  { value: 'waiting', label: 'Chờ nhận', tabParam: 'waiting_pickup', statsKey: 'waitingPickup' },
+  { id: 'all', label: 'Tất cả', tabParam: '', statsKey: 'total' },
   {
-    value: 'completed',
-    label: 'Hoàn thành',
-    tabParam: 'completed',
-    statsKey: 'completedAll',
+    id: 'pending',
+    label: 'Chờ xác nhận',
+    tabParam: 'pending',
+    statsKey: 'pendingSellerConfirmation',
   },
-  { value: 'disputes', label: 'Tranh chấp', tabParam: 'disputes', statsKey: 'disputed' },
-  { value: 'cancelled', label: 'Đã hủy', tabParam: 'cancelled', statsKey: 'cancelled' },
+  {
+    id: 'waiting',
+    label: 'Giữ hàng',
+    tabParam: 'waiting_pickup',
+    statsKey: 'waitingPickup',
+  },
+  {
+    id: 'disputes',
+    label: 'Tranh chấp',
+    tabParam: 'disputes',
+    statsKey: 'disputed',
+  },
+  { id: 'completed', label: 'Hoàn thành', tabParam: 'completed', statsKey: 'completedAll' },
+  { id: 'cancelled', label: 'Đã hủy', tabParam: 'cancelled', statsKey: 'cancelled' },
 ];
 
 const EMPTY_STATS = {
@@ -53,39 +85,105 @@ const EMPTY_STATS = {
   disputed: 0,
   refunded: 0,
   cancelled: 0,
+  pendingSellerConfirmation: 0,
+  sellerCancelledAfterAccept: 0,
 };
-
-function formatDate(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('vi-VN');
-}
-
-function formatPrice(value) {
-  return `${Number(value || 0).toLocaleString('vi-VN')}đ`;
-}
-
-function reservationStatusTone(status) {
-  if (status === 0) return 'pending';
-  if (status === 2) return 'waiting';
-  if (status === 3 || status === 5) return 'done';
-  if (status === 4) return 'dispute';
-  if (status === 1 || status === 6 || status === 7) return 'cancelled';
-  return 'neutral';
-}
-
-function resolveStatusLabel(item) {
-  if (item?.statusLabel) return item.statusLabel;
-  return STATUS_LABELS[item?.status] || 'Không rõ';
-}
 
 function normalizeTab(raw) {
   const value = String(raw || '').trim().toLowerCase();
   if (!value || value === 'all') return 'all';
+  if (
+    value === 'pending' ||
+    value === 'pending_confirmation' ||
+    value === 'waiting_confirmation'
+  ) {
+    return 'pending';
+  }
   if (value === 'disputes' || value === 'dispute') return 'disputes';
   if (value === 'waiting' || value === 'waiting_pickup') return 'waiting';
   if (value === 'completed' || value === 'auto' || value === 'auto_completed') return 'completed';
-  if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+  if (
+    value === 'cancelled' ||
+    value === 'canceled' ||
+    value === 'seller_cancelled' ||
+    value === 'seller_cancel_after_accept'
+  ) {
+    return 'cancelled';
+  }
   return 'all';
+}
+
+function resolveListStatusMeta(status) {
+  const value = Number(status);
+  if (value === 3 || value === 5) {
+    return { label: 'Hoàn thành', className: 'badge badge-success' };
+  }
+  if (value === 4) {
+    return { label: 'Tranh chấp', className: 'badge badge-warning' };
+  }
+  if (value === 0 || value === 2) {
+    return { label: 'Giữ hàng', className: 'badge badge-warning' };
+  }
+  return { label: 'Đã hủy', className: 'badge badge-danger' };
+}
+
+function resolveTotalPrice(item) {
+  const unit = Number(item?.agreedPrice ?? item?.reservedPrice) || 0;
+  const qty = Number(item?.quantity) || 0;
+  return unit * qty;
+}
+
+function DateTimeCell({ value }) {
+  const formatted = formatDateActivity(value);
+  if (!formatted) return <span className="muted">—</span>;
+  return (
+    <div className="datetime-cell">
+      <span className="datetime-cell-time">{formatted.time}</span>
+      <span className="datetime-cell-day">{formatted.day}</span>
+    </div>
+  );
+}
+
+function PartyNameCell({ name, handle }) {
+  return (
+    <div className="order-party-name-cell">
+      <div className="cell-title">{name || '—'}</div>
+      {handle ? <div className="cell-sub">@{handle}</div> : null}
+    </div>
+  );
+}
+
+function ProductCell({ item }) {
+  const name = item.product?.productName || 'Sản phẩm';
+  const thumb = resolveMediaUrl(item.product?.thumbnail);
+
+  return (
+    <div className="order-product-cell">
+      {thumb ? (
+        <img src={thumb} alt="" className="order-product-thumb" />
+      ) : (
+        <span className="order-product-thumb placeholder">SP</span>
+      )}
+      <div className="order-product-meta">
+        <strong>{name}</strong>
+        <span>SL: {item.quantity || 0}</span>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonRows() {
+  return (
+    <>
+      {Array.from({ length: 8 }).map((_, index) => (
+        <tr key={index}>
+          <td colSpan={11}>
+            <div className="skeleton skeleton-line" style={{ height: 44 }} />
+          </td>
+        </tr>
+      ))}
+    </>
+  );
 }
 
 export default function ReservationsPage() {
@@ -97,21 +195,37 @@ export default function ReservationsPage() {
 
   const [items, setItems] = useState([]);
   const [stats, setStats] = useState(EMPTY_STATS);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: DEFAULT_PAGE_SIZE,
+    total: 0,
+    totalPages: 1,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const { input: searchInput, debounced: search, setInput: setSearchInput } = useDebouncedSearch();
   const [status, setStatus] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [datePreset, setDatePreset] = useState('all');
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
 
   const activeTabConfig = useMemo(
-    () => TABS.find((tab) => tab.value === activeTab) || TABS[0],
+    () => TABS.find((tab) => tab.id === activeTab) || TABS[0],
     [activeTab]
   );
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  useEffect(() => {
+    setDateFrom('');
+    setDateTo('');
+    setDatePreset('all');
+    setPage(1);
+  }, [activeTab]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -121,7 +235,7 @@ export default function ReservationsPage() {
       const params = {
         search,
         page,
-        limit: 20,
+        limit,
         dateFrom,
         dateTo,
       };
@@ -137,7 +251,12 @@ export default function ReservationsPage() {
       ]);
       setItems(listPayload.data?.items || []);
       setPagination(
-        listPayload.data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 }
+        listPayload.data?.pagination || {
+          page: 1,
+          limit: DEFAULT_PAGE_SIZE,
+          total: 0,
+          totalPages: 1,
+        }
       );
       const nextStats = statsPayload.data?.stats || EMPTY_STATS;
       setStats({
@@ -158,215 +277,249 @@ export default function ReservationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTabConfig.tabParam, dateFrom, dateTo, getIdToken, page, search, status]);
+  }, [activeTabConfig.tabParam, dateFrom, dateTo, getIdToken, limit, page, search, status]);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
-  function setTab(tabValue) {
-    const next = normalizeTab(tabValue);
+  const handleOrderUpdated = useCallback(() => {
+    loadItems();
+  }, [loadItems]);
+
+  useAdminOrderSocket({
+    enabled: true,
+    getIdToken,
+    onOrderUpdated: handleOrderUpdated,
+  });
+
+  function setTab(tabId) {
+    const next = normalizeTab(tabId);
     const nextParams = new URLSearchParams(searchParams);
     if (next === 'all') {
       nextParams.delete('tab');
     } else {
-      const config = TABS.find((tab) => tab.value === next);
+      const config = TABS.find((tab) => tab.id === next);
       nextParams.set('tab', config?.tabParam || next);
     }
     setSearchParams(nextParams, { replace: true });
     setPage(1);
+    setDateFrom('');
+    setDateTo('');
+    setDatePreset('all');
     if (next !== 'all') {
       setStatus('');
     }
   }
 
+  const tabItems = useMemo(
+    () =>
+      TABS.map((tab) => ({
+        id: tab.id,
+        label: `${tab.label} (${Number(stats[tab.statsKey]) || 0})`,
+      })),
+    [stats]
+  );
+
+  const statCards = [
+    {
+      label: 'Tất cả',
+      value: loading ? '…' : stats.total,
+      icon: ShoppingBag,
+      tone: 'green',
+      onClick: () => setTab('all'),
+      active: activeTab === 'all',
+    },
+    {
+      label: 'Chờ xác nhận',
+      value: loading ? '…' : stats.pendingSellerConfirmation,
+      icon: Clock,
+      tone: 'blue',
+      onClick: () => setTab('pending'),
+      active: activeTab === 'pending',
+    },
+    {
+      label: 'Giữ hàng',
+      value: loading ? '…' : stats.waitingPickup,
+      icon: ShoppingBag,
+      tone: 'slate',
+      onClick: () => setTab('waiting'),
+      active: activeTab === 'waiting',
+    },
+    {
+      label: 'Tranh chấp',
+      value: loading ? '…' : stats.disputed,
+      icon: AlertTriangle,
+      tone: 'amber',
+      onClick: () => setTab('disputes'),
+      active: activeTab === 'disputes',
+    },
+    {
+      label: 'Hoàn thành',
+      value: loading ? '…' : stats.completedAll,
+      icon: CheckCircle,
+      tone: 'green',
+      onClick: () => setTab('completed'),
+      active: activeTab === 'completed',
+    },
+    {
+      label: 'Đã hủy',
+      value: loading ? '…' : stats.cancelled,
+      icon: XCircle,
+      tone: 'red',
+      onClick: () => setTab('cancelled'),
+      active: activeTab === 'cancelled',
+    },
+  ];
+
   return (
-    <div className="page reservations-page">
+    <AdminPageShell stats={statCards}>
       {error ? <p className="error-banner">{error}</p> : null}
 
-      <div className="reservation-tabs">
-        {TABS.map((tab) => {
-          const count = Number(stats[tab.statsKey]) || 0;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              className={`reservation-tab${activeTab === tab.value ? ' active' : ''}`}
-              onClick={() => setTab(tab.value)}
-            >
-              <span>{tab.label}</span>
-              <em>{count}</em>
-            </button>
-          );
-        })}
-      </div>
-
-      <section className="filter-card">
-        <form
-          className="filter-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setPage(1);
-            setSearch(searchInput.trim());
-          }}
-        >
-          <label className="filter-search">
-            Tra cứu
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Mã đơn, khách hàng, gian hàng, lý do tranh chấp..."
-            />
-          </label>
-          <button type="submit" className="primary-btn">
-            Tìm
-          </button>
-        </form>
-        <div className="filter-grid filter-grid-reservations">
-          <label>
-            Trạng thái
-            <select
-              value={status}
-              disabled={activeTab !== 'all'}
-              onChange={(event) => {
-                setStatus(event.target.value);
-                setPage(1);
-              }}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value || 'all'} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="reservation-date-filter">
-            <DashboardDateRange
-              label="Thời gian"
+      <DataTableShell
+        title="Danh sách đơn hàng"
+        filterColumns={3}
+        filters={
+          <AdminFilterPanel
+            layout="inline"
+            searchValue={searchInput}
+            onSearchChange={setSearchInput}
+            searchPlaceholder="Mã đơn, khách hàng, gian hàng, lý do tranh chấp..."
+          >
+            <label>
+              Trạng thái
+              <select
+                value={status}
+                disabled={activeTab !== 'all'}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value || 'all'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <AdminDateFilter
               from={dateFrom}
               to={dateTo}
               preset={datePreset}
-              allowAll
               onApply={(range) => {
                 setDateFrom(range.from || '');
                 setDateTo(range.to || '');
-                setDatePreset(range.preset || 'custom');
+                setDatePreset(range.preset || (!range.from && !range.to ? 'all' : 'custom'));
                 setPage(1);
               }}
             />
-          </div>
-        </div>
-      </section>
-
-      <section className="table-card">
-        <div className="table-scroll">
-          <table className="data-table catalog-table reservations-table">
-            <thead>
-              <tr>
-                <th>Mã đơn</th>
-                <th>Sản phẩm</th>
-                <th>Người mua</th>
-                <th>Người bán</th>
-                <th>Tiền cọc</th>
-                <th>Giờ nhận</th>
-                <th>Ghi chú / tranh chấp</th>
-                <th>Ngày tạo</th>
-                <th>Trạng thái</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={9} className="table-empty">
-                    Đang tải...
-                  </td>
-                </tr>
-              ) : items.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="table-empty">
-                    Không có đơn giữ hàng.
-                  </td>
-                </tr>
-              ) : (
-                items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="clickable-row"
-                    onClick={() => navigate(`/reservations/${item.id}`)}
-                  >
-                    <td>
-                      <div className="cell-title mono-code">
-                        {item.code || String(item.id).slice(-8).toUpperCase()}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="cell-title">{item.product?.productName || ''}</div>
-                    </td>
-                    <td>
-                      <div className="cell-title soft">
-                        {item.buyer?.fullName || item.buyer?.userName || ''}
-                      </div>
-                      {item.buyer?.userName ? (
-                        <div className="cell-sub">@{item.buyer.userName}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <div className="cell-title soft">{item.shop?.shopName || ''}</div>
-                    </td>
-                    <td className="cell-price">{formatPrice(item.depositAmount)}</td>
-                    <td>
-                      <div className="cell-sub">{formatDate(item.pickupTime)}</div>
-                    </td>
-                    <td>
-                      <div className="cell-sub">
-                        {item.disputeReasonLabel ||
-                          item.disputeReason ||
-                          item.disputeDescription ||
-                          item.cancelReason ||
-                          ''}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="cell-sub">{formatDate(item.createdAt)}</div>
-                    </td>
-                    <td>
-                      <span
-                        className={`rsv-status rsv-status-${reservationStatusTone(item.status)}`}
-                      >
-                        {resolveStatusLabel(item)}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+          </AdminFilterPanel>
+        }
+        pagination={
+          <AdminPagination
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            total={pagination.total}
+            label="đơn"
+            limit={limit}
+            onLimitChange={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+            loading={loading}
+            onPageChange={setPage}
+          />
+        }
+      >
+        <div className="orders-table-tabs">
+          <AdminDetailTabs tabs={tabItems} activeTab={activeTab} onChange={setTab} variant="underline" />
         </div>
 
-        <div className="pagination-row">
-          <span>
-            Trang {pagination.page}/{pagination.totalPages} · {pagination.total} đơn
-          </span>
-          <div className="pagination-actions">
-            <button
-              type="button"
-              className="ghost-btn"
-              disabled={page <= 1}
-              onClick={() => setPage((value) => value - 1)}
-            >
-              Trước
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              disabled={page >= pagination.totalPages}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              Sau
-            </button>
+        {!loading && items.length === 0 ? (
+          <EmptyState
+            icon="📦"
+            title="Không có đơn hàng"
+            description="Thử đổi tab, bộ lọc hoặc khoảng thời gian."
+          />
+        ) : (
+          <div className="orders-table-scroll">
+            <table className="data-table orders-table admin-data-table">
+              <thead>
+                <tr>
+                  <TableSttHeader />
+                  <th>Mã đơn</th>
+                  <th>Người mua</th>
+                  <th>Người bán</th>
+                  <th>Sản phẩm</th>
+                  <th>Tổng tiền</th>
+                  <th>Tiền cọc</th>
+                  <th>Giờ đặt</th>
+                  <th>Giờ nhận</th>
+                  <th>Trạng thái</th>
+                  <th className="col-actions" aria-label="Thao tác" />
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <SkeletonRows />
+                ) : (
+                  items.map((item, index) => {
+                    const statusMeta = resolveListStatusMeta(item.status);
+                    return (
+                      <tr key={item.id} className="orders-table-row">
+                        <TableSttCell page={pagination.page} limit={limit} index={index} />
+                        <td>
+                          <div className="cell-title mono-code">
+                            #{item.code || String(item.id).slice(-8).toUpperCase()}
+                          </div>
+                        </td>
+                        <td>
+                          <PartyNameCell
+                            name={item.buyer?.fullName || item.buyer?.userName}
+                            handle={item.buyer?.userName}
+                          />
+                        </td>
+                        <td>
+                          <PartyNameCell
+                            name={item.shop?.shopName}
+                            handle={item.shop?.shopUsername}
+                          />
+                        </td>
+                        <td>
+                          <ProductCell item={item} />
+                        </td>
+                        <td className="cell-price">{formatPrice(resolveTotalPrice(item))}</td>
+                        <td className="cell-price">{formatPrice(item.depositAmount)}</td>
+                        <td>
+                          <DateTimeCell value={item.createdAt} />
+                        </td>
+                        <td>
+                          <DateTimeCell value={item.pickupTime} />
+                        </td>
+                        <td>
+                          <span className={statusMeta.className}>{statusMeta.label}</span>
+                        </td>
+                        <td className="col-actions">
+                          <TableIconActions
+                            actions={[
+                              {
+                                icon: Eye,
+                                label: 'Xem chi tiết',
+                                onClick: () => navigate(`/reservations/${item.id}`),
+                              },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
-        </div>
-      </section>
-    </div>
+        )}
+      </DataTableShell>
+    </AdminPageShell>
   );
 }

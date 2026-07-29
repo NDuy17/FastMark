@@ -1,8 +1,53 @@
 const { Server } = require("socket.io");
 const { auth } = require("../config/firebaseAdmin");
 const { findUserByFirebaseUid } = require("../services/userService");
+const presenceService = require("../services/presenceService");
+const User = require("../models/User");
+const { USER_ROLE } = require("../constants");
 
 let io = null;
+const userConnectionCounts = new Map();
+
+function incrementUserConnections(userId) {
+  const key = String(userId || "");
+  if (!key) {
+    return 0;
+  }
+  const next = (userConnectionCounts.get(key) || 0) + 1;
+  userConnectionCounts.set(key, next);
+  return next;
+}
+
+function decrementUserConnections(userId) {
+  const key = String(userId || "");
+  if (!key) {
+    return 0;
+  }
+  const next = Math.max(0, (userConnectionCounts.get(key) || 1) - 1);
+  if (next === 0) {
+    userConnectionCounts.delete(key);
+  } else {
+    userConnectionCounts.set(key, next);
+  }
+  return next;
+}
+
+async function markUserDisconnected(userId) {
+  if (!userId) {
+    return;
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return;
+    }
+    await presenceService.setUserOffline(user);
+    await presenceService.setShopOffline(user);
+  } catch (error) {
+    console.warn("[presence] socket disconnect offline failed:", error?.message || error);
+  }
+}
 
 function initSocket(server) {
   io = new Server(server, {
@@ -32,17 +77,18 @@ function initSocket(server) {
   });
 
   io.on("connection", (socket) => {
+    incrementUserConnections(socket.userId);
     socket.join(`user:${socket.userId}`);
 
-    socket.on("conversation:join", ({ conversationId }) => {
-      if (conversationId) {
-        socket.join(`conversation:${conversationId}`);
-      }
-    });
+    if (Number(socket.mongoUser?.Role) === USER_ROLE.ADMIN) {
+      socket.join("admin:all");
+      socket.join("admin:reservations");
+    }
 
-    socket.on("conversation:leave", ({ conversationId }) => {
-      if (conversationId) {
-        socket.leave(`conversation:${conversationId}`);
+    socket.on("disconnect", () => {
+      const remaining = decrementUserConnections(socket.userId);
+      if (remaining === 0) {
+        markUserDisconnected(socket.userId);
       }
     });
   });
@@ -52,13 +98,6 @@ function initSocket(server) {
 
 function getIO() {
   return io;
-}
-
-function emitConversationEvent(conversationId, event, payload) {
-  if (!io || !conversationId) {
-    return;
-  }
-  io.to(`conversation:${conversationId}`).emit(event, payload);
 }
 
 function emitUserEvent(userId, event, payload) {
@@ -71,6 +110,5 @@ function emitUserEvent(userId, event, payload) {
 module.exports = {
   initSocket,
   getIO,
-  emitConversationEvent,
   emitUserEvent,
 };

@@ -1,41 +1,35 @@
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { useScreenInsets } from '../../hooks/useScreenInsets';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 
+/**
+ * @param {object} props
+ * @param {boolean} [props.scroll=true] — false khi children tự scroll (FlatList), tránh nested VirtualizedList.
+ */
 export default function ProfileSubScreen({
   title,
   onBack,
   embedded = false,
+  scroll = true,
   refreshControl,
   children,
 }) {
-  const insets = useScreenInsets();
-
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
-    >
-      {embedded ? (
-        <View style={styles.headerPlain}>
-          <Text style={styles.titlePlain}>{title}</Text>
-        </View>
+    <View style={styles.screen}>
+      <SubScreenHeader title={title} onBack={onBack} />
+      {scroll ? (
+        <KeyboardAwareScrollView
+          contentContainerStyle={styles.bodyContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={refreshControl}
+        >
+          {children}
+        </KeyboardAwareScrollView>
       ) : (
-        <SubScreenHeader title={title} onBack={onBack} />
+        <View style={[styles.bodyFlex, styles.bodyContent]}>{children}</View>
       )}
-      <ScrollView
-        style={styles.body}
-        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.nestedScrollPaddingBottom }]}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        refreshControl={refreshControl}
-      >
-        {children}
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -44,22 +38,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f1f5f9',
   },
-  headerPlain: {
-    paddingTop: 12,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: '#f1f5f9',
-  },
-  titlePlain: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  body: {
-    flex: 1,
-  },
   bodyContent: {
     paddingHorizontal: 16,
     paddingTop: 16,
+  },
+  bodyFlex: {
+    flex: 1,
+    minHeight: 0,
   },
 });

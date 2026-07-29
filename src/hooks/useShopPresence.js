@@ -8,7 +8,7 @@ import {
 } from '../api/presenceApi';
 import { selectAuthStatus, selectIsSeller } from '../viewmodel/auth/authSelectors';
 
-export function useShopPresence(_appMode) {
+export function useShopPresence(_appMode, { enabled = true } = {}) {
   const authStatus = useSelector(selectAuthStatus);
   const isSeller = useSelector(selectIsSeller);
   const appStateRef = useRef(AppState.currentState);
@@ -16,7 +16,7 @@ export function useShopPresence(_appMode) {
   const isSellerMode = isSeller;
 
   useEffect(() => {
-    if (authStatus !== 'authenticated' || !isSeller) {
+    if (!enabled || authStatus !== 'authenticated' || !isSeller) {
       return undefined;
     }
 
@@ -65,10 +65,8 @@ export function useShopPresence(_appMode) {
 
     return () => {
       isActive = false;
-      if (isSellerMode) {
-        markShopOffline();
-      }
+      markShopOffline();
       subscription.remove();
     };
-  }, [authStatus, isSeller, isSellerMode]);
+  }, [authStatus, enabled, isSeller, isSellerMode]);
 }

@@ -6,7 +6,7 @@ import { describeNativeGoogleError, getGoogleAuthSetupError, getGoogleNativeWebC
 import { getNativeGoogleSignInModule } from '../../viewmodel/auth/googleSignInModule';
 import { selectAuthActionStatus } from '../../viewmodel/auth/authSelectors';
 import { clearGoogleSignInSession } from '../../viewmodel/auth/clearGoogleSignInSession';
-import { socialLogin } from '../../viewmodel/auth/authSlice';
+import { clearAuthFeedback, socialLogin } from '../../viewmodel/auth/authSlice';
 import { GoogleSignInPressable } from './googleSignInShared';
 
 export default function GoogleSignInNativeImpl({ disabled, onError }) {
@@ -38,8 +38,8 @@ export default function GoogleSignInNativeImpl({ disabled, onError }) {
       return;
     }
 
-    onError?.('');
     log.info('signIn:pressed');
+    dispatch(clearAuthFeedback());
 
     if (setupError) {
       onError?.(setupError);
@@ -84,7 +84,11 @@ export default function GoogleSignInNativeImpl({ disabled, onError }) {
       try {
         await dispatch(socialLogin({ token: idToken, fullName })).unwrap();
       } catch (error) {
-        onError?.(error || 'Đăng nhập Google thất bại.');
+        const message =
+          typeof error === 'string'
+            ? error
+            : error?.message || 'Đăng nhập Google thất bại.';
+        onError?.(message);
       } finally {
         setIsSigningIn(false);
       }

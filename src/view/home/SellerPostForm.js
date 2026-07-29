@@ -3,14 +3,11 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -18,10 +15,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { createProductOnBackend, getProductCategoriesOnBackend } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { syncSellerAccess } from '../../viewmodel/auth/authSlice';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { useDispatch } from 'react-redux';
 import ProductPromotionSection, {
   buildPromotionPayload,
 } from '../seller/ProductPromotionSection';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 
 function createVariant() {
   return {
@@ -156,7 +156,7 @@ function VariantBlock({ variant, index, onChange, onRemove, canRemove }) {
 
       <View style={styles.field}>
         <Text style={styles.label}>Tên biến thể</Text>
-        <TextInput
+        <KeyboardAwareTextInput
           value={variant.variantName}
           onChangeText={(nextValue) => onChange({ ...variant, variantName: nextValue, error: '' })}
           placeholder="VD: 500g, 1kg, Loại 1"
@@ -168,7 +168,7 @@ function VariantBlock({ variant, index, onChange, onRemove, canRemove }) {
       <View style={styles.row}>
         <View style={[styles.field, styles.halfField]}>
           <Text style={styles.label}>Giá (đ)</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={variant.price}
             onChangeText={(nextValue) => onChange({ ...variant, price: nextValue, error: '' })}
             placeholder="35000"
@@ -179,7 +179,7 @@ function VariantBlock({ variant, index, onChange, onRemove, canRemove }) {
         </View>
         <View style={[styles.field, styles.halfField]}>
           <Text style={styles.label}>Số lượng</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={variant.quantity}
             onChangeText={(nextValue) => onChange({ ...variant, quantity: nextValue, error: '' })}
             placeholder="100"
@@ -303,7 +303,7 @@ export default function SellerPostForm({ onProductCreated }) {
       }
       setThumbnails((current) => [...current, ...picked]);
     } catch (pickError) {
-      setError(pickError.message || 'Không chọn được ảnh sản phẩm.');
+      showErrorAlert(pickError.message || 'Không chọn được ảnh sản phẩm.');
     }
   }
 
@@ -419,21 +419,15 @@ export default function SellerPostForm({ onProductCreated }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.keyboardRoot}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <KeyboardAwareScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
     >
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-      >
       <View style={styles.card}>
         <View style={styles.field}>
           <Text style={styles.label}>Tên sản phẩm</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={productName}
             onChangeText={setProductName}
             placeholder="VD: Cam sành Tiền Giang"
@@ -487,7 +481,7 @@ export default function SellerPostForm({ onProductCreated }) {
 
         <View style={styles.field}>
           <Text style={styles.label}>Mô tả</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={description}
             onChangeText={setDescription}
             placeholder="Mô tả chi tiết sản phẩm"
@@ -499,7 +493,7 @@ export default function SellerPostForm({ onProductCreated }) {
 
         <View style={styles.field}>
           <Text style={styles.label}>Đơn vị</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             value={donVi}
             onChangeText={setDonVi}
             placeholder="kg, hộp, quả..."
@@ -555,15 +549,11 @@ export default function SellerPostForm({ onProductCreated }) {
           )}
         </Pressable>
       </View>
-    </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  keyboardRoot: {
-    flex: 1,
-  },
   scroll: {
     flex: 1,
     backgroundColor: '#f4f7f6',

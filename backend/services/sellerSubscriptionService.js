@@ -14,6 +14,17 @@ const {
   unhideShopProducts,
   createServiceError,
 } = require("./sellerPlanAccessService");
+const { resolveShopDisplayName, resolveShopUsername } = require("../utils/shopIdentity");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendNumericFieldSearchConditions,
+  appendUniqueOrConditions,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 
 function addDays(date, days) {
   const next = new Date(date);
@@ -211,6 +222,16 @@ async function purchaseSubscription(user, payload = {}) {
     await session.commitTransaction();
 
     const wallet = await getWalletBalance(user._id);
+    emitAdminUpdated("subscription", {
+      subscriptionId: String(created._id),
+      shopId: String(shop._id),
+      userId: String(user._id),
+    });
+    emitUserResourceUpdated(user._id, "subscription", {
+      subscriptionId: String(created._id),
+      shopId: String(shop._id),
+    });
+    emitUserResourceUpdated(user._id, "wallet", { balance: wallet.balance });
     return toSubscriptionDto(shop, wallet.balance);
   } catch (error) {
     await session.abortTransaction();
@@ -225,6 +246,8 @@ async function listAdminSubscriptions({
   limit = 20,
   status = "",
   search = "",
+  from = "",
+  to = "",
 } = {}) {
   const pageSize = Math.min(50, Math.max(1, Number(limit) || 20));
   const pageNumber = Math.max(1, Number(page) || 1);
@@ -239,29 +262,40 @@ async function listAdminSubscriptions({
   }
 
   if (search) {
-    const regex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    const [users, shops] = await Promise.all([
-      User.find({
-        $or: [{ FullName: regex }, { UserName: regex }, { Email: regex }],
-      })
-        .select("_id")
-        .lean(),
-      ShopProfile.find({
-        $or: [{ description: regex }, { addressHeThong: regex }],
-      })
-        .select("_id")
-        .lean(),
-    ]);
-    filter.$or = [
-      { planName: regex },
-      ...(users.length ? [{ sellerId: { $in: users.map((u) => u._id) } }] : []),
-      ...(shops.length ? [{ shopId: { $in: shops.map((s) => s._id) } }] : []),
-    ];
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+
+    if (regex) {
+      const [matchedUsers, matchedShops] = await Promise.all([
+        findUsersBySearchRegex(User, regex, ["FullName", "UserName", "Email"]),
+        ShopProfile.find({
+          $or: [{ description: regex }, { addressHeThong: regex }, { shopName: regex }, { shopUsername: regex }],
+        })
+          .select("_id")
+          .lean(),
+      ]);
+
+      orConditions.push(
+        { planName: regex },
+        ...(matchedUsers.length ? [{ sellerId: { $in: matchedUsers.map((user) => user._id) } }] : []),
+        ...(matchedShops.length ? [{ shopId: { $in: matchedShops.map((shop) => shop._id) } }] : [])
+      );
+    }
+
+    appendStatusLabelSearchConditions(orConditions, search, SELLER_SUBSCRIPTION_STATUS_LABEL);
+    appendNumericFieldSearchConditions(orConditions, "orderCode", search);
+    orConditions.push(...buildObjectIdSearchConditions(search));
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
+
+  applyCreatedAtRange(filter, { from, to });
 
   const [rows, total] = await Promise.all([
     SellerSubscription.find(filter)
-      .sort({ CreatedAt: -1 })
+      .sort({ ngayMua: -1, CreatedAt: -1 })
       .skip(skip)
       .limit(pageSize)
       .lean(),
@@ -278,7 +312,7 @@ async function listAdminSubscriptions({
       : [],
     shopIds.length
       ? ShopProfile.find({ _id: { $in: shopIds } })
-          .select("description addressHeThong address userId")
+          .select("description addressHeThong address userId shopName shopUsername avatar")
           .lean()
       : [],
     sellerIds.length
@@ -343,11 +377,8 @@ async function listAdminSubscriptions({
     items: rows.map((row) => {
       const seller = sellerById.get(String(row.sellerId));
       const shop = shopById.get(String(row.shopId));
-      const shopName =
-        seller?.FullName ||
-        seller?.UserName ||
-        shop?.description ||
-        "";
+      const shopName = resolveShopDisplayName(shop, seller);
+      const shopUsername = resolveShopUsername(shop, seller);
       const payment = resolvePaymentTx(row);
       return toSubscriptionRow(row, {
         ...payment,
@@ -364,6 +395,7 @@ async function listAdminSubscriptions({
           ? {
               id: String(shop._id),
               shopName,
+              shopUsername,
               description: shop.description || "",
               address: shop.addressHeThong || shop.address || "",
               addressHeThong: shop.addressHeThong || shop.address || "",
@@ -372,6 +404,7 @@ async function listAdminSubscriptions({
           : {
               id: row.shopId ? String(row.shopId) : "",
               shopName,
+              shopUsername,
               description: "",
               address: "",
               addressHeThong: "",

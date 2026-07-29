@@ -14,7 +14,7 @@ import {
   canShowReviewButton,
   getPurchaseStatusLabel,
   getReservationStatusLabel,
-  isOrderAlreadyReviewed,
+  hasOrderReviewSubmitted,
   submitShopReview,
 } from '../../core/utils/orderReview';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
@@ -49,7 +49,7 @@ function PurchaseList({ items, onOpenOrderDetail, onOpenStore, onReviewStore, re
 
   return items.map((item) => {
     const showReviewButton = canShowReviewButton(item, reviewedOrderCodes);
-    const alreadyReviewed = isOrderAlreadyReviewed(item, reviewedOrderCodes);
+    const reviewSubmitted = hasOrderReviewSubmitted(item);
 
     return (
       <Pressable
@@ -100,11 +100,11 @@ function PurchaseList({ items, onOpenOrderDetail, onOpenStore, onReviewStore, re
           {showReviewButton ? (
             <ReviewNowButton compact onPress={() => onReviewStore?.(item)} />
           ) : null}
-          {alreadyReviewed ? <ReviewedBadge compact /> : null}
+          {reviewSubmitted ? <ReviewedBadge compact /> : null}
           <Pressable
             style={({ pressed }) => [
               styles.actionButton,
-              !showReviewButton && !alreadyReviewed && styles.actionButtonFull,
+              !showReviewButton && !reviewSubmitted && styles.actionButtonFull,
               pressed && styles.actionButtonPressed,
             ]}
             onPress={(event) => {

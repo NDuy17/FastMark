@@ -1,25 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
   bulkSetProductPromotionsOnBackend,
+  clearProductPromotionOnBackend,
   getMyProductsOnBackend,
   listMyPromotionProductsOnBackend,
 } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { formatPrice, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import DatePickerField from '../shared/components/DatePickerField';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
@@ -51,6 +54,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
   const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [clearingId, setClearingId] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -79,7 +83,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
       );
       setActivePromos(promos || []);
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được danh sách sản phẩm.');
+      showErrorAlert(loadError.message || 'Không tải được danh sách sản phẩm.');
       setProducts([]);
       setActivePromos([]);
     } finally {
@@ -173,6 +177,39 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
     }
   }
 
+  async function handleClearPromotion(product) {
+    const productId = String(product?.id || '');
+    const productName = product?.productName || product?.name || 'Sản phẩm';
+    if (!productId) {
+      return;
+    }
+
+    Alert.alert('Xóa giảm giá', `Tắt khuyến mãi cho "${productName}"?`, [
+      { text: 'Hủy', style: 'cancel' },
+      {
+        text: 'Xóa giảm giá',
+        style: 'destructive',
+        onPress: async () => {
+          setClearingId(productId);
+          setError('');
+          try {
+            const idToken = await getCurrentUserIdToken();
+            if (!idToken) {
+              throw new Error('Phiên đăng nhập đã hết hạn.');
+            }
+            await clearProductPromotionOnBackend({ idToken, productId });
+            onChanged?.();
+            await loadData();
+          } catch (clearError) {
+            setError(clearError.message || 'Không xóa được giảm giá.');
+          } finally {
+            setClearingId('');
+          }
+        },
+      },
+    ]);
+  }
+
   return (
     <View style={styles.screen}>
       <SubScreenHeader title="Giảm giá hàng loạt" onBack={onBack} />
@@ -218,6 +255,8 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
           }
           renderItem={({ item }) => {
             const discountPercent = Number(item.discountPercent) || 0;
+            const productId = String(item.id);
+            const isClearing = clearingId === productId;
             const { originalLabel, saleLabel } = getProductPromoPriceLabels({
               minPrice: item.originalPrice ?? item.minPrice,
               maxPrice: item.originalMaxPrice ?? item.maxPrice,
@@ -253,9 +292,29 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
                     </Text>
                   ) : null}
                 </View>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.clearPromoBtn,
+                    pressed && styles.clearPromoBtnPressed,
+                  ]}
+                  onPress={() => handleClearPromotion(item)}
+                  disabled={isClearing}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Xóa giảm giá"
+                >
+                  {isClearing ? (
+                    <ActivityIndicator size="small" color="#b91c1c" />
+                  ) : (
+                    <Ionicons name="trash-outline" size={18} color="#b91c1c" />
+                  )}
+                </Pressable>
               </View>
             );
           }}
+          ListHeaderComponent={
+            error ? <Text style={styles.errorText}>{error}</Text> : null
+          }
         />
       ) : (
         <>
@@ -267,7 +326,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
             <View style={styles.formCard}>
               <Text style={styles.formTitle}>Thiết lập giảm giá</Text>
               <Text style={styles.label}>Phần trăm giảm (%)</Text>
-              <TextInput
+              <KeyboardAwareTextInput
                 style={styles.input}
                 keyboardType="numeric"
                 value={discountPercent}
@@ -511,6 +570,19 @@ const styles = StyleSheet.create({
     color: '#076F32',
   },
   dateMeta: { marginTop: 2, fontSize: 11, color: '#64748b' },
+  clearPromoBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearPromoBtnPressed: {
+    opacity: 0.85,
+  },
   emptyCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,

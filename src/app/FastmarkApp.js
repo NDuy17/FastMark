@@ -12,6 +12,7 @@ import {
   selectAuthProfile,
   selectAuthProfileStatus,
   selectAuthStatus,
+  selectIsAccountLocked,
   selectNeedsEmailVerification,
   selectPendingGoogle,
 } from '../viewmodel/auth/authSelectors';
@@ -35,7 +36,7 @@ import { usePushNotifications } from '../hooks/usePushNotifications';
 import { authLogger as log } from '../core/utils/logger';
 import { startTopupDeepLinkListener } from '../viewmodel/wallet/topupSession';
 
-const WELCOME_DURATION_MS = 1200;
+const WELCOME_DURATION_MS = 4000;
 
 function applyFirebaseUser(dispatch, firebaseUser, { loadProfileIfNeeded = true } = {}) {
   if (!firebaseUser) {
@@ -66,13 +67,14 @@ export default function FastmarkApp() {
   const status = useSelector(selectAuthStatus);
   const profile = useSelector(selectAuthProfile);
   const profileStatus = useSelector(selectAuthProfileStatus);
+  const isAccountLocked = useSelector(selectIsAccountLocked);
   const pendingGoogle = useSelector(selectPendingGoogle);
   const needsEmailVerification = useSelector(selectNeedsEmailVerification);
   const [showWelcome, setShowWelcome] = useState(true);
   const [profileLoadTimedOut, setProfileLoadTimedOut] = useState(false);
 
   usePushNotifications({
-    enabled: status === 'authenticated',
+    enabled: status === 'authenticated' && !isAccountLocked,
   });
 
   useEffect(() => {
@@ -163,11 +165,11 @@ export default function FastmarkApp() {
     return (
       <SafeAreaProvider>
         <View style={styles.welcomeScreen}>
-          <StatusBar style="light" />
+          <StatusBar style="dark" />
           <Image
-            source={require('../../assets/welcome.jpg')}
+            source={require('../../assets/splash-welcome.png')}
             style={styles.welcomeImage}
-            resizeMode="contain"
+            resizeMode="cover"
           />
         </View>
       </SafeAreaProvider>
@@ -240,13 +242,12 @@ export default function FastmarkApp() {
 const styles = StyleSheet.create({
   welcomeScreen: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#0d3d4d',
+    backgroundColor: '#e8f6ec',
   },
   welcomeImage: {
-    width: '80%',
-    height: '50%',
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
   },
   loadingScreen: {
     flex: 1,

@@ -13,6 +13,7 @@ import {
 export default function TopUpSuccessScreen({
   amount = 0,
   orderCode = null,
+  backLabel = 'Về ví FastMark',
   onBackHome,
   onViewHistory,
   onContinueReservation,
@@ -99,7 +100,7 @@ export default function TopUpSuccessScreen({
           style={resume ? styles.secondaryBtn : styles.primaryBtn}
           onPress={handleBackHome}
         >
-          <Text style={resume ? styles.secondaryText : styles.primaryText}>Về ví FastMark</Text>
+          <Text style={resume ? styles.secondaryText : styles.primaryText}>{backLabel}</Text>
           {!resume ? <Ionicons name="arrow-forward" size={18} color="#fff" /> : null}
         </Pressable>
         <Pressable style={styles.secondaryBtn} onPress={onViewHistory}>

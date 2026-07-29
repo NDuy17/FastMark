@@ -19,6 +19,16 @@ const {
   createServiceError,
 } = require("./sellerPlanAccessService");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { resolveShopDisplayName, resolveShopUsername } = require("../utils/shopIdentity");
+const { emitAdminUpdated, emitUserResourceUpdated, emitPublicUpdated } = require("./realtimeService");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendUniqueOrConditions,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 
 function addDays(date, days) {
   const next = new Date(date);
@@ -146,8 +156,32 @@ function toSellerBannerDto(doc, extras = {}) {
   };
 }
 
+function emitBannerRealtime(banner, extra = {}) {
+  if (!banner?._id) {
+    return;
+  }
+
+  const payload = {
+    bannerId: String(banner._id),
+    status: Number(banner.status),
+    shopId: String(banner.shopId || ""),
+    sellerId: String(banner.sellerId || ""),
+    ...extra,
+  };
+
+  emitAdminUpdated("banner", payload);
+  if (banner.sellerId) {
+    emitUserResourceUpdated(banner.sellerId, "banner", payload);
+  }
+  if (Number(banner.status) === SELLER_BANNER_STATUS.ACTIVE) {
+    emitPublicUpdated("banner", payload);
+  }
+}
+
 async function listAdminBannerPlans() {
-  const rows = await BannerPlan.find({}).sort({ price: 1, CreatedAt: 1 }).limit(100);
+  const rows = await BannerPlan.find({ isActive: true })
+    .sort({ price: 1, CreatedAt: 1 })
+    .limit(100);
   return rows.map(toBannerPlanDto);
 }
 
@@ -175,6 +209,20 @@ async function createBannerPlan(payload = {}) {
     throw createServiceError("Giá không hợp lệ.");
   }
 
+  const existing = await BannerPlan.findOne({ name });
+  if (existing) {
+    if (existing.isActive === false) {
+      existing.description = pickString(payload.description);
+      existing.durationDays = Math.round(durationDays);
+      existing.price = price;
+      existing.isActive = true;
+      existing.UpdatedAt = new Date();
+      await existing.save();
+      return { plan: toBannerPlanDto(existing), restored: true };
+    }
+    throw createServiceError("Tên gói banner đã tồn tại.");
+  }
+
   const plan = await BannerPlan.create({
     name,
     description: pickString(payload.description),
@@ -182,7 +230,7 @@ async function createBannerPlan(payload = {}) {
     price,
     isActive,
   });
-  return toBannerPlanDto(plan);
+  return { plan: toBannerPlanDto(plan), restored: false };
 }
 
 async function updateBannerPlan(planId, payload = {}) {
@@ -216,9 +264,6 @@ async function updateBannerPlan(planId, payload = {}) {
     }
     plan.price = price;
   }
-  if (payload.isActive !== undefined) {
-    plan.isActive = Boolean(payload.isActive);
-  }
   await plan.save();
   return toBannerPlanDto(plan);
 }
@@ -229,6 +274,19 @@ async function deleteBannerPlan(planId) {
     throw createServiceError("Không tìm thấy gói banner.", 404);
   }
   plan.isActive = false;
+  await plan.save();
+  return toBannerPlanDto(plan);
+}
+
+async function restoreBannerPlan(planId) {
+  const plan = await BannerPlan.findById(planId);
+  if (!plan) {
+    throw createServiceError("Không tìm thấy gói banner.", 404);
+  }
+  if (plan.isActive !== false) {
+    return toBannerPlanDto(plan);
+  }
+  plan.isActive = true;
   await plan.save();
   return toBannerPlanDto(plan);
 }
@@ -358,6 +416,8 @@ async function purchaseBannerPlan(user, payload = {}) {
 
     await session.commitTransaction();
     const wallet = await getWalletBalance(user._id);
+    emitBannerRealtime(created);
+    emitUserResourceUpdated(user._id, "wallet", { balance: Number(wallet.balance) || 0 });
     return {
       banner: toSellerBannerDto(created),
       walletBalance: Number(wallet.balance) || 0,
@@ -459,6 +519,7 @@ async function requestBannerHang(user, payload = {}) {
   banner.approvedAt = null;
   await banner.save();
 
+  emitBannerRealtime(banner);
   return toSellerBannerDto(banner);
 }
 
@@ -478,6 +539,8 @@ async function listAdminSellerBanners({
   status = "",
   filter = "",
   search = "",
+  from = "",
+  to = "",
 } = {}) {
   const pageSize = Math.min(50, Math.max(1, Number(limit) || 20));
   const pageNumber = Math.max(1, Number(page) || 1);
@@ -535,16 +598,40 @@ async function listAdminSellerBanners({
   }
 
   if (search) {
-    const regex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    query.$or = [
-      { planName: regex },
-      { violationReason: regex },
-    ];
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+
+    if (regex) {
+      const [matchedUsers, matchedShops] = await Promise.all([
+        findUsersBySearchRegex(User, regex, ["FullName", "UserName", "Email"]),
+        ShopProfile.find({
+          $or: [{ shopName: regex }, { shopUsername: regex }, { description: regex }],
+        })
+          .select("_id")
+          .lean(),
+      ]);
+
+      orConditions.push(
+        { planName: regex },
+        { violationReason: regex },
+        ...(matchedUsers.length ? [{ sellerId: { $in: matchedUsers.map((user) => user._id) } }] : []),
+        ...(matchedShops.length ? [{ shopId: { $in: matchedShops.map((shop) => shop._id) } }] : [])
+      );
+    }
+
+    appendStatusLabelSearchConditions(orConditions, search, SELLER_BANNER_STATUS_LABEL);
+    orConditions.push(...buildObjectIdSearchConditions(search));
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(query, orConditions);
+    }
   }
+
+  applyCreatedAtRange(query, { from, to });
 
   const [rows, total] = await Promise.all([
     SellerBannerPlan.find(query)
-      .sort({ CreatedAt: -1 })
+      .sort({ ngayMua: -1, CreatedAt: -1 })
       .skip(skip)
       .limit(pageSize)
       .lean(),
@@ -559,7 +646,7 @@ async function listAdminSellerBanners({
       : [],
     shopIds.length
       ? ShopProfile.find({ _id: { $in: shopIds } })
-          .select("shopName description addressHeThong address")
+          .select("shopName shopUsername avatar description addressHeThong address userId")
           .lean()
       : [],
   ]);
@@ -583,7 +670,8 @@ async function listAdminSellerBanners({
         shop: shop
           ? {
               id: String(shop._id),
-              shopName: shop.shopName || "",
+              shopName: resolveShopDisplayName(shop, seller),
+              shopUsername: resolveShopUsername(shop, seller),
               description: shop.description || "",
               address: shop.addressHeThong || shop.address || "",
               addressHeThong: shop.addressHeThong || shop.address || "",
@@ -692,6 +780,7 @@ async function approveSellerBanner(bannerId) {
   banner.status = SELLER_BANNER_STATUS.ACTIVE;
   banner.violationReason = "";
   await banner.save();
+  emitBannerRealtime(banner);
   return toSellerBannerDto(banner);
 }
 
@@ -715,6 +804,7 @@ async function rejectSellerBanner(bannerId, { reason } = {}) {
   banner.endDate = null;
   banner.approvedAt = null;
   await banner.save();
+  emitBannerRealtime(banner);
   return toSellerBannerDto(banner);
 }
 
@@ -733,6 +823,7 @@ async function cancelSellerBanner(bannerId) {
   }
   banner.status = SELLER_BANNER_STATUS.CANCELLED;
   await banner.save();
+  emitBannerRealtime(banner);
   return toSellerBannerDto(banner);
 }
 
@@ -742,6 +833,7 @@ module.exports = {
   createBannerPlan,
   updateBannerPlan,
   deleteBannerPlan,
+  restoreBannerPlan,
   getSellerBannerState,
   purchaseBannerPlan,
   updateBannerCreative,

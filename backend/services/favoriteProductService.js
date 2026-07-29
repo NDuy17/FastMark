@@ -7,7 +7,7 @@ const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
 const { PRODUCT_STATUS } = require("../constants");
 const { createNotification } = require("./notificationService");
-const { NOTIFICATION_AUDIENCE } = require("../constants");
+const { NOTIFICATION_AUDIENCE, NOTIFICATION_INDEX } = require("../constants");
 const { attachPromotionDto } = require("./productPromotionService");
 
 function createServiceError(message, statusCode = 400) {
@@ -453,6 +453,7 @@ async function addFavorite(user, productId) {
       title: "Sản phẩm được yêu thích",
       content: `${buyerName} đã thích "${productName}".`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.SYSTEM,
     });
   }
 

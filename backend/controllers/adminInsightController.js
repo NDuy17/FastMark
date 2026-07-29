@@ -1,6 +1,11 @@
 const adminInsightService = require("../services/adminInsightService");
 const { success } = require("../utils/apiResponse");
 
+exports.getShopHistory = async (req, res) => {
+  const data = await adminInsightService.getShopHistory(req.params.id, req.query);
+  return success(res, { data });
+};
+
 exports.getAccountHistory = async (req, res) => {
   const data = await adminInsightService.getAccountHistory(req.params.id, req.query);
   return success(res, { data });

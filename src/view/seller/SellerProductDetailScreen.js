@@ -3,13 +3,9 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,10 +17,13 @@ import {
   updateProductOnBackend,
 } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { syncSellerAccess } from '../../viewmodel/auth/authSlice';
 import { formatPrice, formatPriceRange } from '../../core/utils/productFormat';
-import { useScreenInsets } from '../../hooks/useScreenInsets';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader, {
+  APP_HEADER_ICON_BUTTON_STYLE,
+} from '../shared/components/SubScreenHeader';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import {
   CategoryCombobox,
   ThumbnailsField,
@@ -35,6 +34,7 @@ import {
 import ProductPromotionSection, {
   buildPromotionPayload,
 } from './ProductPromotionSection';
+import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
 
 function toDateInput(value) {
   if (!value) return '';
@@ -62,7 +62,6 @@ function createVariantFromApi(variant) {
 
 export default function SellerProductDetailScreen({ productId, onBack, onChanged }) {
   const dispatch = useDispatch();
-  const insets = useScreenInsets();
   const [product, setProduct] = useState(null);
   const [categories, setCategories] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
@@ -158,7 +157,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
       setCategories(nextCategories);
       applyProductToForm(nextProduct);
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được sản phẩm.');
+      showErrorAlert(loadError.message || 'Không tải được sản phẩm.');
     } finally {
       setIsLoading(false);
     }
@@ -246,10 +245,9 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
     } catch (saveError) {
       const message = saveError.message || 'Không lưu được sản phẩm.';
       if (saveError.statusCode === 403 || /gói bán hàng/i.test(message)) {
-        setError(message);
-        Alert.alert('Cần mua gói bán hàng', message);
+        showErrorAlert(message, 'Cần mua gói bán hàng');
       } else {
-        setError(message);
+        showErrorAlert(message);
       }
     } finally {
       setIsSaving(false);
@@ -273,7 +271,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
               dispatch(syncSellerAccess());
               onBack?.();
             } catch (deleteError) {
-              setError(deleteError.message || 'Không xóa được sản phẩm.');
+              showErrorAlert(deleteError.message || 'Không xóa được sản phẩm.');
             }
           },
         },
@@ -296,41 +294,31 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
 
   const headerTitle = isEditing ? 'Chỉnh sửa sản phẩm' : 'Chi tiết sản phẩm';
 
-  function renderTopBar({ showEdit = false } = {}) {
+  function renderHeader({ showEdit = false } = {}) {
+    const editSlot = showEdit ? (
+      <Pressable
+        onPress={() => (isEditing ? handleCancelEdit() : setIsEditing(true))}
+        accessibilityRole="button"
+        accessibilityLabel={isEditing ? 'Hủy sửa' : 'Sửa sản phẩm'}
+        style={({ pressed }) => [styles.headerActionButton, pressed && styles.headerActionPressed]}
+      >
+        <Ionicons
+          name={isEditing ? 'close' : 'create-outline'}
+          size={18}
+          color="#0f172a"
+        />
+      </Pressable>
+    ) : null;
+
     return (
-      <View style={[styles.topBar, { paddingTop: insets.contentPaddingTop }]}>
-        <CircularBackButton onPress={onBack} variant="plain" style={styles.headerIconButton} />
-        <Text style={styles.topTitle} numberOfLines={1}>
-          {headerTitle}
-        </Text>
-        {showEdit ? (
-          <Pressable
-            onPress={() => (isEditing ? handleCancelEdit() : setIsEditing(true))}
-            accessibilityRole="button"
-            accessibilityLabel={isEditing ? 'Hủy sửa' : 'Sửa sản phẩm'}
-            style={({ pressed }) => [
-              styles.headerIconButton,
-              styles.headerActionButton,
-              pressed && styles.headerActionPressed,
-            ]}
-          >
-            <Ionicons
-              name={isEditing ? 'close' : 'create-outline'}
-              size={18}
-              color="#0f172a"
-            />
-          </Pressable>
-        ) : (
-          <View style={styles.headerSpacer} />
-        )}
-      </View>
+      <SubScreenHeader title={headerTitle} onBack={onBack} rightSlot={editSlot} />
     );
   }
 
   if (isLoading) {
     return (
       <View style={styles.screen}>
-        {renderTopBar()}
+        {renderHeader()}
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" size="large" />
         </View>
@@ -341,9 +329,9 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
   if (!product) {
     return (
       <View style={styles.screen}>
-        {renderTopBar()}
+        {renderHeader()}
         <View style={styles.centered}>
-          <Text style={styles.errorText}>{error || 'Không tìm thấy sản phẩm.'}</Text>
+          <Text style={styles.errorText}>Không tìm thấy sản phẩm.</Text>
           <Pressable onPress={onBack} style={formStyles.addVariantButton}>
             <Text style={formStyles.addVariantText}>Quay lại</Text>
           </Pressable>
@@ -353,17 +341,12 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      {renderTopBar({ showEdit: true })}
+    <View style={styles.screen}>
+      {renderHeader({ showEdit: true })}
 
-      <ScrollView
+      <KeyboardAwareScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottomSpacing + 24 }]}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        contentContainerStyle={styles.content}
       >
         {error ? <Text style={styles.errorBanner}>{error}</Text> : null}
         {successMessage ? <Text style={styles.successBanner}>{successMessage}</Text> : null}
@@ -474,7 +457,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
 
             <View style={formStyles.field}>
               <Text style={formStyles.label}>Tên sản phẩm *</Text>
-              <TextInput
+              <KeyboardAwareTextInput
                 value={productName}
                 onChangeText={setProductName}
                 placeholder="Nhập tên sản phẩm"
@@ -492,7 +475,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
 
             <View style={formStyles.field}>
               <Text style={formStyles.label}>Mô tả</Text>
-              <TextInput
+              <KeyboardAwareTextInput
                 value={description}
                 onChangeText={setDescription}
                 multiline
@@ -504,7 +487,7 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
 
             <View style={formStyles.field}>
               <Text style={formStyles.label}>Đơn vị</Text>
-              <TextInput
+              <KeyboardAwareTextInput
                 value={donVi}
                 onChangeText={setDonVi}
                 placeholder="kg, hộp, chai..."
@@ -558,48 +541,17 @@ export default function SellerProductDetailScreen({ productId, onBack, onChanged
             </Pressable>
           </View>
         )}
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f4f7f6' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
-  topBar: {
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  topTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  headerIconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  headerActionButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  headerActionButton: APP_HEADER_ICON_BUTTON_STYLE,
   headerActionPressed: {
     opacity: 0.72,
-  },
-  headerSpacer: {
-    width: 36,
-    height: 36,
   },
   scroll: { flex: 1 },
   content: { padding: 16, gap: 12 },

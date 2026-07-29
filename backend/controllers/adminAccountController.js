@@ -11,6 +11,13 @@ function pickQueryValue(query, keys) {
   return "";
 }
 
+function pickDateRangeQuery(query) {
+  return {
+    from: pickQueryValue(query, ["from", "dateFrom"]),
+    to: pickQueryValue(query, ["to", "dateTo"]),
+  };
+}
+
 exports.listAccounts = async (req, res) => {
   const data = await adminAccountService.listAccounts({
     search: pickQueryValue(req.query, ["search", "q"]),
@@ -20,9 +27,11 @@ exports.listAccounts = async (req, res) => {
       "verificationStatus",
       "verification_status",
     ]),
+    hasShop: pickQueryValue(req.query, ["hasShop", "has_shop"]),
     sort: pickQueryValue(req.query, ["sort"]) || "newest",
     page: req.query.page,
     limit: req.query.limit,
+    ...pickDateRangeQuery(req.query),
   });
 
   return success(res, { data });

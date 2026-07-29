@@ -9,9 +9,36 @@ const Reservation = require("../models/Reservation");
 const Report = require("../models/Report");
 const Review = require("../models/Review");
 const FavoriteProduct = require("../models/FavoriteProduct");
-const { SHOP_STATUS, SHOP_OPEN } = require("../constants");
+const SellerSubscription = require("../models/SellerSubscription");
+const SellerVerification = require("../models/SellerVerification");
+const Wallet = require("../models/Wallet");
+const { SHOP_STATUS, SHOP_OPEN, USER_STATUS, USER_ROLE } = require("../constants");
 const { PRODUCT_STATUS } = require("../constants");
-const { RESERVATION_STATUS } = require("../constants");
+const {
+  RESERVATION_STATUS,
+  SELLER_SUBSCRIPTION_STATUS,
+  SELLER_VERIFICATION_STATUS,
+  NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
+} = require("../constants");
+const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated, emitPublicUpdated } = require("./realtimeService");
+const { cancelActiveReservationsForShopLock } = require("./reservationService");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendUniqueOrConditions,
+  buildStatusLabelEntries,
+  resolveStatusesFromLabelSearch,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+  resolveShopAvatar,
+} = require("../utils/shopIdentity");
 
 const SHOP_STATUS_LABELS = {
   [SHOP_STATUS.ACTIVE]: "Hoạt động",
@@ -32,6 +59,26 @@ const RESERVATION_STATUS_LABELS = {
   [RESERVATION_STATUS.AUTO_COMPLETED]: "Tự hoàn thành",
   [RESERVATION_STATUS.REFUNDED]: "Đã hoàn cọc",
 };
+
+const CANCELLED_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.REJECTED,
+  RESERVATION_STATUS.REFUNDED,
+  RESERVATION_STATUS.DISPUTE_RESOLVED,
+];
+
+const DISPUTE_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.DISPUTED,
+  RESERVATION_STATUS.DISPUTE_RESOLVED,
+];
+
+const ADMIN_RESERVATION_STATUS_SEARCH = [
+  ...buildStatusLabelEntries(RESERVATION_STATUS_LABELS),
+  { label: "Hoàn thành", statuses: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED] },
+  { label: "Đã hủy", statuses: CANCELLED_RESERVATION_STATUSES },
+  { label: "Giữ hàng", statuses: [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION, RESERVATION_STATUS.WAITING_PICKUP] },
+  { label: "Tranh chấp", statuses: [RESERVATION_STATUS.DISPUTED] },
+  { label: "Chờ xác nhận", statuses: [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION] },
+];
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -87,15 +134,33 @@ async function listShops(query = {}) {
     filter.categoryId = categoryId;
   }
   if (search) {
-    const regex = new RegExp(escapeRegex(search), "i");
-    filter.$or = [
-      { shopName: regex },
-      { shopUsername: regex },
-      { address: regex },
-      { phone: regex },
-      { description: regex },
-    ];
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+    if (regex) {
+      orConditions.push(
+        { shopName: regex },
+        { shopUsername: regex },
+        { address: regex },
+        { phone: regex },
+        { description: regex }
+      );
+    }
+    appendStatusLabelSearchConditions(orConditions, search, SHOP_STATUS_LABELS);
+    const matchedOpenStatuses = resolveStatusesFromLabelSearch(search, [
+      ...buildStatusLabelEntries(SHOP_OPEN_LABELS),
+      { label: "Mở cửa", statuses: [SHOP_OPEN.OPEN] },
+      { label: "Đóng", statuses: [SHOP_OPEN.CLOSED] },
+    ]);
+    if (matchedOpenStatuses.length) {
+      orConditions.push({ isOpen: { $in: matchedOpenStatuses } });
+    }
+    orConditions.push(...buildObjectIdSearchConditions(search));
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
+
+  applyCreatedAtRange(filter, query);
 
   const [total, shops] = await Promise.all([
     ShopProfile.countDocuments(filter),
@@ -118,13 +183,13 @@ async function listShops(query = {}) {
 
   const items = shops.map((shop) => {
     const owner = ownerMap.get(String(shop.userId || ""));
-    const shopName = owner?.FullName || owner?.UserName || shop.shopName || "";
-    const shopUsername = owner?.UserName || shop.shopUsername || "";
+    const shopName = resolveShopDisplayName(shop, owner);
+    const shopUsername = resolveShopUsername(shop, owner);
     return {
       id: String(shop._id),
       shopName,
       shopUsername,
-      avatar: owner?.Avatar || "",
+      avatar: resolveShopAvatar(shop, owner),
       address: shop.addressHeThong || shop.DiaChiHeThong || shop.address || "",
       phone: owner?.Phone || shop.phone || "",
       categoryId: shop.categoryId ? String(shop.categoryId) : "",
@@ -176,9 +241,32 @@ async function getShopDetail(shopId) {
     throw createServiceError("Không tìm thấy gian hàng.", 404);
   }
 
-  const [owner, category, products, reservations, reports, reviews] = await Promise.all([
+  const recentReportSince = new Date();
+  recentReportSince.setDate(recentReportSince.getDate() - 30);
+
+  const [
+    owner,
+    category,
+    products,
+    reservations,
+    reports,
+    reviews,
+    violationCount,
+    orderStats,
+    activeSubscription,
+    verification,
+    productCount,
+    productEngagement,
+    totalOrders,
+    cancelledOrdersCount,
+    disputeOrdersCount,
+    recentReportCount,
+    ownerWallet,
+  ] = await Promise.all([
     shop.userId
-      ? User.findById(shop.userId).select("FullName UserName Email Phone Avatar Role Status").lean()
+      ? User.findById(shop.userId)
+          .select("FullName UserName Email Phone Avatar Role Status FollowingCount FollowersCount")
+          .lean()
       : null,
     shop.categoryId ? ShopCategory.findById(shop.categoryId).select("name").lean() : null,
     Product.find({ ShopId: objectId }).sort({ CreatedAt: -1 }).limit(50).lean(),
@@ -188,16 +276,80 @@ async function getShopDetail(shopId) {
       .sort({ CreatedAt: -1 })
       .limit(20)
       .lean(),
+    Report.countDocuments({ shopId: objectId }),
+    Reservation.aggregate([
+      {
+        $match: {
+          shopId: objectId,
+          status: {
+            $in: [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          revenue: {
+            $sum: {
+              $multiply: [
+                { $ifNull: ["$quantity", 1] },
+                { $ifNull: ["$agreedPrice", { $ifNull: ["$reservedPrice", 0] }] },
+              ],
+            },
+          },
+        },
+      },
+    ]),
+    SellerSubscription.findOne({
+      shopId: objectId,
+      status: SELLER_SUBSCRIPTION_STATUS.ACTIVE,
+    })
+      .sort({ endDate: -1 })
+      .lean(),
+    shop.userId
+      ? SellerVerification.findOne({ userId: shop.userId })
+          .sort({ CreatedAt: -1 })
+          .lean()
+      : null,
+    Product.countDocuments({ ShopId: objectId, IsDeleted: { $ne: true } }),
+    Product.aggregate([
+      { $match: { ShopId: objectId, IsDeleted: { $ne: true } } },
+      {
+        $group: {
+          _id: null,
+          totalViews: { $sum: { $ifNull: ["$ViewCount", 0] } },
+          totalLikes: { $sum: { $ifNull: ["$LikeCount", 0] } },
+        },
+      },
+    ]),
+    Reservation.countDocuments({ shopId: objectId }),
+    Reservation.countDocuments({
+      shopId: objectId,
+      status: { $in: CANCELLED_RESERVATION_STATUSES },
+    }),
+    Reservation.countDocuments({
+      shopId: objectId,
+      status: { $in: DISPUTE_RESERVATION_STATUSES },
+    }),
+    Report.countDocuments({ shopId: objectId, CreatedAt: { $gte: recentReportSince } }),
+    shop.userId ? Wallet.findOne({ userId: shop.userId }).select("balance").lean() : null,
   ]);
 
   const { loadProductImagesByProductIds, toPublicProductImages } = require("./productService");
   const imagesByProduct = await loadProductImagesByProductIds(products.map((item) => item._id));
 
+  const orderSummary = orderStats[0] || { count: 0, revenue: 0 };
+  const isVerified =
+    verification?.status === SELLER_VERIFICATION_STATUS.APPROVED ||
+    owner?.Role === USER_ROLE.SELLER;
+
   return {
     id: String(shop._id),
-    shopName: owner?.FullName || owner?.UserName || shop.shopName || "",
-    shopUsername: owner?.UserName || shop.shopUsername || "",
-    avatar: owner?.Avatar || "",
+    shopName: resolveShopDisplayName(shop, owner),
+    shopUsername: resolveShopUsername(shop, owner),
+    avatar: resolveShopAvatar(shop, owner),
+    shopAvatar: resolveShopAvatar(shop, owner),
     description: shop.description || "",
     address: shop.addressHeThong || shop.address || "",
     addressHeThong: shop.addressHeThong || shop.DiaChiHeThong || shop.address || "",
@@ -205,6 +357,8 @@ async function getShopDetail(shopId) {
     phone: owner?.Phone || shop.phone || "",
     openTime: shop.openTime || "",
     closeTime: shop.closeTime || "",
+    latitude: shop.latitude ?? null,
+    longitude: shop.longitude ?? null,
     categoryId: shop.categoryId ? String(shop.categoryId) : "",
     categoryName: category?.name || "",
     status: shop.status,
@@ -212,11 +366,44 @@ async function getShopDetail(shopId) {
     isOpen: shop.isOpen,
     isOpenLabel: SHOP_OPEN_LABELS[shop.isOpen] || "Không rõ",
     averageRating: Number(shop.averageRating) || 0,
-    totalProducts: Number(shop.totalProducts) || products.length || 0,
+    totalProducts: Number(productCount) || 0,
     totalReviews: Number(shop.totalReviews) || 0,
+    totalTymViews: Number(productEngagement?.[0]?.totalViews) || 0,
+    totalTym: Number(productEngagement?.[0]?.totalLikes) || 0,
+    totalOrders: Number(totalOrders) || 0,
+    totalCompletedOrders: Number(orderSummary.count) || 0,
+    totalCancelledOrders: Number(cancelledOrdersCount) || 0,
+    totalDisputes: Number(disputeOrdersCount) || 0,
     followersCount: Number(shop.followersCount) || 0,
+    followingCount: Number(owner?.FollowingCount) || 0,
+    recentReportCount: Number(recentReportCount) || 0,
     soldCount: Number(shop.soldCount) || 0,
+    completedOrders: Number(orderSummary.count) || 0,
+    totalRevenue: Number(orderSummary.revenue) || 0,
+    walletBalance: Number(ownerWallet?.balance) || 0,
+    violationCount: Number(violationCount) || 0,
     subscriptionActive: Boolean(shop.isActive),
+    subscriptionPlan: activeSubscription?.planName || "",
+    subscriptionStartAt: activeSubscription?.startDate || null,
+    subscriptionExpiresAt: activeSubscription?.endDate || null,
+    isVerified,
+    verification: verification
+      ? {
+          status: verification.status,
+          statusLabel:
+            verification.status === SELLER_VERIFICATION_STATUS.APPROVED
+              ? "Đã xác minh"
+              : verification.status === SELLER_VERIFICATION_STATUS.PENDING
+                ? "Chờ duyệt"
+                : verification.status === SELLER_VERIFICATION_STATUS.REJECTED
+                  ? "Từ chối"
+                  : "Không rõ",
+          cccdFrontImage: verification.cccdFrontImage || "",
+          cccdBackImage: verification.cccdBackImage || "",
+          selfieImage: verification.selfieImage || "",
+          updatedAt: verification.UpdatedAt || verification.CreatedAt || null,
+        }
+      : null,
     visibilityRestrictedUntil: shop.visibilityRestrictedUntil || null,
     suspendedUntil: shop.suspendedUntil || null,
     permanentlyClosedAt: shop.permanentlyClosedAt || null,
@@ -289,16 +476,70 @@ async function setShopStatus(shopId, nextStatus) {
     throw createServiceError("Không tìm thấy gian hàng.", 404);
   }
 
+  if (shop.status === nextStatus) {
+    throw createServiceError(
+      nextStatus === SHOP_STATUS.BLOCKED
+        ? "Gian hàng đã bị khóa."
+        : "Gian hàng đang hoạt động."
+    );
+  }
+
+  if (nextStatus === SHOP_STATUS.ACTIVE) {
+    const owner = await User.findById(shop.userId).select("Status").lean();
+    if (owner?.Status === USER_STATUS.BLOCKED) {
+      throw createServiceError(
+        "Không thể mở khóa gian hàng khi tài khoản chủ shop đang bị khóa.",
+        403
+      );
+    }
+  }
+
+  const now = new Date();
   shop.status = nextStatus;
   if (nextStatus === SHOP_STATUS.ACTIVE) {
     shop.suspendedUntil = null;
     shop.permanentlyClosedAt = null;
     shop.visibilityRestrictedUntil = null;
+    shop.lockedAt = null;
   } else {
-    shop.permanentlyClosedAt = shop.permanentlyClosedAt || new Date();
+    shop.permanentlyClosedAt = shop.permanentlyClosedAt || now;
+    shop.isOpen = SHOP_OPEN.CLOSED;
+    shop.lockedAt = now;
   }
-  shop.UpdatedAt = new Date();
+  shop.UpdatedAt = now;
   await shop.save();
+
+  if (nextStatus === SHOP_STATUS.ACTIVE) {
+    const { closePendingShopLockAppeals } = require("./lockAppealService");
+    try {
+      await closePendingShopLockAppeals(objectId, null);
+    } catch (error) {
+      console.error(
+        "setShopStatus: close shop lock appeals on unblock failed:",
+        String(objectId),
+        error.message
+      );
+    }
+
+    await Product.updateMany(
+      { ShopId: objectId, Status: PRODUCT_STATUS.HIDDEN },
+      { $set: { Status: PRODUCT_STATUS.ACTIVE, UpdatedAt: now } }
+    );
+  } else if (nextStatus === SHOP_STATUS.BLOCKED) {
+    await Product.updateMany(
+      { ShopId: objectId, Status: PRODUCT_STATUS.ACTIVE },
+      { $set: { Status: PRODUCT_STATUS.HIDDEN, UpdatedAt: now } }
+    );
+    try {
+      await cancelActiveReservationsForShopLock(objectId);
+    } catch (error) {
+      console.error(
+        "setShopStatus: cancel reservations on shop lock failed:",
+        String(objectId),
+        error.message
+      );
+    }
+  }
 
   return getShopDetail(shopId);
 }
@@ -317,6 +558,7 @@ async function deleteShop(shopId) {
   shop.status = SHOP_STATUS.BLOCKED;
   shop.permanentlyClosedAt = new Date();
   shop.isOpen = SHOP_OPEN.CLOSED;
+  shop.lockedAt = new Date();
   shop.UpdatedAt = new Date();
   await shop.save();
 
@@ -346,29 +588,52 @@ async function listProducts(query = {}) {
     filter.CategoryId = categoryId;
   }
   if (search) {
-    const regex = new RegExp(escapeRegex(search), "i");
-    const matchedUsers = await User.find({
-      $or: [{ FullName: regex }, { UserName: regex }],
-    })
-      .select("_id")
-      .lean();
-    const matchedShopIds = matchedUsers.length
-      ? (
-          await ShopProfile.find({
-            userId: { $in: matchedUsers.map((user) => user._id) },
-          })
-            .select("_id")
-            .lean()
-        ).map((shop) => shop._id)
-      : [];
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+    if (regex) {
+      const matchedUsers = await findUsersBySearchRegex(User, regex, ["FullName", "UserName"]);
+      const matchedShopIds = matchedUsers.length
+        ? (
+            await ShopProfile.find({
+              userId: { $in: matchedUsers.map((user) => user._id) },
+            })
+              .select("_id")
+              .lean()
+          ).map((shop) => shop._id)
+        : [];
 
-    filter.$or = [
-      { ProductName: regex },
-      { Description: regex },
-      { DonVi: regex },
-      ...(matchedShopIds.length ? [{ ShopId: { $in: matchedShopIds } }] : []),
-    ];
+      orConditions.push(
+        { ProductName: regex },
+        { Description: regex },
+        { DonVi: regex },
+        ...(matchedShopIds.length ? [{ ShopId: { $in: matchedShopIds } }] : [])
+      );
+
+      const matchedShops = await ShopProfile.find({
+        $or: [{ shopName: regex }, { shopUsername: regex }],
+      })
+        .select("_id")
+        .lean();
+      if (matchedShops.length) {
+        orConditions.push({ ShopId: { $in: matchedShops.map((shop) => shop._id) } });
+      }
+    }
+
+    const matchedProductStatuses = resolveStatusesFromLabelSearch(search, [
+      { label: "Đang bán", statuses: [PRODUCT_STATUS.ACTIVE] },
+      { label: "Ẩn", statuses: [PRODUCT_STATUS.HIDDEN] },
+    ]);
+    if (matchedProductStatuses.length) {
+      orConditions.push({ Status: { $in: matchedProductStatuses } });
+    }
+
+    orConditions.push(...buildObjectIdSearchConditions(search));
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
+
+  applyCreatedAtRange(filter, query);
 
   const [total, products] = await Promise.all([
     Product.countDocuments(filter),
@@ -382,7 +647,9 @@ async function listProducts(query = {}) {
 
   const [shops, categories] = await Promise.all([
     shopIds.length
-      ? ShopProfile.find({ _id: { $in: shopIds } }).select("userId").lean()
+      ? ShopProfile.find({ _id: { $in: shopIds } })
+          .select("userId shopName shopUsername avatar")
+          .lean()
       : [],
     categoryIds.length
       ? ProductCategory.find({ _id: { $in: categoryIds } }).select("name categoryName").lean()
@@ -401,8 +668,8 @@ async function listProducts(query = {}) {
         String(shop._id),
         {
           id: String(shop._id),
-          shopName: owner?.FullName || owner?.UserName || "",
-          shopUsername: owner?.UserName || "",
+          shopName: resolveShopDisplayName(shop, owner),
+          shopUsername: resolveShopUsername(shop, owner),
           ownerId: shop.userId ? String(shop.userId) : "",
         },
       ];
@@ -426,19 +693,23 @@ async function listProducts(query = {}) {
         ? [String(product.Thumbnail)]
         : [];
     const thumbnail = thumbs[0] || legacy[0] || "";
+    const { buildAdminProductPriceFields } = require("./productPromotionService");
     return {
       id: String(product._id),
       productName: product.ProductName || "",
       thumbnail,
       description: product.Description || "",
       donVi: product.DonVi || "",
-      minPrice: Number(product.MinPrice) || 0,
-      maxPrice: Number(product.MaxPrice) || 0,
-      priceLabel:
-        Number(product.MinPrice) === Number(product.MaxPrice)
-          ? formatPrice(product.MinPrice)
-          : `${formatPrice(product.MinPrice)} - ${formatPrice(product.MaxPrice)}`,
+      ...buildAdminProductPriceFields(product),
       status: product.Status,
+      isDeleted: Boolean(product.IsDeleted),
+      adminRemovalReason: product.AdminRemovalReason || "",
+      adminRemovedAt: product.AdminRemovedAt || null,
+      statusLabel: product.IsDeleted
+        ? "Đã gỡ"
+        : product.Status === 1
+          ? "Đang hiện"
+          : "Đã ẩn",
       viewCount: Number(product.ViewCount) || 0,
       likeCount: Number(product.LikeCount) || 0,
       soldCount: Number(product.SoldCount) || 0,
@@ -473,10 +744,12 @@ async function getProductDetail(productId) {
     throw createServiceError("Không tìm thấy sản phẩm.", 404);
   }
 
-  const [shop, category, variants, imageDocs, favoriteCount, reservationAgg] =
+  const [shop, category, variants, imageDocs, favoriteCount, reviewAgg, reportCount] =
     await Promise.all([
       product.ShopId
-        ? ShopProfile.findById(product.ShopId).select("userId").lean()
+        ? ShopProfile.findById(product.ShopId)
+            .select("userId shopName shopUsername avatar")
+            .lean()
         : null,
       product.CategoryId
         ? ProductCategory.findById(product.CategoryId).select("name categoryName").lean()
@@ -484,17 +757,41 @@ async function getProductDetail(productId) {
       ProductVariant.find({ ProductId: objectId }).sort({ CreatedAt: 1 }).lean(),
       require("./productService").loadProductImages(objectId),
       FavoriteProduct.countDocuments({ productId: objectId }),
-      Reservation.aggregate([
-        { $match: { productId: objectId } },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
+      Review.aggregate([
+        {
+          $match: {
+            productId: objectId,
+            isDeleted: { $ne: true },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            reviewCount: { $sum: 1 },
+            averageRating: { $avg: "$rating" },
+          },
+        },
       ]),
+      Report.countDocuments({ productId: objectId }),
     ]);
 
+  const reservationMatch = {
+    $or: [
+      { productId: objectId },
+      ...(variants.length ? [{ variantId: { $in: variants.map((variant) => variant._id) } }] : []),
+    ],
+  };
+  const reservationAgg = await Reservation.aggregate([
+    { $match: reservationMatch },
+    { $group: { _id: "$status", count: { $sum: 1 } } },
+  ]);
+
   const owner = shop?.userId
-    ? await User.findById(shop.userId).select("FullName UserName").lean()
+    ? await User.findById(shop.userId).select("FullName UserName Avatar").lean()
     : null;
-  const shopName = owner?.FullName || owner?.UserName || "";
-  const shopUsername = owner?.UserName || "";
+  const shopName = resolveShopDisplayName(shop, owner);
+  const shopUsername = resolveShopUsername(shop, owner);
+  const shopAvatar = resolveShopAvatar(shop, owner);
 
   const reservationsByStatus = {};
   let reservationCount = 0;
@@ -505,7 +802,19 @@ async function getProductDetail(productId) {
   const completedReservations =
     (reservationsByStatus[RESERVATION_STATUS.COMPLETED] || 0) +
     (reservationsByStatus[RESERVATION_STATUS.AUTO_COMPLETED] || 0);
+  const pendingReservations =
+    (reservationsByStatus[RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION] || 0) +
+    (reservationsByStatus[RESERVATION_STATUS.WAITING_PICKUP] || 0);
+  const reviewSummary = reviewAgg[0] || {};
+  const reviewCount = Number(reviewSummary.reviewCount) || 0;
+  const averageRating = reviewSummary.averageRating
+    ? Math.round(Number(reviewSummary.averageRating) * 10) / 10
+    : 0;
   const viewCount = Number(product.ViewCount) || 0;
+  const likeCount = Number(product.LikeCount) || 0;
+  const likeRate = viewCount > 0 ? Number(((likeCount / viewCount) * 100).toFixed(1)) : 0;
+  const favoriteRate =
+    viewCount > 0 ? Number(((favoriteCount / viewCount) * 100).toFixed(1)) : 0;
 
   const { toPublicProductImages } = require("./productService");
   const thumbnails = toPublicProductImages(imageDocs).map((image) => image.imageUrl);
@@ -515,6 +824,7 @@ async function getProductDetail(productId) {
       ? [product.Thumbnail]
       : [];
   const gallery = thumbnails.length > 0 ? thumbnails : legacyThumbs;
+  const { buildAdminProductPriceFields } = require("./productPromotionService");
 
   return {
     id: String(product._id),
@@ -524,24 +834,45 @@ async function getProductDetail(productId) {
     images: toPublicProductImages(imageDocs),
     description: product.Description || "",
     donVi: product.DonVi || "",
-    minPrice: Number(product.MinPrice) || 0,
-    maxPrice: Number(product.MaxPrice) || 0,
+    ...buildAdminProductPriceFields(product),
     status: product.Status,
+    isDeleted: Boolean(product.IsDeleted),
+    adminRemovalReason: product.AdminRemovalReason || "",
+    adminRemovedAt: product.AdminRemovedAt || null,
+    statusLabel: product.IsDeleted
+      ? "Đã gỡ"
+      : product.Status === 1
+        ? "Đang hiện"
+        : "Đã ẩn",
     viewCount,
-    likeCount: Number(product.LikeCount) || 0,
+    likeCount: likeCount,
+    likeRate,
+    favoriteRate,
     soldCount: Number(product.SoldCount) || 0,
     favoriteCount,
     reservationCount,
     completedReservations,
+    pendingReservations,
+    reviewCount,
+    averageRating,
+    reportCount: Number(reportCount) || 0,
     reservationsByStatus,
     // % lượt xem chuyển thành đơn giữ hàng.
     conversionRate: viewCount > 0 ? Number(((reservationCount / viewCount) * 100).toFixed(2)) : 0,
+    productCode: String(product._id).slice(-8).toUpperCase(),
+    verificationCode: String(product._id).slice(-12).toUpperCase(),
+    promotionStartDate: product.PromotionStartDate || null,
+    promotionEndDate: product.PromotionEndDate || null,
+    pinProduct: Number(product.pinProduct) || 0,
     shopId: product.ShopId ? String(product.ShopId) : "",
     shopName,
     shopUsername,
+    shopAvatar,
+    avatar: shopAvatar,
     categoryId: product.CategoryId ? String(product.CategoryId) : "",
     categoryName: category?.name || category?.categoryName || "",
     createdAt: product.CreatedAt || null,
+    updatedAt: product.UpdatedAt || null,
     variants: variants.map((variant) => {
       const imageUrl =
         variant.ImageUrl ||
@@ -574,11 +905,91 @@ async function setProductStatus(productId, nextStatus) {
   product.Status = nextStatus;
   product.UpdatedAt = new Date();
   await product.save();
-  return getProductDetail(productId);
+  const detail = await getProductDetail(productId);
+  emitAdminUpdated("product", {
+    productId: String(product._id),
+    shopId: String(product.ShopId || ""),
+    status: Number(nextStatus),
+  });
+  if (product.ShopId) {
+    const shop = await ShopProfile.findById(product.ShopId).select("userId").lean();
+    if (shop?.userId) {
+      emitUserResourceUpdated(shop.userId, "product", {
+        productId: String(product._id),
+        status: Number(nextStatus),
+      });
+    }
+  }
+  emitPublicUpdated("product", { productId: String(product._id), status: Number(nextStatus) });
+  return detail;
 }
 
-async function deleteProduct(productId) {
-  return setProductStatus(productId, PRODUCT_STATUS.HIDDEN);
+async function deleteProduct(productId, reason = "") {
+  return removeProductForViolation(productId, reason);
+}
+
+async function removeProductForViolation(productId, reason = "") {
+  const violationReason = pickString(reason);
+  if (!violationReason) {
+    throw createServiceError("Vui lòng nhập lý do vi phạm.", 400);
+  }
+
+  const objectId = toObjectId(productId);
+  if (!objectId) {
+    throw createServiceError("ID sản phẩm không hợp lệ.", 400);
+  }
+
+  const product = await Product.findById(objectId);
+  if (!product) {
+    throw createServiceError("Không tìm thấy sản phẩm.", 404);
+  }
+  if (product.IsDeleted) {
+    throw createServiceError("Sản phẩm đã được gỡ trước đó.", 400);
+  }
+
+  const now = new Date();
+  product.Status = PRODUCT_STATUS.HIDDEN;
+  product.IsDeleted = true;
+  product.AdminRemovalReason = violationReason;
+  product.AdminRemovedAt = now;
+  product.pinProduct = 0;
+  product.IsPromotion = false;
+  product.DiscountPercent = 0;
+  product.PromotionStartDate = null;
+  product.PromotionEndDate = null;
+  product.UpdatedAt = now;
+  await product.save();
+
+  const shop = product.ShopId ? await ShopProfile.findById(product.ShopId) : null;
+  if (shop) {
+    const { syncShopProductStats } = require("./productService");
+    await syncShopProductStats(shop);
+
+    if (shop.userId) {
+      const productName = String(product.ProductName || "Sản phẩm").trim();
+      await createNotification(shop.userId, {
+        title: "Sản phẩm bị gỡ",
+        content: `Sản phẩm "${productName}" đã bị gỡ khỏi hệ thống vì vi phạm: ${violationReason}.`,
+        audience: NOTIFICATION_AUDIENCE.SELLER,
+        index: NOTIFICATION_INDEX.SYSTEM,
+      });
+    }
+  }
+
+  const detail = await getProductDetail(productId);
+  emitAdminUpdated("product", {
+    productId: String(product._id),
+    shopId: String(product.ShopId || ""),
+    removed: true,
+  });
+  if (shop?.userId) {
+    emitUserResourceUpdated(shop.userId, "product", {
+      productId: String(product._id),
+      removed: true,
+    });
+  }
+  emitPublicUpdated("product", { productId: String(product._id), removed: true });
+  return detail;
 }
 
 async function listReservations(query = {}) {
@@ -586,6 +997,7 @@ async function listReservations(query = {}) {
   const search = pickString(query.search);
   const status = pickString(query.status);
   const shopId = toObjectId(query.shopId);
+  const productId = toObjectId(query.productId);
 
   const filter = {};
   if (status !== "" && Number.isFinite(Number(status))) {
@@ -594,34 +1006,53 @@ async function listReservations(query = {}) {
   if (shopId) {
     filter.shopId = shopId;
   }
-
-  let reservationIdsBySearch = null;
-  if (search) {
-    const regex = new RegExp(escapeRegex(search), "i");
-    const [users, shops, products] = await Promise.all([
-      User.find({
-        $or: [{ FullName: regex }, { UserName: regex }, { Email: regex }, { Phone: regex }],
-      })
-        .select("_id")
-        .lean(),
-      ShopProfile.find({ $or: [{ shopName: regex }, { shopUsername: regex }] })
-        .select("_id")
-        .lean(),
-      Product.find({ ProductName: regex }).select("_id").lean(),
-    ]);
-
-    filter.$or = [
-      { userId: { $in: users.map((item) => item._id) } },
-      { shopId: { $in: shops.map((item) => item._id) } },
-      { productId: { $in: products.map((item) => item._id) } },
-      { note: regex },
-      { cancelReason: regex },
-    ];
-
-    if (mongoose.Types.ObjectId.isValid(search)) {
-      filter.$or.push({ _id: new mongoose.Types.ObjectId(search) });
+  if (productId) {
+    const variantIds = await ProductVariant.find({ ProductId: productId }).distinct("_id");
+    const conditions = [{ productId }];
+    if (variantIds.length) {
+      conditions.push({ variantId: { $in: variantIds } });
     }
-    reservationIdsBySearch = true;
+    filter.$and = [{ $or: conditions }];
+  }
+
+  if (search) {
+    const orConditions = [];
+    const regex = buildSearchRegex(search);
+
+    if (regex) {
+      const [matchedUsers, matchedShops, matchedProducts] = await Promise.all([
+        findUsersBySearchRegex(User, regex),
+        ShopProfile.find({ $or: [{ shopName: regex }, { shopUsername: regex }] })
+          .select("_id")
+          .lean(),
+        Product.find({ ProductName: regex }).select("_id").lean(),
+      ]);
+
+      orConditions.push(
+        { userId: { $in: matchedUsers.map((item) => item._id) } },
+        { shopId: { $in: matchedShops.map((item) => item._id) } },
+        { productId: { $in: matchedProducts.map((item) => item._id) } },
+        { note: regex },
+        { cancelReason: regex },
+        { cancelNote: regex },
+        { disputeReason: regex },
+        { disputeDescription: regex }
+      );
+    }
+
+    orConditions.push(...buildObjectIdSearchConditions(search));
+    const matchedStatuses = resolveStatusesFromLabelSearch(search, ADMIN_RESERVATION_STATUS_SEARCH);
+    if (matchedStatuses.length) {
+      orConditions.push({ status: { $in: matchedStatuses } });
+    }
+
+    if (!productId && mongoose.Types.ObjectId.isValid(search)) {
+      orConditions.push({ productId: new mongoose.Types.ObjectId(search) });
+    }
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
 
   const [total, reservations] = await Promise.all([
@@ -667,6 +1098,7 @@ async function listReservations(query = {}) {
       note: item.note || "",
       cancelReason: item.cancelReason || "",
       createdAt: item.CreatedAt || null,
+      productId: item.productId ? String(item.productId) : "",
       buyer: buyer
         ? {
             id: String(buyer._id),
@@ -822,6 +1254,7 @@ module.exports = {
   getProductDetail,
   setProductStatus,
   deleteProduct,
+  removeProductForViolation,
   listReservations,
   getReservationDetail,
   cancelReservation,

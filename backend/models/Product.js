@@ -50,6 +50,11 @@ const ProductSchema = new mongoose.Schema({
    */
   pinProduct: { type: Number, default: 0, min: 0, max: 2, index: true },
 
+  /** Admin gỡ sản phẩm vi phạm (xóa mềm — không hiện cho buyer/seller quản lý thường). */
+  IsDeleted: { type: Boolean, default: false, index: true },
+  AdminRemovalReason: { type: String, default: "", trim: true },
+  AdminRemovedAt: { type: Date, default: null },
+
   // Thời điểm tạo sản phẩm.
   CreatedAt: { type: Date, default: Date.now },
   // Thời điểm cập nhật gần nhất (auto trong pre-save).

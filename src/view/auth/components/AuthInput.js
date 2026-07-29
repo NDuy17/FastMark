@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import { useKeyboardScroll } from '../../shared/components/KeyboardAwareScrollView';
 import { AUTH_COLORS } from './authTheme';
 
 export default function AuthInput({
@@ -11,9 +12,17 @@ export default function AuthInput({
   onRightLabelPress,
   secureTextEntry = false,
   error = '',
+  onFocus,
   ...props
 }) {
   const [hidden, setHidden] = useState(Boolean(secureTextEntry));
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
+
+  function handleFocus(event) {
+    onFocus?.(event);
+    keyboardScroll?.scrollToInput?.(inputRef);
+  }
 
   return (
     <View style={styles.field}>
@@ -28,6 +37,8 @@ export default function AuthInput({
       <View style={[styles.inputWrap, error ? styles.inputWrapError : null]}>
         <TextInput
           {...props}
+          ref={inputRef}
+          onFocus={handleFocus}
           placeholder={label}
           secureTextEntry={hidden}
           placeholderTextColor="#6b7280"

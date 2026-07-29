@@ -32,15 +32,17 @@ import {
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
 import { fetchRouteDistanceMeters } from '../../api/routingApi';
+import { deleteProductOnBackend } from '../../api/productApi';
+import SellerProductDetailScreen from '../seller/SellerProductDetailScreen';
 import { loadProductById, loadStoreById } from '../../viewmodel/store/storeViewModel';
 import { submitReportOnBackend } from '../../api/reportApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import ReservationModal from '../buyer/ReservationModal';
+import ReservationScreen from '../buyer/ReservationScreen';
 import ReportSheet from '../shared/components/ReportSheet';
 import ReportComposeModal from '../shared/components/ReportComposeModal';
 import OutOfStockOverlay from '../shared/components/OutOfStockOverlay';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader, { APP_HEADER_ICON_BUTTON_STYLE } from '../shared/components/SubScreenHeader';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import PhoneVerifyGateFlow from '../shared/PhoneVerifyGateFlow';
 import { storeLogger as log } from '../../core/utils/logger';
@@ -52,13 +54,14 @@ export default function ProductDetailScreen({
   productId,
   onBack,
   onStorePress,
-  onOpenChat,
   onReserve,
-  onMessageSeller,
   onOrderSuccess,
   onOpenTopUp,
   resumeReserveRequest = null,
   onResumeReserveConsumed,
+  /** home | map | products | profile */
+  reservationSource = 'home',
+  reservationStoreId = null,
 }) {
   const insets = useScreenInsets();
   const profile = useSelector(selectAuthProfile);
@@ -81,6 +84,12 @@ export default function ProductDetailScreen({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [originLocation, setOriginLocation] = useState(null);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(null);
+  const [showOwnerEdit, setShowOwnerEdit] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  const currentUserId = String(profile?.mongoUserId || profile?.id || '');
+  const ownerUserId = String(store?.owner_user_id || '');
+  const isProductOwner = Boolean(currentUserId && ownerUserId && currentUserId === ownerUserId);
 
   useEffect(() => {
     if (!resumeReserveRequest?.at || !product || loading) {
@@ -93,7 +102,14 @@ export default function ProductDetailScreen({
       setActionVariantId(variantId);
     }
     setQuantity(qty);
-    setReserveModalVisible(true);
+    if (onReserve) {
+      const variantForAction = variantId
+        ? (product.variants || []).find((v) => String(v.id) === String(variantId))
+        : null;
+      onReserve(product, store, variantForAction);
+    } else {
+      setReserveModalVisible(true);
+    }
     onResumeReserveConsumed?.();
   }, [resumeReserveRequest?.at, product?.id, loading]);
 
@@ -129,7 +145,7 @@ export default function ProductDetailScreen({
     return () => {
       isCurrent = false;
     };
-  }, [productId]);
+  }, [productId, reloadTick]);
 
   useEffect(() => {
     let active = true;
@@ -442,20 +458,6 @@ export default function ProductDetailScreen({
     callStore(store?.phone);
   }
 
-  function handleMessagePress() {
-    const shopId = store?.id || product?.store_id;
-    if (!shopId) {
-      Alert.alert('Không nhắn tin được', 'Không tìm thấy thông tin gian hàng.');
-      return;
-    }
-    const shopName = store?.shop_name || store?.name || 'Gian hàng';
-    if (onMessageSeller) {
-      onMessageSeller({ shopId, shopName, product });
-      return;
-    }
-    onOpenChat?.({ shopId, shopName });
-  }
-
   if (loading) {
     return (
       <View style={styles.loadingScreen}>
@@ -472,6 +474,29 @@ export default function ProductDetailScreen({
           <Text style={styles.backLinkText}>← Quay lại</Text>
         </Pressable>
       </View>
+    );
+  }
+
+  function handleOwnerDelete() {
+    Alert.alert(
+      'Xóa sản phẩm',
+      'Sản phẩm sẽ bị xóa vĩnh viễn và không thể khôi phục lại.',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa sản phẩm',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const idToken = await getCurrentUserIdToken();
+              await deleteProductOnBackend(idToken, productId);
+              onBack?.();
+            } catch (deleteError) {
+              Alert.alert('Không xóa được', deleteError.message || 'Vui lòng thử lại.');
+            }
+          },
+        },
+      ]
     );
   }
 
@@ -519,24 +544,57 @@ export default function ProductDetailScreen({
   const galleryCount = Math.max(galleryImages.length, 1);
   const galleryIndexLabel = `${Math.min(activeImageIndex + 1, galleryCount)}/${galleryCount}`;
 
+  if (showOwnerEdit) {
+    return (
+      <SellerProductDetailScreen
+        productId={productId}
+        onBack={() => setShowOwnerEdit(false)}
+        onChanged={() => {
+          setShowOwnerEdit(false);
+          setReloadTick((current) => current + 1);
+        }}
+      />
+    );
+  }
+
+  if (reserveModalVisible) {
+    return (
+      <ReservationScreen
+        product={product}
+        store={store}
+        preselectedVariantId={actionVariantId}
+        initialQuantity={quantity > 0 ? quantity : 1}
+        onBack={() => setReserveModalVisible(false)}
+        onSuccess={() => {
+          setReserveModalVisible(false);
+          onOrderSuccess?.(RESERVATION_TAB.PENDING);
+        }}
+        onOpenTopUp={onOpenTopUp}
+        resumeSource={reservationSource}
+        resumeStoreId={reservationStoreId}
+      />
+    );
+  }
+
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} variant="plain" style={styles.headerRoundBtn} />
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          Chi tiết sản phẩm
-        </Text>
-        <View style={styles.headerSpacer} />
-        <Pressable
-          onPress={handleMenuPress}
-          style={({ pressed }) => [styles.headerMenuBtn, pressed && styles.pressed]}
-          accessibilityRole="button"
-          accessibilityLabel="Báo cáo sản phẩm"
-          hitSlop={8}
-        >
-          <Ionicons name="ellipsis-vertical" size={18} color="#0f172a" />
-        </Pressable>
-      </View>
+      <SubScreenHeader
+        title="Chi tiết sản phẩm"
+        onBack={onBack}
+        rightSlot={
+          isProductOwner ? null : (
+            <Pressable
+              onPress={handleMenuPress}
+              style={({ pressed }) => [styles.headerMenuBtn, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Báo cáo sản phẩm"
+              hitSlop={8}
+            >
+              <Ionicons name="ellipsis-vertical" size={18} color="#0f172a" />
+            </Pressable>
+          )
+        }
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -732,7 +790,23 @@ export default function ProductDetailScreen({
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottomSpacing, 12) }]}>
-        <View style={styles.contactHalf}>
+        {isProductOwner ? (
+          <>
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, styles.ownerEditBtn, pressed && styles.pressed]}
+              onPress={() => setShowOwnerEdit(true)}
+            >
+              <Text style={styles.ownerEditBtnText}>Sửa</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, styles.ownerDeleteBtn, pressed && styles.pressed]}
+              onPress={handleOwnerDelete}
+            >
+              <Text style={styles.ownerDeleteBtnText}>Xóa</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
           <Pressable
             style={({ pressed }) => [styles.iconActionBtn, pressed && styles.pressed]}
             onPress={handleCallPress}
@@ -742,21 +816,14 @@ export default function ProductDetailScreen({
             <Ionicons name="call" size={22} color="#076F32" />
           </Pressable>
           <Pressable
-            style={({ pressed }) => [styles.iconActionBtn, pressed && styles.pressed]}
-            onPress={handleMessagePress}
-            accessibilityRole="button"
-            accessibilityLabel="Nhắn tin"
+            style={({ pressed }) => [styles.actionBtn, styles.reserveBtn, pressed && styles.pressed]}
+            onPress={handleReservePress}
           >
-            <Ionicons name="chatbubble-ellipses" size={22} color="#076F32" />
+            <Text style={styles.reserveBtnText}>Giữ hàng</Text>
           </Pressable>
+          </>
+        )}
         </View>
-        <Pressable
-          style={({ pressed }) => [styles.actionBtn, styles.reserveBtn, pressed && styles.pressed]}
-          onPress={handleReservePress}
-        >
-          <Text style={styles.reserveBtnText}>Giữ hàng</Text>
-        </Pressable>
-      </View>
 
       <ReportSheet
         visible={reportVisible}
@@ -775,19 +842,6 @@ export default function ProductDetailScreen({
         onSubmit={handleReportComposeSubmit}
       />
 
-      <ReservationModal
-        visible={reserveModalVisible}
-        product={product}
-        store={store}
-        preselectedVariantId={actionVariantId}
-        initialQuantity={quantity > 0 ? quantity : 1}
-        onClose={() => setReserveModalVisible(false)}
-        onSuccess={() => {
-          setReserveModalVisible(false);
-          onOrderSuccess?.(RESERVATION_TAB.HOLDING);
-        }}
-        onOpenTopUp={onOpenTopUp}
-      />
       <PhoneVerifyGateFlow
         visible={phoneGateVisible}
         onCancel={() => {
@@ -842,40 +896,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 5,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 8,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  headerRoundBtn: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  headerMenuBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  headerSpacer: {
-    flex: 1,
-  },
+  headerMenuBtn: APP_HEADER_ICON_BUTTON_STYLE,
   floatingActions: {
     position: 'absolute',
     right: 16,
@@ -1155,5 +1176,27 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#ffffff',
     lineHeight: 20,
+  },
+  ownerEditBtn: {
+    flex: 1,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  ownerEditBtnText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#076F32',
+  },
+  ownerDeleteBtn: {
+    flex: 1,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  ownerDeleteBtnText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#dc2626',
   },
 });

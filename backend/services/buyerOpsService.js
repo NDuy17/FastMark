@@ -10,21 +10,27 @@ const {
   SHOP_STATUS,
   SHOP_OPEN,
   NOTIFICATION_AUDIENCE,
+  RESERVATION_CANCEL_REASON,
+  RESERVATION_TAB_STATUS_MAP,
 } = require("../constants");
 const {
   toPublicReservation,
+  loadDisputeReportTimesMap,
   reserveVariantInventory,
   releaseVariantInventory,
   processReservationLifecycle,
   refundDepositIfHeld,
+  releaseDepositIfHeld,
   finalizeCompleted,
+  finalizeBuyerForfeit,
   isBeforePickupTime,
   isPastPickupTime,
   isWithinDepositDecisionWindow,
-  BUYER_CANCEL_REASON,
 } = require("./reservationService");
 const { holdDepositToSystem } = require("./walletService");
-const { createNotification } = require("./notificationService");
+const { createNotification, NOTIFICATION_INDEX } = require("./notificationService");
+const { emitOrderUpdated } = require("./orderRealtimeService");
+const { loadActiveReviewsByReservationIds } = require("./buyerReviewService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -97,6 +103,7 @@ async function notifyShopOwner(shop, { title, content }) {
     title,
     content,
     audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
   });
 }
 
@@ -200,53 +207,74 @@ async function createReservation(user, payload) {
       title: "Đã gửi yêu cầu giữ hàng",
       content: `Yêu cầu giữ ${quantity} ${product.ProductName} đã gửi tới shop. Chờ shop xác nhận trước giờ lấy.${depositNote}`,
       audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
 
+    await emitOrderUpdated(reservation, { action: "created" });
     return toPublicReservation(reservation);
   } finally {
     session.endSession();
   }
 }
 
-async function listBuyerReservations(user, { tab = "holding", search } = {}) {
+async function listBuyerReservations(user, { tab = "pending", search } = {}) {
   await processReservationLifecycle();
-  let statusFilter = [];
+  let statusFilter = null;
 
   switch (tab) {
+    case "all":
+      statusFilter = RESERVATION_TAB_STATUS_MAP.all;
+      break;
+    case "pending":
+    case "awaiting":
+    case "awaiting_confirm":
+      statusFilter = RESERVATION_TAB_STATUS_MAP.pending;
+      break;
     case "holding":
-      statusFilter = [
-        RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION,
-        RESERVATION_STATUS.WAITING_PICKUP,
-        RESERVATION_STATUS.DISPUTED,
-      ];
+      statusFilter = RESERVATION_TAB_STATUS_MAP.holding;
+      break;
+    case "dispute":
+      statusFilter = RESERVATION_TAB_STATUS_MAP.dispute;
       break;
     case "cancelled":
-      statusFilter = [
-        RESERVATION_STATUS.REJECTED,
-        RESERVATION_STATUS.REFUNDED,
-        RESERVATION_STATUS.DISPUTE_RESOLVED,
-      ];
+      statusFilter = RESERVATION_TAB_STATUS_MAP.cancelled;
       break;
     case "completed":
-      statusFilter = [RESERVATION_STATUS.COMPLETED, RESERVATION_STATUS.AUTO_COMPLETED];
+      statusFilter = RESERVATION_TAB_STATUS_MAP.completed;
       break;
     default:
-      statusFilter = [
-        RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION,
-        RESERVATION_STATUS.WAITING_PICKUP,
-      ];
+      statusFilter = RESERVATION_TAB_STATUS_MAP.holding;
   }
 
-  const reservations = await Reservation.find({
-    userId: user._id,
-    status: { $in: statusFilter },
-  })
-    .sort({ UpdatedAt: -1 })
+  const reservationQuery = { userId: user._id };
+  if (statusFilter) {
+    reservationQuery.status = { $in: statusFilter };
+  }
+
+  const sort =
+    tab === "completed"
+      ? { completedAt: -1, CreatedAt: -1 }
+      : { UpdatedAt: -1 };
+
+  const reservations = await Reservation.find(reservationQuery)
+    .sort(sort)
     .limit(100);
+
+  const activeReviewByReservation = await loadActiveReviewsByReservationIds(
+    reservations.map((doc) => doc._id),
+    user._id
+  );
+  const disputeTimesMap = await loadDisputeReportTimesMap(
+    reservations.map((doc) => doc._id)
+  );
 
   let mapped = await Promise.all(
     reservations.map(async (doc) => {
-      const publicReservation = await toPublicReservation(doc);
+      const reservationId = String(doc._id);
+      const publicReservation = await toPublicReservation(doc, {
+        activeReview: activeReviewByReservation.get(reservationId) || null,
+        disputeTimes: disputeTimesMap.get(reservationId) || {},
+      });
       return {
         ...publicReservation,
         shopId: doc.shopId ? String(doc.shopId) : publicReservation.shopId || "",
@@ -267,7 +295,7 @@ async function listBuyerReservations(user, { tab = "holding", search } = {}) {
   return mapped;
 }
 
-async function listBuyerOrders(user, { tab = "holding", search } = {}) {
+async function listBuyerOrders(user, { tab = "pending", search } = {}) {
   const reservations = await listBuyerReservations(user, { tab, search });
   return { tab, reservations };
 }
@@ -278,7 +306,15 @@ async function getBuyerReservation(user, reservationId) {
   if (!reservation) {
     throw createServiceError("Không tìm thấy đơn giữ hàng.", 404);
   }
-  const publicReservation = await toPublicReservation(reservation);
+  const activeReviewByReservation = await loadActiveReviewsByReservationIds(
+    [reservation._id],
+    user._id
+  );
+  const disputeTimesMap = await loadDisputeReportTimesMap([reservation._id]);
+  const publicReservation = await toPublicReservation(reservation, {
+    activeReview: activeReviewByReservation.get(String(reservation._id)) || null,
+    disputeTimes: disputeTimesMap.get(String(reservation._id)) || {},
+  });
   return {
     ...publicReservation,
     shopId: reservation.shopId ? String(reservation.shopId) : publicReservation.shopId || "",
@@ -292,20 +328,47 @@ async function cancelReservationByBuyer(user, reservationId) {
     throw createServiceError("Không tìm thấy đơn giữ hàng.", 404);
   }
 
+  const now = new Date();
+
   if (reservation.status === RESERVATION_STATUS.WAITING_PICKUP) {
-    throw createServiceError(
-      "Shop đã đồng ý giữ hàng. Bạn không thể hủy — hãy đến nhận hàng và bấm Đã nhận hàng.",
-      403
-    );
+    if (!isBeforePickupTime(reservation, now)) {
+      throw createServiceError(
+        "Đã quá giờ nhận hàng. Bạn không thể hủy — hãy dùng khiếu nại hoặc đồng ý mất cọc.",
+        403
+      );
+    }
+    if (reservation.disputeByBuyer || reservation.disputeBySeller) {
+      throw createServiceError("Không thể hủy đơn đang tranh chấp.", 403);
+    }
+    reservation.status = RESERVATION_STATUS.DISPUTE_RESOLVED;
+    reservation.cancelledAt = now;
+    reservation.cancelledBy = "buyer";
+    reservation.cancelReason = RESERVATION_CANCEL_REASON.BUYER_CANCEL_HOLDING;
+    await releaseVariantInventory(reservation);
+    const shop = await ShopProfile.findById(reservation.shopId);
+    if (shop) {
+      await releaseDepositIfHeld(reservation, shop);
+    }
+    reservation.UpdatedAt = now;
+    await reservation.save();
+
+    await notifyShopOwner(shop, {
+      title: "Khách hủy giữ hàng",
+      content: `${user.FullName || user.UserName} đã hủy đơn giữ hàng. Cọc đã chuyển vào ví shop.`,
+    });
+
+    await emitOrderUpdated(reservation, { action: "buyer_cancelled_holding" });
+    return toPublicReservation(reservation);
   }
+
   if (reservation.status !== RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION) {
     throw createServiceError("Không thể hủy đơn ở trạng thái này.");
   }
 
-  const now = new Date();
   reservation.status = RESERVATION_STATUS.REFUNDED;
   reservation.cancelledAt = now;
-  reservation.cancelReason = BUYER_CANCEL_REASON;
+  reservation.cancelledBy = "buyer";
+  reservation.cancelReason = RESERVATION_CANCEL_REASON.BUYER_CANCEL_PENDING;
   await releaseVariantInventory(reservation);
   await refundDepositIfHeld(reservation);
   reservation.UpdatedAt = now;
@@ -317,6 +380,7 @@ async function cancelReservationByBuyer(user, reservationId) {
     content: `${user.FullName || user.UserName} đã hủy yêu cầu giữ hàng.`,
   });
 
+  await emitOrderUpdated(reservation, { action: "buyer_cancelled_pending" });
   return toPublicReservation(reservation);
 }
 
@@ -364,6 +428,7 @@ async function confirmReceivedByBuyer(user, reservationId, { scannedShopId } = {
   const result = await finalizeCompleted(reservation, shop, {
     status: RESERVATION_STATUS.COMPLETED,
     now,
+    reasonCode: RESERVATION_CANCEL_REASON.BUYER_RECEIVED,
   });
 
   if (shop.userId) {
@@ -371,6 +436,7 @@ async function confirmReceivedByBuyer(user, reservationId, { scannedShopId } = {
       title: "Khách đã nhận hàng",
       content: `${user.FullName || user.UserName} đã quét QR shop và xác nhận nhận hàng. Cọc đã vào ví của bạn.`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
@@ -380,6 +446,7 @@ async function confirmReceivedByBuyer(user, reservationId, { scannedShopId } = {
     title: "Đơn hoàn thành",
     content: `Bạn đã nhận ${productName} thành công. Cảm ơn bạn đã mua hàng!`,
     audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
   });
 
   return result;
@@ -445,7 +512,7 @@ async function reportReservationByBuyer(user, reservationId, payload = {}) {
 
 /**
  * Buyer đồng ý mất cọc sau quá giờ nhận (trong 24h).
- * Giải ngân SystemWallet → Seller, đơn COMPLETED.
+ * Giải ngân SystemWallet → Seller, đơn chuyển tab Đã hủy.
  */
 async function forfeitDepositByBuyer(user, reservationId) {
   await processReservationLifecycle();
@@ -484,6 +551,12 @@ async function forfeitDepositByBuyer(user, reservationId) {
   ) {
     throw createServiceError("Cọc đã được xử lý trước đó.", 400);
   }
+  if (reservation.disputeByBuyer) {
+    throw createServiceError(
+      "Bạn đã gửi báo cáo tranh chấp. Không thể đồng ý mất cọc.",
+      403
+    );
+  }
 
   const shop = await ShopProfile.findById(reservation.shopId);
   if (!shop) {
@@ -491,10 +564,7 @@ async function forfeitDepositByBuyer(user, reservationId) {
   }
 
   const now = new Date();
-  const result = await finalizeCompleted(reservation, shop, {
-    status: RESERVATION_STATUS.COMPLETED,
-    now,
-  });
+  const result = await finalizeBuyerForfeit(reservation, shop, { now });
 
   try {
     const Report = require("../models/Report");
@@ -524,6 +594,7 @@ async function forfeitDepositByBuyer(user, reservationId) {
       title: "Nhận cọc giữ hàng",
       content: `${user.FullName || user.UserName} đã đồng ý mất cọc sau giờ nhận hàng. Cọc đã vào ví của bạn.`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 

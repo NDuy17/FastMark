@@ -1,4 +1,6 @@
-import { Switch, Text, TextInput, View, StyleSheet } from 'react-native';
+import { Switch, Text, View, StyleSheet } from 'react-native';
+
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 
 import { getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import DatePickerField from '../shared/components/DatePickerField';
@@ -55,7 +57,7 @@ export default function ProductPromotionSection({
       {enabled ? (
         <View style={styles.fields}>
           <Text style={styles.label}>Phần trăm giảm giá (%)</Text>
-          <TextInput
+          <KeyboardAwareTextInput
             style={styles.input}
             keyboardType="numeric"
             value={String(discountPercent ?? '')}
