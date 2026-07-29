@@ -43,6 +43,13 @@ function errorHandler(error, req, res, next) {
       });
     }
 
+    if (field === 'shopId') {
+      return res.status(409).json({
+        success: false,
+        message: 'shopId đã tồn tại trong hệ thống.',
+      });
+    }
+
     return res.status(409).json({
       success: false,
       message: `${field} đã tồn tại trong hệ thống.`,

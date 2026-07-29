@@ -2,7 +2,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { formatActivityLabel } from '../../core/utils/activityLabel';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import AvatarBadge from '../shared/components/AvatarBadge';
 
 function formatCount(value) {
@@ -45,11 +45,7 @@ export default function ChatProfileScreen({ peer, peerType = 'shop', onBack, onV
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.topBar, { paddingTop: insets.contentPaddingTop }]}>
-        <CircularBackButton onPress={onBack} variant="plain" />
-        <Text style={styles.topTitle}>Tài khoản</Text>
-        <View style={styles.topSpacer} />
-      </View>
+      <SubScreenHeader title="Tài khoản" onBack={onBack} />
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.profileCard}>
@@ -98,23 +94,6 @@ export default function ChatProfileScreen({ peer, peerType = 'shop', onBack, onV
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f8fafc' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingBottom: 12,
-    paddingHorizontal: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  topTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  topSpacer: { width: 40 },
   content: { padding: 16 },
   profileCard: {
     backgroundColor: '#ffffff',

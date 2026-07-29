@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   StyleSheet,
@@ -38,9 +37,12 @@ import { buildChatListItems, markMessagesFromServer, mergeMessages, normalizeMes
 import { useChatSocket } from '../../hooks/useChatSocket';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
-import { selectAuthProfile, selectAuthUser } from '../../viewmodel/auth/authSelectors';
+import { showErrorAlert } from '../../core/utils/appAlert';
+import { useKeyboardInset } from '../../hooks/useKeyboardInset';
+import { selectAuthProfile, selectAuthUser, selectIsSeller } from '../../viewmodel/auth/authSelectors';
 import ChatProfileScreen from './ChatProfileScreen';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import BuyerProfileScreen from '../profile/BuyerProfileScreen';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import StoreDetailScreen from '../store/StoreDetailScreen';
@@ -50,6 +52,9 @@ const MESSAGE_STATUS_LABEL = {
   delivered: 'Đã nhận',
   seen: 'Đã xem',
 };
+
+/** Chiều cao ước lượng thanh nhập tin (padding + nút + input). */
+const COMPOSER_BAR_ESTIMATE = 68;
 
 function isRealConversationId(value) {
   const id = String(value || '');
@@ -209,6 +214,61 @@ function resolveOwnShopId(shop) {
   return raw ? String(raw) : null;
 }
 
+function isMongoObjectId(value) {
+  return /^[a-f\d]{24}$/i.test(String(value || ''));
+}
+
+function isShopPeer(peer) {
+  if (!peer) {
+    return false;
+  }
+
+  const peerType = String(peer.peerType || '').toLowerCase();
+  if (peerType === 'shop') {
+    return true;
+  }
+  if (peerType === 'user') {
+    return false;
+  }
+
+  const peerId = String(peer.id || '').trim();
+  const ownerUserId = String(peer.ownerUserId || '').trim();
+  return Boolean(peerId && ownerUserId && peerId !== ownerUserId);
+}
+
+function resolvePeerShopId(peer, shopIdProp = '', overlayId = '') {
+  const explicit = String(shopIdProp || overlayId || '').trim();
+  if (explicit && isMongoObjectId(explicit)) {
+    return explicit;
+  }
+
+  if (!isShopPeer(peer)) {
+    return '';
+  }
+
+  const fromPeer = String(peer.shopId || peer.id || '').trim();
+  return fromPeer && isMongoObjectId(fromPeer) ? fromPeer : '';
+}
+
+function resolvePeerUserId(peer, buyerId = '') {
+  const fromBuyer = String(buyerId || '').trim();
+  if (fromBuyer && isMongoObjectId(fromBuyer)) {
+    return fromBuyer;
+  }
+
+  if (!peer) {
+    return '';
+  }
+
+  if (isShopPeer(peer)) {
+    const ownerUserId = String(peer.ownerUserId || peer.userId || '').trim();
+    return ownerUserId && isMongoObjectId(ownerUserId) ? ownerUserId : '';
+  }
+
+  const userId = String(peer.userId || peer.id || '').trim();
+  return userId && isMongoObjectId(userId) ? userId : '';
+}
+
 export default function ChatScreen({
   mode = 'buyer',
   conversationId,
@@ -222,11 +282,16 @@ export default function ChatScreen({
   onConversationPreviewChange,
 }) {
   const listRef = useRef(null);
-  const isSellerMode = mode === 'seller';
+  const inputRef = useRef(null);
+  const suppressKeyboardHideRef = useRef(false);
   const authUser = useSelector(selectAuthUser);
   const authProfile = useSelector(selectAuthProfile);
+  const isSellerAccount = useSelector(selectIsSeller);
   const mongoUserId = authProfile?.mongoUserId || '';
   const screenInsets = useScreenInsets();
+  const hasShopContext = Boolean(String(shopId || '').trim());
+  const isSellerMode =
+    mode === 'seller' || Boolean(buyerId) || (isSellerAccount && !hasShopContext);
 
   const [resolvedConversationId, setResolvedConversationId] = useState(
     isRealConversationId(conversationId) ? String(conversationId) : null
@@ -237,18 +302,30 @@ export default function ChatScreen({
   const [draft, setDraft] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState('');
   const [peer, setPeer] = useState(null);
   const [peerOverlay, setPeerOverlay] = useState(null);
+  const [buyerProfileUserId, setBuyerProfileUserId] = useState('');
+  const [overlayStoreId, setOverlayStoreId] = useState('');
+
+  const { keyboardInset, composerBottom, isKeyboardVisible, isWindowResized, keyboardGap } =
+    useKeyboardInset({
+      suppressHideRef: suppressKeyboardHideRef,
+    });
 
   const displayName = useMemo(() => {
-    if (isSellerMode) {
-      return peer?.fullName || buyerName || 'Khách hàng';
+    const peerIsShop = isShopPeer(peer) || hasShopContext;
+    if (peerIsShop) {
+      return peer?.name || peer?.shopName || shopName || 'Gian hàng';
     }
-    return peer?.name || shopName || 'Gian hàng';
-  }, [buyerName, isSellerMode, peer, shopName]);
+    return peer?.fullName || peer?.name || buyerName || 'Người dùng';
+  }, [buyerName, hasShopContext, peer, shopName]);
 
-  const peerStoreId = String(peer?.id || shopId || '').trim();
+  const peerIsShop = isShopPeer(peer) || hasShopContext;
+
+  const resolvedStoreId = useMemo(
+    () => resolvePeerShopId(peer, shopId, overlayStoreId),
+    [overlayStoreId, peer, shopId]
+  );
 
   const accountPeer = useMemo(() => {
     const resolveAvatar = (...values) => {
@@ -261,25 +338,10 @@ export default function ChatScreen({
       return '';
     };
 
-    if (isSellerMode) {
-      return {
-        id: peer?.id || buyerId || '',
-        fullName: peer?.fullName || peer?.name || buyerName || 'Khách hàng',
-        userName: peer?.userName || '',
-        avatar: resolveAvatar(peer?.avatar, peer?.photoUrl, buyerAvatar),
-        followersCount: Number(peer?.followersCount) || 0,
-        followingCount: Number(peer?.followingCount) || 0,
-        isOnline: Boolean(peer?.isOnline),
-        lastActiveAt: peer?.lastActiveAt,
-        activityLabel: peer?.activityLabel,
-      };
-    }
-
-    if (peer || shopId || shopName) {
+    if (peerIsShop) {
       return {
         id: peer?.id || shopId || '',
-        // Prefer personal seller account fields, not shop branding.
-        fullName: peer?.fullName || 'Người dùng',
+        fullName: peer?.fullName || peer?.name || 'Người dùng',
         userName: peer?.userName || '',
         avatar: resolveAvatar(peer?.accountAvatar, peer?.photoUrl),
         accountAvatar: resolveAvatar(peer?.accountAvatar, peer?.photoUrl),
@@ -292,26 +354,32 @@ export default function ChatScreen({
       };
     }
 
-    return null;
-  }, [buyerAvatar, buyerId, buyerName, isSellerMode, peer, shopId, shopName]);
+    return {
+      id: peer?.id || buyerId || '',
+      fullName: peer?.fullName || peer?.name || buyerName || 'Người dùng',
+      userName: peer?.userName || '',
+      avatar: resolveAvatar(peer?.avatar, peer?.photoUrl, buyerAvatar),
+      followersCount: Number(peer?.followersCount) || 0,
+      followingCount: Number(peer?.followingCount) || 0,
+      isOnline: Boolean(peer?.isOnline),
+      lastActiveAt: peer?.lastActiveAt,
+      activityLabel: peer?.activityLabel,
+    };
+  }, [buyerAvatar, buyerId, buyerName, peer, peerIsShop, shopId, shopName]);
 
   function handleOpenPeer() {
-    // Buyer: mở thẳng gian hàng, không qua màn tài khoản trung gian.
-    if (!isSellerMode) {
-      if (peerStoreId) {
-        setPeerOverlay('store');
-        return;
-      }
-      if (accountPeer) {
-        setPeerOverlay('account');
-      }
+    const storeId = resolvePeerShopId(peer, shopId, overlayStoreId);
+    if (peerIsShop && storeId) {
+      setOverlayStoreId(storeId);
+      setPeerOverlay('store');
       return;
     }
 
-    if (!accountPeer) {
-      return;
+    const userId = resolvePeerUserId(peer, buyerId);
+    if (userId) {
+      setBuyerProfileUserId(userId);
+      setPeerOverlay('buyer-profile');
     }
-    setPeerOverlay('account');
   }
 
   const peerAvatarUri = isRemoteAvatarUrl(peer?.avatar)
@@ -338,11 +406,41 @@ export default function ChatScreen({
   const canSend =
     draft.trim().length > 0 && !isSending && Boolean(resolvedConversationId || shopId || conversationId);
 
-  const scrollToEnd = useCallback(() => {
+  const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      listRef.current?.scrollToEnd({ animated });
     });
   }, []);
+
+  const usesFlexComposer = Platform.OS === 'android';
+
+  const listContentPaddingBottom = usesFlexComposer
+    ? 12
+    : COMPOSER_BAR_ESTIMATE +
+      (isKeyboardVisible
+        ? isWindowResized
+          ? keyboardGap
+          : Math.max(keyboardInset, keyboardGap)
+        : screenInsets.bottomSpacing) +
+      8;
+
+  /** Android: composer nằm trong flex column, adjustResize tự đẩy — không offset thêm. */
+  const composerBottomOffset =
+    !usesFlexComposer && isKeyboardVisible ? composerBottom : 0;
+  const composerBottomPadding =
+    !usesFlexComposer && !isKeyboardVisible ? screenInsets.bottomSpacing : 0;
+  const composerSafePadding =
+    usesFlexComposer && !isKeyboardVisible ? screenInsets.bottomSpacing : 0;
+  /** Chỉ khi Android overlay thật (không resize): đệm body để composer không bị che. */
+  const chatBodyKeyboardPad =
+    usesFlexComposer && isKeyboardVisible && !isWindowResized ? composerBottom : 0;
+
+  useEffect(() => {
+    if (isKeyboardVisible) {
+      suppressKeyboardHideRef.current = false;
+      scrollToEnd(false);
+    }
+  }, [isKeyboardVisible, keyboardInset, scrollToEnd]);
 
   const ensureConversation = useCallback(async () => {
     if (resolvedConversationId) {
@@ -409,7 +507,6 @@ export default function ChatScreen({
 
   const loadMessages = useCallback(async () => {
     setIsLoading(true);
-    setError('');
 
     try {
       let activeConversationId = resolvedConversationId;
@@ -464,7 +561,7 @@ export default function ChatScreen({
     } catch (loadError) {
       setMessages([]);
       setSequence(null);
-      setError(loadError.message || 'Không tải được tin nhắn.');
+      showErrorAlert(loadError.message || 'Không tải được tin nhắn.');
     } finally {
       setIsLoading(false);
     }
@@ -709,7 +806,7 @@ export default function ChatScreen({
       bumpSequence(message?.thuTu);
     } catch (pickError) {
       setMessages((current) => current.filter((item) => item.id !== optimistic.id));
-      setError(pickError.message || 'Không gửi được ảnh.');
+      showErrorAlert(pickError.message || 'Không gửi được ảnh.');
     } finally {
       setIsSending(false);
     }
@@ -722,6 +819,7 @@ export default function ChatScreen({
     }
 
     setIsSending(true);
+    suppressKeyboardHideRef.current = true;
     const optimistic = {
       ...createLocalMessage(content),
       isMine: true,
@@ -729,6 +827,12 @@ export default function ChatScreen({
     setMessages((current) => upsertMessage(current, optimistic));
     setDraft('');
     scrollToEnd();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      setTimeout(() => {
+        suppressKeyboardHideRef.current = false;
+      }, 250);
+    });
 
     try {
       const activeConversationId = await ensureConversation();
@@ -765,9 +869,15 @@ export default function ChatScreen({
     } catch (sendError) {
       setMessages((current) => current.filter((item) => item.id !== optimistic.id));
       setDraft(content);
-      setError(sendError.message || 'Không gửi được tin nhắn.');
+      showErrorAlert(sendError.message || 'Không gửi được tin nhắn.');
     } finally {
       setIsSending(false);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
+      setTimeout(() => {
+        suppressKeyboardHideRef.current = false;
+      }, 250);
     }
   }
 
@@ -776,7 +886,7 @@ export default function ChatScreen({
       const image = await pickChatImageFromLibrary();
       await sendImageMessage(image);
     } catch (pickError) {
-      setError(pickError.message || 'Không gửi được ảnh.');
+      showErrorAlert(pickError.message || 'Không gửi được ảnh.');
     }
   }
 
@@ -785,7 +895,7 @@ export default function ChatScreen({
       const image = await chooseChatImageSource();
       await sendImageMessage(image);
     } catch (pickError) {
-      setError(pickError.message || 'Không gửi được ảnh.');
+      showErrorAlert(pickError.message || 'Không gửi được ảnh.');
     }
   }
 
@@ -826,164 +936,218 @@ export default function ChatScreen({
             setMessages((current) => mergeMessages(current, deleted));
             onConversationPreviewChange?.(activeConversationId, preview);
           } catch (deleteError) {
-            setError(deleteError.message || 'Không gỡ được tin nhắn.');
+            showErrorAlert(deleteError.message || 'Không gỡ được tin nhắn.');
           }
         },
       },
     ]);
   }
 
+  if (peerOverlay === 'buyer-profile' && buyerProfileUserId) {
+    return (
+      <BuyerProfileScreen
+        userId={buyerProfileUserId}
+        onBack={() => {
+          setPeerOverlay(null);
+          setBuyerProfileUserId('');
+          setOverlayStoreId('');
+        }}
+        onOpenShop={(nextShopId) => {
+          setOverlayStoreId(String(nextShopId));
+          setPeerOverlay('store');
+        }}
+        onOpenUser={(nextUserId) => setBuyerProfileUserId(String(nextUserId))}
+      />
+    );
+  }
+
   if (peerOverlay === 'account' && accountPeer) {
     return (
       <ChatProfileScreen
         peer={accountPeer}
-        peerType={isSellerMode ? 'user' : 'shop'}
+        peerType="shop"
         onBack={() => setPeerOverlay(null)}
         onViewShop={
-          !isSellerMode && peerStoreId
-            ? () => setPeerOverlay('store')
+          resolvedStoreId
+            ? () => {
+                setOverlayStoreId(resolvedStoreId);
+                setPeerOverlay('store');
+              }
             : undefined
         }
       />
     );
   }
 
-  if (peerOverlay === 'store' && peerStoreId) {
+  if (peerOverlay === 'store' && resolvedStoreId) {
     return (
       <StoreDetailScreen
-        storeId={peerStoreId}
-        onBack={() => setPeerOverlay(null)}
+        storeId={resolvedStoreId}
+        onBack={() => {
+          if (buyerProfileUserId) {
+            setOverlayStoreId('');
+            setPeerOverlay('buyer-profile');
+            return;
+          }
+          setOverlayStoreId('');
+          setPeerOverlay(null);
+        }}
       />
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
-    >
-      <View style={[styles.topBar, { paddingTop: screenInsets.contentPaddingTop }]}>
-        <CircularBackButton onPress={onBack} variant="plain" />
-
-        <Pressable
-          onPress={handleOpenPeer}
-          style={({ pressed }) => [styles.headerInfo, pressed && styles.buttonPressed]}
-          accessibilityRole="button"
-          accessibilityLabel={
-            isSellerMode ? `Xem tài khoản ${displayName}` : `Xem gian hàng ${displayName}`
-          }
-        >
-          <View style={styles.headerAvatarWrap}>
-            <AvatarBadge name={displayName} uri={peerAvatarUri} size={40} />
-            {peer?.isOnline ? <View style={styles.onlineDot} /> : null}
-          </View>
-          <View style={styles.headerTextWrap}>
-            <Text style={styles.title} numberOfLines={1}>
-              {displayName}
-            </Text>
-            <Text
-              style={[styles.activityStatus, peer?.isOnline && styles.activityOnline]}
-              numberOfLines={1}
-            >
-              {activityStatus}
-            </Text>
-          </View>
-        </Pressable>
-      </View>
-
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      {sequenceLabel ? <Text style={styles.sequenceText}>{sequenceLabel}</Text> : null}
-
-      {isLoading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color="#076F32" />
-        </View>
-      ) : (
-        <FlatList
-          ref={listRef}
-          data={chatItems}
-          keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.listContent}
-          onContentSizeChange={scrollToEnd}
-          renderItem={({ item }) => {
-            if (item.type === 'date') {
-              return <DateSeparator label={item.label} />;
+    <View style={styles.screen}>
+      <SubScreenHeader
+        onBack={onBack}
+        centerSlot={
+          <Pressable
+            onPress={handleOpenPeer}
+            style={({ pressed }) => [styles.headerInfo, pressed && styles.buttonPressed]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              peerIsShop ? `Xem gian hàng ${displayName}` : `Xem tài khoản ${displayName}`
             }
+          >
+            <View style={styles.headerAvatarWrap}>
+              <AvatarBadge name={displayName} uri={peerAvatarUri} size={40} />
+              {peer?.isOnline ? <View style={styles.onlineDot} /> : null}
+            </View>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.title} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text
+                style={[styles.activityStatus, peer?.isOnline && styles.activityOnline]}
+                numberOfLines={1}
+              >
+                {activityStatus}
+              </Text>
+            </View>
+          </Pressable>
+        }
+      />
 
-            return (
-              <ChatBubble
-                item={item.message}
-                peerAvatarUri={peerAvatarUri}
-                peerName={displayName}
-                onLongPress={handleLongPressMessage}
-              />
-            );
-          }}
-          ListEmptyComponent={<Text style={styles.emptyText}>Chưa có tin nhắn. Hãy gửi lời chào.</Text>}
-        />
-      )}
+      <View style={[styles.chatBody, chatBodyKeyboardPad > 0 && { paddingBottom: chatBodyKeyboardPad }]}>
+        {sequenceLabel ? <Text style={styles.sequenceText}>{sequenceLabel}</Text> : null}
 
-      <View style={[styles.composer, { paddingBottom: screenInsets.bottomSpacing }]}>
-        <Pressable
-          onPress={handleAttachMenu}
-          disabled={isSending}
-          style={({ pressed }) => [styles.roundActionButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.roundActionText}>+</Text>
-        </Pressable>
+        {isLoading ? (
+          <View style={styles.centered}>
+            <ActivityIndicator color="#076F32" />
+          </View>
+        ) : (
+          <FlatList
+            ref={listRef}
+            style={styles.list}
+            data={chatItems}
+            keyExtractor={(item) => String(item.id)}
+            contentContainerStyle={[styles.listContent, { paddingBottom: listContentPaddingBottom }]}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            onContentSizeChange={() => {
+              if (isKeyboardVisible) {
+                scrollToEnd(false);
+              }
+            }}
+            renderItem={({ item }) => {
+              if (item.type === 'date') {
+                return <DateSeparator label={item.label} />;
+              }
 
-        <Pressable
-          onPress={handlePickImage}
-          disabled={isSending}
-          style={({ pressed }) => [styles.roundActionButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.roundActionText}>🖼</Text>
-        </Pressable>
+              return (
+                <ChatBubble
+                  item={item.message}
+                  peerAvatarUri={peerAvatarUri}
+                  peerName={displayName}
+                  onLongPress={handleLongPressMessage}
+                />
+              );
+            }}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>Chưa có tin nhắn. Hãy gửi lời chào.</Text>
+            }
+          />
+        )}
 
-        <TextInput
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="Nhập tin nhắn..."
-          placeholderTextColor="#94a3b8"
-          style={styles.input}
-          multiline
-        />
-
-        <Pressable
-          disabled={!canSend}
-          onPress={handleSend}
-          style={({ pressed }) => [
-            styles.sendButton,
-            canSend ? styles.sendButtonActive : styles.sendButtonDisabled,
-            pressed && canSend && styles.buttonPressed,
+        <View
+          style={[
+            styles.composer,
+            !usesFlexComposer && styles.composerDocked,
+            !usesFlexComposer && {
+              bottom: composerBottomOffset,
+              paddingBottom: composerBottomPadding,
+            },
+            composerSafePadding > 0 && { paddingBottom: composerSafePadding },
           ]}
         >
-          <Text style={[styles.sendButtonText, !canSend && styles.sendButtonTextDisabled]}>
-            {isSending ? '…' : '➤'}
-          </Text>
-        </Pressable>
+          <Pressable
+            onPress={handleAttachMenu}
+            disabled={isSending}
+            style={({ pressed }) => [styles.roundActionButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.roundActionText}>+</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={handlePickImage}
+            disabled={isSending}
+            style={({ pressed }) => [styles.roundActionButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.roundActionText}>🖼</Text>
+          </Pressable>
+
+          <TextInput
+            ref={inputRef}
+            value={draft}
+            onChangeText={(text) => {
+              setDraft(text);
+            }}
+            onFocus={() => scrollToEnd()}
+            onBlur={() => {
+              if (suppressKeyboardHideRef.current) {
+                return;
+              }
+            }}
+            placeholder="Nhập tin nhắn..."
+            placeholderTextColor="#94a3b8"
+            style={styles.input}
+            multiline
+            blurOnSubmit={false}
+            returnKeyType="default"
+          />
+
+          <Pressable
+            disabled={!canSend}
+            onPress={handleSend}
+            onPressIn={() => inputRef.current?.focus()}
+            style={({ pressed }) => [
+              styles.sendButton,
+              canSend ? styles.sendButtonActive : styles.sendButtonDisabled,
+              pressed && canSend && styles.buttonPressed,
+            ]}
+          >
+            <Text style={[styles.sendButtonText, !canSend && styles.sendButtonTextDisabled]}>
+              {isSending ? '…' : '➤'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f4f6f8' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingBottom: 12,
-    paddingHorizontal: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e8edf2',
+  chatBody: {
+    flex: 1,
+    position: 'relative',
+    minHeight: 0,
   },
+  list: { flex: 1 },
   headerInfo: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: 8,
     minWidth: 0,
   },
   headerAvatarWrap: {
@@ -1138,6 +1302,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e8edf2',
     backgroundColor: '#ffffff',
+  },
+  composerDocked: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 2,
+    elevation: 8,
   },
   roundActionButton: {
     width: 40,

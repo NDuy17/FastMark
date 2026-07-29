@@ -16,7 +16,7 @@ import {
   validateBuyerShopQrOnBackend,
 } from '../../api/buyerOpsApi';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 
 /** Parse QR cố định shop: {"shopId":"..."} | FM|SHOP|id | plain id */
 export function parseShopQrPayload(raw) {
@@ -141,11 +141,7 @@ export default function BuyerShopQrScanScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.topBar}>
-        <CircularBackButton onPress={onBack} variant="light" />
-        <Text style={styles.title}>Quét mã Shop</Text>
-        <View style={styles.topBarSpacer} />
-      </View>
+      <SubScreenHeader title="Quét mã Shop" onBack={onBack} />
 
       <View style={styles.wrap}>
         <Text style={styles.hint}>
@@ -195,24 +191,6 @@ export default function BuyerShopQrScanScreen({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f1f5f9' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 12,
-    paddingHorizontal: 12,
-    paddingBottom: 10,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  title: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  topBarSpacer: { width: 40 },
   wrap: { padding: 16 },
   hint: {
     fontSize: 13,

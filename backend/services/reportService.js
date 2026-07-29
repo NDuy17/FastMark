@@ -10,8 +10,18 @@ const {
   REPORT_TYPE_LABELS,
   ACCOUNT_REPORT_TYPES,
   MAX_ACCOUNT_REPORT_IMAGES,
+  USER_STATUS,
+  SHOP_STATUS,
 } = require("../constants");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { resolveShopDisplayName } = require("../utils/shopIdentity");
+const {
+  findLatestAccountLockAppeal,
+  findLatestShopLockAppeal,
+  ensureUserLockedAt,
+  ensureShopLockedAt,
+  isLegacyShopLockAppealReport,
+} = require("./lockAppealService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -28,16 +38,7 @@ function isStrictMongoObjectId(value) {
 }
 
 function pickShopDisplayName(shop, owner = null) {
-  if (!shop && !owner) {
-    return "";
-  }
-  // description là bio — không dùng làm tên gian hàng.
-  return (
-    pickString(owner?.FullName) ||
-    pickString(owner?.UserName) ||
-    pickString(shop?.shopName) ||
-    ""
-  );
+  return resolveShopDisplayName(shop, owner);
 }
 
 async function findShopByObjectId(id) {
@@ -368,7 +369,307 @@ async function createReport(user, payload = {}) {
   };
 }
 
+async function loadAppealImages(reportId) {
+  if (!reportId) return [];
+  const rows = await ReportImage.find({ reportId }).sort({ CreatedAt: 1 }).lean();
+  return rows.map((row) => ({
+    id: String(row._id),
+    imageUrl: row.imageUrl,
+  }));
+}
+
+async function findShopByUserId(userId) {
+  return ShopProfile.findOne({ userId }).lean();
+}
+
+/**
+ * Trạng thái khiếu nại khóa nick cho user hiện tại.
+ * - canAppeal: còn nút gửi khiếu nại (chỉ 1 lần / lượt khóa; từ chối thì mất nút).
+ * - phase: active | can_appeal | pending | rejected
+ */
+async function getAccountLockAppealStatus(user) {
+  const blocked = Number(user?.Status) === USER_STATUS.BLOCKED;
+  if (!blocked) {
+    return {
+      accountLocked: false,
+      phase: "active",
+      canAppeal: false,
+      appeal: null,
+      message: "Tài khoản đang hoạt động.",
+    };
+  }
+
+  const lockedAt = await ensureUserLockedAt(user);
+  const latest = await findLatestAccountLockAppeal(user._id, lockedAt);
+  if (!latest) {
+    return {
+      accountLocked: true,
+      phase: "can_appeal",
+      canAppeal: true,
+      appeal: null,
+      message: "Tài khoản đã bị khóa. Bạn có thể gửi khiếu nại một lần.",
+    };
+  }
+
+  const images = await loadAppealImages(latest._id);
+  const appeal = {
+    id: String(latest._id),
+    status: latest.status,
+    statusLabel: latest.status === REPORT_STATUS.PENDING
+      ? "Chờ admin xử lý"
+      : latest.status === REPORT_STATUS.REJECTED
+        ? "Đã từ chối"
+        : latest.status === REPORT_STATUS.PROCESSED
+          ? "Đã mở khóa"
+          : "Không rõ",
+    title: latest.title || "",
+    content: latest.content || "",
+    adminNote: latest.adminNote || "",
+    images,
+    createdAt: latest.CreatedAt,
+    processedAt: latest.processedAt || null,
+  };
+
+  if (latest.status === REPORT_STATUS.PENDING) {
+    return {
+      accountLocked: true,
+      phase: "pending",
+      canAppeal: false,
+      appeal,
+      message: "Đã gửi khiếu nại. Đang chờ admin xử lý.",
+    };
+  }
+
+  if (latest.status === REPORT_STATUS.REJECTED) {
+    return {
+      accountLocked: true,
+      phase: "rejected",
+      canAppeal: false,
+      appeal,
+      message: latest.adminNote || "Khiếu nại đã bị từ chối. Tài khoản vẫn bị khóa.",
+    };
+  }
+
+  // PROCESSED nhưng user vẫn bị khóa lại sau đó → cho khiếu nại mới.
+  return {
+    accountLocked: true,
+    phase: "can_appeal",
+    canAppeal: true,
+    appeal,
+    message: "Tài khoản đã bị khóa lại. Bạn có thể gửi khiếu nại một lần.",
+  };
+}
+
+async function createAccountLockAppeal(user, payload = {}) {
+  if (Number(user?.Status) !== USER_STATUS.BLOCKED) {
+    throw createServiceError("Chỉ tài khoản bị khóa mới được gửi khiếu nại này.", 400);
+  }
+
+  const status = await getAccountLockAppealStatus(user);
+  if (!status.canAppeal) {
+    if (status.phase === "pending") {
+      throw createServiceError("Bạn đã gửi khiếu nại và đang chờ admin xử lý.", 409);
+    }
+    if (status.phase === "rejected") {
+      throw createServiceError(
+        "Khiếu nại đã bị từ chối. Bạn không thể gửi lại.",
+        409
+      );
+    }
+    throw createServiceError("Không thể gửi khiếu nại lúc này.", 400);
+  }
+
+  const note = pickString(payload.content || payload.message || payload.note);
+  if (!note) {
+    throw createServiceError("Vui lòng nhập nội dung khiếu nại.", 400);
+  }
+
+  const title =
+    pickString(payload.title || payload.reason) ||
+    REPORT_TYPE_LABELS[REPORT_TYPE.ACCOUNT_LOCK_APPEAL];
+  const imageUrls = await normalizeImageUrls(payload.images || payload.imageUrls || []);
+  const now = new Date();
+  const lockedAt = await ensureUserLockedAt(user);
+
+  const report = await Report.create({
+    userId: user._id,
+    reportType: REPORT_TYPE.ACCOUNT_LOCK_APPEAL,
+    title,
+    content: note,
+    status: REPORT_STATUS.PENDING,
+    lockSessionAt: lockedAt || now,
+    CreatedAt: now,
+    UpdatedAt: now,
+  });
+  const images = await saveReportImages(report._id, imageUrls);
+
+  return {
+    id: String(report._id),
+    reportType: report.reportType,
+    reportTypeLabel: REPORT_TYPE_LABELS[REPORT_TYPE.ACCOUNT_LOCK_APPEAL],
+    title: report.title,
+    content: report.content,
+    status: report.status,
+    statusLabel: "Chờ admin xử lý",
+    images,
+    createdAt: report.CreatedAt,
+  };
+}
+
+/**
+ * Trạng thái khiếu nại khóa gian hàng cho seller hiện tại.
+ */
+async function getShopLockAppealStatus(user) {
+  const shop = await findShopByUserId(user._id);
+  if (!shop) {
+    throw createServiceError("Không tìm thấy gian hàng của bạn.", 404);
+  }
+
+  const shopLocked = Number(shop.status) === SHOP_STATUS.BLOCKED;
+  if (!shopLocked) {
+    return {
+      shopLocked: false,
+      shopId: String(shop._id),
+      phase: "active",
+      canAppeal: false,
+      appeal: null,
+      message: "Gian hàng đang hoạt động.",
+    };
+  }
+
+  const lockedAt = await ensureShopLockedAt(shop);
+  const latest = await findLatestShopLockAppeal(user._id, shop._id, lockedAt);
+  if (!latest) {
+    return {
+      shopLocked: true,
+      shopId: String(shop._id),
+      phase: "can_appeal",
+      canAppeal: true,
+      appeal: null,
+      message: "Gian hàng đã bị khóa. Bạn có thể gửi khiếu nại một lần.",
+    };
+  }
+
+  const images = await loadAppealImages(latest._id);
+  const appeal = {
+    id: String(latest._id),
+    status: latest.status,
+    statusLabel: latest.status === REPORT_STATUS.PENDING
+      ? "Chờ admin xử lý"
+      : latest.status === REPORT_STATUS.REJECTED
+        ? "Đã từ chối"
+        : latest.status === REPORT_STATUS.PROCESSED
+          ? "Đã mở khóa"
+          : "Không rõ",
+    title: latest.title || "",
+    content: latest.content || "",
+    adminNote: latest.adminNote || "",
+    images,
+    createdAt: latest.CreatedAt,
+    processedAt: latest.processedAt || null,
+  };
+
+  if (latest.status === REPORT_STATUS.PENDING) {
+    return {
+      shopLocked: true,
+      shopId: String(shop._id),
+      phase: "pending",
+      canAppeal: false,
+      appeal,
+      message: "Đã gửi khiếu nại. Đang chờ admin xử lý.",
+    };
+  }
+
+  if (latest.status === REPORT_STATUS.REJECTED) {
+    return {
+      shopLocked: true,
+      shopId: String(shop._id),
+      phase: "rejected",
+      canAppeal: false,
+      appeal,
+      message: latest.adminNote || "Khiếu nại đã bị từ chối. Gian hàng vẫn bị khóa.",
+    };
+  }
+
+  return {
+    shopLocked: true,
+    shopId: String(shop._id),
+    phase: "can_appeal",
+    canAppeal: true,
+    appeal,
+    message: "Gian hàng đã bị khóa lại. Bạn có thể gửi khiếu nại một lần.",
+  };
+}
+
+async function createShopLockAppeal(user, payload = {}) {
+  const shop = await findShopByUserId(user._id);
+  if (!shop) {
+    throw createServiceError("Không tìm thấy gian hàng của bạn.", 404);
+  }
+
+  if (Number(shop.status) !== SHOP_STATUS.BLOCKED) {
+    throw createServiceError("Chỉ gian hàng bị khóa mới được gửi khiếu nại này.", 400);
+  }
+
+  const status = await getShopLockAppealStatus(user);
+  if (!status.canAppeal) {
+    if (status.phase === "pending") {
+      throw createServiceError("Bạn đã gửi khiếu nại và đang chờ admin xử lý.", 409);
+    }
+    if (status.phase === "rejected") {
+      throw createServiceError(
+        "Khiếu nại đã bị từ chối. Bạn không thể gửi lại.",
+        409
+      );
+    }
+    throw createServiceError("Không thể gửi khiếu nại lúc này.", 400);
+  }
+
+  const note = pickString(payload.content || payload.message || payload.note);
+  if (!note) {
+    throw createServiceError("Vui lòng nhập nội dung khiếu nại.", 400);
+  }
+
+  const title =
+    pickString(payload.title || payload.reason) ||
+    REPORT_TYPE_LABELS[REPORT_TYPE.SHOP_LOCK_APPEAL];
+  const imageUrls = await normalizeImageUrls(payload.images || payload.imageUrls || []);
+  const now = new Date();
+  const lockedAt = await ensureShopLockedAt(shop);
+
+  const report = await Report.create({
+    userId: user._id,
+    shopId: shop._id,
+    reportType: REPORT_TYPE.SHOP_LOCK_APPEAL,
+    title,
+    content: note,
+    status: REPORT_STATUS.PENDING,
+    lockSessionAt: lockedAt || now,
+    CreatedAt: now,
+    UpdatedAt: now,
+  });
+  const images = await saveReportImages(report._id, imageUrls);
+
+  return {
+    id: String(report._id),
+    reportType: report.reportType,
+    reportTypeLabel: REPORT_TYPE_LABELS[REPORT_TYPE.SHOP_LOCK_APPEAL],
+    title: report.title,
+    content: report.content,
+    status: report.status,
+    statusLabel: "Chờ admin xử lý",
+    images,
+    createdAt: report.CreatedAt,
+  };
+}
+
 module.exports = {
   createReport,
+  getAccountLockAppealStatus,
+  createAccountLockAppeal,
+  getShopLockAppealStatus,
+  createShopLockAppeal,
+  isLegacyShopLockAppealReport,
+  normalizeImageUrls,
   MAX_ACCOUNT_REPORT_IMAGES,
 };

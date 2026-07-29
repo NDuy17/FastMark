@@ -10,7 +10,9 @@ export function hasStoreNodeApi() {
 
 async function parseJson(response, label) {
   if (!response.ok) {
-    throw new Error(`${label} failed: ${response.status}`);
+    const error = new Error(`${label} failed: ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -94,15 +96,22 @@ export async function fetchStoreFromNode(storeId, { latitude, longitude } = {}) 
     return null;
   }
 
-  const params = new URLSearchParams();
-  if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
-    params.set('lat', String(latitude));
-    params.set('lng', String(longitude));
+  try {
+    const params = new URLSearchParams();
+    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+      params.set('lat', String(latitude));
+      params.set('lng', String(longitude));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const shopResponse = await apiRequest(`${API_ENDPOINTS.shopById(normalizedId)}${query}`);
+    const shopPayload = await parseJson(shopResponse, 'fetchShopFromNode');
+    return shopPayload.data?.shop || null;
+  } catch (error) {
+    if (Number(error?.statusCode) === 404) {
+      return null;
+    }
+    throw error;
   }
-  const query = params.toString() ? `?${params.toString()}` : '';
-  const shopResponse = await apiRequest(`${API_ENDPOINTS.shopById(normalizedId)}${query}`);
-  const shopPayload = await parseJson(shopResponse, 'fetchShopFromNode');
-  return shopPayload.data?.shop || null;
 }
 
 export async function fetchProductsFromNode(storeId) {
@@ -115,9 +124,16 @@ export async function fetchProductsFromNode(storeId) {
     return [];
   }
 
-  const response = await apiRequest(API_ENDPOINTS.shopProducts(normalizedId));
-  const payload = await parseJson(response, 'fetchShopProductsFromNode');
-  return payload.data?.products || [];
+  try {
+    const response = await apiRequest(API_ENDPOINTS.shopProducts(normalizedId));
+    const payload = await parseJson(response, 'fetchShopProductsFromNode');
+    return payload.data?.products || [];
+  } catch (error) {
+    if (Number(error?.statusCode) === 404) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export async function fetchProductFromNode(productId) {
@@ -145,7 +161,14 @@ export async function fetchReviewsFromNode(storeId) {
     return [];
   }
 
-  const response = await apiRequest(API_ENDPOINTS.shopReviews(normalizedId));
-  const payload = await parseJson(response, 'fetchShopReviewsFromNode');
-  return payload.data?.reviews || [];
+  try {
+    const response = await apiRequest(API_ENDPOINTS.shopReviews(normalizedId));
+    const payload = await parseJson(response, 'fetchShopReviewsFromNode');
+    return payload.data?.reviews || [];
+  } catch (error) {
+    if (Number(error?.statusCode) === 404) {
+      return [];
+    }
+    throw error;
+  }
 }

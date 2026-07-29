@@ -8,8 +8,11 @@ exports.listAdminPlans = async (req, res) => {
 
 exports.createPlan = async (req, res) => {
   try {
-    const plan = await sellerBannerService.createBannerPlan(req.body);
-    return success(res, { message: "Đã tạo gói banner.", data: { plan } });
+    const { plan, restored } = await sellerBannerService.createBannerPlan(req.body);
+    return success(res, {
+      message: restored ? "Đã khôi phục gói banner." : "Đã tạo gói banner.",
+      data: { plan, restored: Boolean(restored) },
+    });
   } catch (error) {
     return fail(res, { status: error.statusCode || 500, message: error.message });
   }
@@ -33,6 +36,15 @@ exports.removePlan = async (req, res) => {
   }
 };
 
+exports.restorePlan = async (req, res) => {
+  try {
+    const plan = await sellerBannerService.restoreBannerPlan(req.params.id);
+    return success(res, { message: "Đã khôi phục gói banner.", data: { plan } });
+  } catch (error) {
+    return fail(res, { status: error.statusCode || 500, message: error.message });
+  }
+};
+
 exports.listSellerBanners = async (req, res) => {
   const data = await sellerBannerService.listAdminSellerBanners({
     page: req.query.page,
@@ -40,6 +52,8 @@ exports.listSellerBanners = async (req, res) => {
     status: req.query.status,
     filter: req.query.filter || req.query.lifecycle,
     search: req.query.search || req.query.q,
+    from: req.query.from || req.query.dateFrom,
+    to: req.query.to || req.query.dateTo,
   });
   return success(res, { data });
 };

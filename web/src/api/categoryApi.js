@@ -31,6 +31,13 @@ export function deleteCategory(token, type, categoryId) {
   });
 }
 
+export function restoreCategory(token, type, categoryId) {
+  return apiRequest(`${categoryBase(type)}/${categoryId}/restore`, {
+    method: 'POST',
+    token,
+  });
+}
+
 import { apiUrl } from '../config/env';
 
 export async function uploadCategoryIcon(token, type, categoryId, file) {

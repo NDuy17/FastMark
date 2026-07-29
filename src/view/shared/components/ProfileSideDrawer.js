@@ -15,8 +15,8 @@ function MenuRow({ icon, label, value, onPress, danger = false, last = false }) 
         pressed && styles.menuRowPressed,
       ]}
     >
-      <View style={styles.menuIconWrap}>
-        <Ionicons name={icon} size={22} color={danger ? '#dc2626' : '#0f172a'} />
+      <View style={[styles.menuIconWrap, danger && styles.menuIconWrapDanger]}>
+        <Ionicons name={icon} size={20} color={danger ? '#dc2626' : '#076F32'} />
       </View>
       <Text style={[styles.menuLabel, danger && styles.menuLabelDanger]} numberOfLines={1}>
         {label}
@@ -26,7 +26,11 @@ function MenuRow({ icon, label, value, onPress, danger = false, last = false }) 
           {value}
         </Text>
       ) : null}
-      <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+      <Ionicons
+        name="chevron-forward"
+        size={18}
+        color={danger ? '#f87171' : '#94a3b8'}
+      />
     </Pressable>
   );
 }
@@ -85,15 +89,6 @@ export default function ProfileSideDrawer({
                 </Text>
               ) : null}
             </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              style={styles.closeBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Đóng"
-            >
-              <Ionicons name="close" size={22} color="#64748b" />
-            </Pressable>
           </View>
 
           <Pressable
@@ -109,7 +104,7 @@ export default function ProfileSideDrawer({
             style={({ pressed }) => [styles.balanceCard, pressed && styles.menuRowPressed]}
           >
             <View style={styles.balanceIcon}>
-              <Ionicons name="wallet-outline" size={20} color="#076F32" />
+              <Ionicons name="wallet" size={18} color="#076F32" />
             </View>
             <View style={styles.balanceCopy}>
               <Text style={styles.balanceLabel}>Số dư ví</Text>
@@ -155,10 +150,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     flexDirection: 'row',
-    justifyContent: 'flex-end',
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
   },
   drawer: {
@@ -194,14 +188,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#64748b',
   },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f1f5f9',
-  },
   balanceCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -215,7 +201,7 @@ const styles = StyleSheet.create({
   balanceIcon: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ffffff',
@@ -252,18 +238,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   sectionCard: {
-    borderRadius: 14,
-    backgroundColor: '#f8fafc',
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e8f0eb',
     overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
   },
   menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e2e8f0',
+    borderBottomColor: '#f1f5f9',
   },
   menuRowLast: {
     borderBottomWidth: 0,
@@ -272,13 +265,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
   },
   menuIconWrap: {
-    width: 28,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#E6F4EC',
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuIconWrapDanger: {
+    backgroundColor: '#fecaca',
   },
   menuLabel: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#0f172a',
   },
   menuLabelDanger: {

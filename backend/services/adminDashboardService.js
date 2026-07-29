@@ -29,6 +29,11 @@ const {
   WALLET_TX_STATUS,
 } = require("../constants");
 const { computeTotal } = require("./reservationService");
+const {
+  resolveShopDisplayName,
+  resolveShopAvatar,
+  resolveShopUsername,
+} = require("../utils/shopIdentity");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -188,6 +193,89 @@ async function aggregateDailySum(Model, match, dateField, sumField) {
   ]);
 }
 
+async function aggregateDailySumWithFallback(
+  Model,
+  match,
+  dateField,
+  fallbackField,
+  sumField
+) {
+  return Model.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: {
+          $dateToString: {
+            format: "%Y-%m-%d",
+            date: { $ifNull: [`$${dateField}`, `$${fallbackField}`] },
+          },
+        },
+        count: { $sum: `$${sumField}` },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+}
+
+function dayBoundsFromKey(dateKey) {
+  const [year, month, day] = String(dateKey).split("-").map(Number);
+  return {
+    start: new Date(year, month - 1, day, 0, 0, 0, 0),
+    end: new Date(year, month - 1, day, 23, 59, 59, 999),
+  };
+}
+
+function isBannerRunningOnDay(banner, dayStart, dayEnd) {
+  if (Number(banner.status) !== SELLER_BANNER_STATUS.ACTIVE) {
+    return false;
+  }
+  if (!banner.approvedAt || !banner.startDate || !banner.endDate) {
+    return false;
+  }
+  const start = new Date(banner.startDate);
+  const end = new Date(banner.endDate);
+  return start <= dayEnd && end >= dayStart;
+}
+
+async function countActiveBannersAt(at) {
+  const dayStart = startOfDay(at);
+  const dayEnd = endOfDay(at);
+  return SellerBannerPlan.countDocuments({
+    status: SELLER_BANNER_STATUS.ACTIVE,
+    approvedAt: { $ne: null },
+    startDate: { $ne: null, $lte: dayEnd },
+    endDate: { $ne: null, $gte: dayStart },
+  });
+}
+
+/** Số banner đang treo trong từng ngày (theo startDate/endDate, không phải ngày mua). */
+async function aggregateDailyActiveBannerCount(from, to) {
+  const series = buildEmptySeries(from, to);
+  if (!series.length) {
+    return [];
+  }
+
+  const banners = await SellerBannerPlan.find({
+    status: SELLER_BANNER_STATUS.ACTIVE,
+    approvedAt: { $ne: null },
+    startDate: { $ne: null, $lte: endOfDay(to) },
+    endDate: { $ne: null, $gte: startOfDay(from) },
+  })
+    .select("status approvedAt startDate endDate")
+    .lean();
+
+  return series.map((day) => {
+    const { start: dayStart, end: dayEnd } = dayBoundsFromKey(day.date);
+    let count = 0;
+    for (const banner of banners) {
+      if (isBannerRunningOnDay(banner, dayStart, dayEnd)) {
+        count += 1;
+      }
+    }
+    return { _id: day.date, count };
+  });
+}
+
 async function aggregatePackageSales(Model, from, to, extraMatch = {}) {
   const rows = await Model.aggregate([
     {
@@ -198,6 +286,28 @@ async function aggregatePackageSales(Model, from, to, extraMatch = {}) {
     {
       $match: {
         purchaseDate: { $gte: from, $lte: to },
+        amount: { $gt: 0 },
+        ...extraMatch,
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        count: { $sum: 1 },
+        revenue: { $sum: "$amount" },
+      },
+    },
+  ]);
+  return {
+    count: Number(rows[0]?.count) || 0,
+    revenue: Number(rows[0]?.revenue) || 0,
+  };
+}
+
+async function aggregatePackageSalesAllTime(Model, extraMatch = {}) {
+  const rows = await Model.aggregate([
+    {
+      $match: {
         amount: { $gt: 0 },
         ...extraMatch,
       },
@@ -268,6 +378,34 @@ async function aggregatePackageBreakdown(Model, from, to, extraMatch = {}) {
   ]);
 }
 
+async function aggregatePackageBreakdownAllTime(Model, extraMatch = {}) {
+  return Model.aggregate([
+    {
+      $match: {
+        amount: { $gt: 0 },
+        ...extraMatch,
+      },
+    },
+    {
+      $group: {
+        _id: { $ifNull: ["$planName", "Gói không tên"] },
+        count: { $sum: 1 },
+        revenue: { $sum: "$amount" },
+      },
+    },
+    { $sort: { revenue: -1, count: -1 } },
+    { $limit: 10 },
+  ]);
+}
+
+function mapPlanBreakdownRows(rows) {
+  return rows.map((row) => ({
+    planName: row._id || "Gói không tên",
+    count: Number(row.count) || 0,
+    revenue: Number(row.revenue) || 0,
+  }));
+}
+
 const CANCELLED_RESERVATION_STATUSES = [
   RESERVATION_STATUS.REJECTED,
   RESERVATION_STATUS.REFUNDED,
@@ -285,6 +423,16 @@ function completedInWindowMatch(from, to) {
     $or: [
       { completedAt: { $gte: from, $lte: to } },
       { completedAt: null, UpdatedAt: { $gte: from, $lte: to } },
+    ],
+  };
+}
+
+function approvedWithdrawInWindowMatch(from, to) {
+  return {
+    status: WITHDRAW_STATUS.APPROVED,
+    $or: [
+      { processedAt: { $gte: from, $lte: to } },
+      { processedAt: null, UpdatedAt: { $gte: from, $lte: to } },
     ],
   };
 }
@@ -312,7 +460,7 @@ async function collectPeriodMetrics(from, to) {
     escrowRows,
   ] = await Promise.all([
     User.countDocuments({ ...createdInWindow, Role: { $ne: USER_ROLE.ADMIN } }),
-    User.countDocuments({ ...createdInWindow, Role: USER_ROLE.SELLER }),
+    ShopProfile.countDocuments(createdInWindow),
     Product.countDocuments({ ...createdInWindow, IsDeleted: { $ne: true } }),
     Reservation.countDocuments(createdInWindow),
     Reservation.find(completedInWindowMatch(from, to))
@@ -350,13 +498,13 @@ async function collectPeriodMetrics(from, to) {
       { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
     ]),
     WithdrawRequest.aggregate([
-      { $match: createdInWindow },
+      { $match: approvedWithdrawInWindowMatch(from, to) },
       { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
     ]),
     SellerVerification.countDocuments(createdInWindow),
     Report.countDocuments(createdInWindow),
     Report.distinct("shopId", { ...createdInWindow, shopId: { $ne: null } }),
-    SellerBannerPlan.countDocuments(createdInWindow),
+    countActiveBannersAt(to),
     // Cọc phát sinh trong kỳ và vẫn đang treo (chưa quyết toán).
     Reservation.aggregate([
       {
@@ -448,10 +596,14 @@ async function getAdminDashboard(query = {}) {
     unsettledDeposits,
     sellerPlanSalesInRange,
     bannerPlanSalesInRange,
+    sellerPlanSalesAllTime,
+    bannerPlanSalesAllTime,
     sellerPlanSalesThisMonth,
     bannerPlanSalesThisMonth,
-    sellerPlanBreakdown,
-    bannerPlanBreakdown,
+    sellerPlanBreakdownInRange,
+    bannerPlanBreakdownInRange,
+    sellerPlanBreakdownAllTime,
+    bannerPlanBreakdownAllTime,
     currentPeriod,
     previousPeriod,
     pendingSellerVerifications,
@@ -475,8 +627,8 @@ async function getAdminDashboard(query = {}) {
     escrowDaily,
   ] = await Promise.all([
     User.countDocuments({ Role: { $ne: USER_ROLE.ADMIN } }),
-    User.countDocuments({ Role: USER_ROLE.BUYER }),
-    User.countDocuments({ Role: USER_ROLE.SELLER }),
+    User.countDocuments({ Role: { $ne: USER_ROLE.ADMIN } }),
+    ShopProfile.countDocuments({}),
     User.countDocuments({ Role: USER_ROLE.ADMIN }),
     ShopProfile.countDocuments({}),
     ShopProfile.countDocuments({ status: SHOP_STATUS.ACTIVE }),
@@ -490,10 +642,7 @@ async function getAdminDashboard(query = {}) {
       ...createdInRange,
       Role: { $ne: USER_ROLE.ADMIN },
     }),
-    aggregateDailyCount(User, {
-      ...createdInRange,
-      Role: USER_ROLE.SELLER,
-    }),
+    aggregateDailyCount(ShopProfile, createdInRange),
     aggregateDailyCount(ShopProfile, createdInRange),
     aggregateDailyCount(Product, {
       ...createdInRange,
@@ -548,7 +697,7 @@ async function getAdminDashboard(query = {}) {
       .sort({ averageRating: -1, followersCount: -1, soldCount: -1, totalProducts: -1 })
       .limit(10)
       .select(
-        "shopName averageRating followersCount totalProducts soldCount totalReviews DiaChiHeThong address isOpen userId"
+        "shopName shopUsername avatar averageRating followersCount totalProducts soldCount totalReviews DiaChiHeThong address isOpen userId"
       )
       .lean(),
     aggregateDailyCount(Follow, createdInRange),
@@ -577,6 +726,8 @@ async function getAdminDashboard(query = {}) {
       paidSellerSubscriptionMatch
     ),
     aggregatePackageSales(SellerBannerPlan, from, to),
+    aggregatePackageSalesAllTime(SellerSubscription, paidSellerSubscriptionMatch),
+    aggregatePackageSalesAllTime(SellerBannerPlan),
     aggregatePackageSales(
       SellerSubscription,
       monthFrom,
@@ -586,11 +737,13 @@ async function getAdminDashboard(query = {}) {
     aggregatePackageSales(SellerBannerPlan, monthFrom, monthTo),
     aggregatePackageBreakdown(
       SellerSubscription,
-      monthFrom,
-      monthTo,
+      from,
+      to,
       paidSellerSubscriptionMatch
     ),
-    aggregatePackageBreakdown(SellerBannerPlan, monthFrom, monthTo),
+    aggregatePackageBreakdown(SellerBannerPlan, from, to),
+    aggregatePackageBreakdownAllTime(SellerSubscription, paidSellerSubscriptionMatch),
+    aggregatePackageBreakdownAllTime(SellerBannerPlan),
     collectPeriodMetrics(from, to),
     collectPeriodMetrics(prevFrom, prevTo),
     SellerVerification.countDocuments({
@@ -661,7 +814,13 @@ async function getAdminDashboard(query = {}) {
       "CreatedAt",
       "amount"
     ),
-    aggregateDailySum(WithdrawRequest, createdInRange, "CreatedAt", "amount"),
+    aggregateDailySumWithFallback(
+      WithdrawRequest,
+      approvedWithdrawInWindowMatch(from, to),
+      "processedAt",
+      "UpdatedAt",
+      "amount"
+    ),
     aggregateDailyCount(SellerVerification, createdInRange),
     aggregateDailyCount(Report, createdInRange),
     // Số shop bị báo cáo (không trùng) theo ngày.
@@ -678,7 +837,7 @@ async function getAdminDashboard(query = {}) {
       { $group: { _id: "$_id.day", count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]),
-    aggregateDailyCount(SellerBannerPlan, createdInRange),
+    aggregateDailyActiveBannerCount(from, to),
     aggregateDailySum(
       Reservation,
       {
@@ -717,7 +876,7 @@ async function getAdminDashboard(query = {}) {
   const revenueShopIds = [...revenueByShopMap.keys()];
   const revenueShops = revenueShopIds.length
     ? await ShopProfile.find({ _id: { $in: revenueShopIds } })
-        .select("shopName userId")
+        .select("shopName shopUsername avatar userId")
         .lean()
     : [];
   const revenueOwnerIds = [
@@ -736,8 +895,9 @@ async function getAdminDashboard(query = {}) {
       const owner = shop ? revenueOwnerById.get(String(shop.userId || "")) : null;
       return {
         shopId: row.shopId,
-        shopName: shop?.shopName || owner?.FullName || "Gian hàng",
-        avatar: owner?.Avatar || "",
+        shopName: resolveShopDisplayName(shop, owner),
+        shopUsername: resolveShopUsername(shop, owner),
+        avatar: resolveShopAvatar(shop, owner),
         revenue: row.revenue,
         orders: row.orders,
       };
@@ -796,11 +956,12 @@ async function getAdminDashboard(query = {}) {
   const topSellingProducts = topProductRows.map((row) => {
     const product = topProductById.get(row.productId);
     const shop = revenueShopById.get(row.shopId);
+    const owner = shop ? revenueOwnerById.get(String(shop.userId || "")) : null;
     return {
       productId: row.productId,
       name: product?.ProductName || "Sản phẩm",
       thumbnail: coverByProductId.get(row.productId) || product?.Thumbnail || "",
-      shopName: shop?.shopName || "",
+      shopName: resolveShopDisplayName(shop, owner),
       soldQuantity: row.soldQuantity,
       revenue: row.revenue,
       orders: row.orders,
@@ -829,16 +990,19 @@ async function getAdminDashboard(query = {}) {
 
   const rolePie = [
     { key: "buyers", label: "Người mua", value: totalBuyers },
-    { key: "sellers", label: "Người bán", value: totalSellers },
+    { key: "sellers", label: "Gian hàng", value: totalSellers },
     { key: "admins", label: "Admin", value: totalAdmins },
   ];
 
   const topShopsMapped = topShops.map((shop) => {
     const owner = topShopOwnerById.get(String(shop.userId || ""));
+    const shopName = resolveShopDisplayName(shop, owner);
     return {
       shopId: String(shop._id),
-      name: shop.shopName || owner?.FullName || "Gian hàng",
-      logo: owner?.Avatar || "",
+      shopName,
+      name: shopName,
+      avatar: resolveShopAvatar(shop, owner),
+      logo: resolveShopAvatar(shop, owner),
       rating: Number(shop.averageRating) || 0,
       followersCount: Number(shop.followersCount) || 0,
       totalProducts: Number(shop.totalProducts) || 0,
@@ -920,8 +1084,12 @@ async function getAdminDashboard(query = {}) {
       escrowReservationsCount: Number(escrowByReservations.count) || 0,
       sellerPlansSoldInRange: sellerPlanSalesInRange.count,
       sellerPlanRevenueInRange: sellerPlanSalesInRange.revenue,
+      sellerPlansSoldAllTime: sellerPlanSalesAllTime.count,
+      sellerPlanRevenueAllTime: sellerPlanSalesAllTime.revenue,
       bannerPlansSoldInRange: bannerPlanSalesInRange.count,
       bannerPlanRevenueInRange: bannerPlanSalesInRange.revenue,
+      bannerPlansSoldAllTime: bannerPlanSalesAllTime.count,
+      bannerPlanRevenueAllTime: bannerPlanSalesAllTime.revenue,
       sellerPlansSoldThisMonth: sellerPlanSalesThisMonth.count,
       sellerPlanRevenueThisMonth: sellerPlanSalesThisMonth.revenue,
       bannerPlansSoldThisMonth: bannerPlanSalesThisMonth.count,
@@ -966,16 +1134,12 @@ async function getAdminDashboard(query = {}) {
       topShops: topShopsMapped,
       topSellingShops,
       topSellingProducts,
-      sellerPlansThisMonth: sellerPlanBreakdown.map((row) => ({
-        planName: row._id || "Gói không tên",
-        count: Number(row.count) || 0,
-        revenue: Number(row.revenue) || 0,
-      })),
-      bannerPlansThisMonth: bannerPlanBreakdown.map((row) => ({
-        planName: row._id || "Gói không tên",
-        count: Number(row.count) || 0,
-        revenue: Number(row.revenue) || 0,
-      })),
+      sellerPlansInRange: mapPlanBreakdownRows(sellerPlanBreakdownInRange),
+      bannerPlansInRange: mapPlanBreakdownRows(bannerPlanBreakdownInRange),
+      sellerPlansAllTime: mapPlanBreakdownRows(sellerPlanBreakdownAllTime),
+      bannerPlansAllTime: mapPlanBreakdownRows(bannerPlanBreakdownAllTime),
+      sellerPlansThisMonth: mapPlanBreakdownRows(sellerPlanBreakdownInRange),
+      bannerPlansThisMonth: mapPlanBreakdownRows(bannerPlanBreakdownInRange),
     },
   };
 }

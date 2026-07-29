@@ -7,7 +7,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,14 +20,34 @@ import {
   getMySellerVerificationOnBackend,
   submitSellerVerificationOnBackend,
 } from '../../api/sellerApi';
+import { checkSellerShopUsernameAvailabilityOnBackend } from '../../api/sellerOpsApi';
 import { resolveErrorMessage } from '../../core/utils/resolveErrorMessage';
 import { logErrorDetails } from '../../core/utils/logger';
 import { reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import { CategoryCombobox } from './SellerProductFormFields';
 import SellerLocationPickerScreen from './SellerLocationPickerScreen';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
+
+const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
+
+function normalizeShopUsername(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getShopUsernameFormatError(value) {
+  const normalized = normalizeShopUsername(value);
+  if (!normalized) {
+    return 'Vui lòng nhập username gian hàng.';
+  }
+  if (!SHOP_USERNAME_PATTERN.test(normalized)) {
+    return 'Username shop: 3-30 ký tự, chữ thường, số và dấu _.';
+  }
+  return '';
+}
 
 function parseImageAsset(result) {
   if (result.canceled || !result.assets?.[0]) {
@@ -166,7 +185,10 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
   const [categoryId, setCategoryId] = useState('');
-  const [shopDescription, setShopDescription] = useState('');
+  const [shopName, setShopName] = useState('');
+  const [shopUsername, setShopUsername] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [isCheckingShopUsername, setIsCheckingShopUsername] = useState(false);
   const [categories, setCategories] = useState([]);
   const [isLoadingCategories, setIsLoadingCategories] = useState(true);
   const [error, setError] = useState('');
@@ -196,7 +218,7 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
         }
       } catch (loadError) {
         if (isMounted) {
-          setError(loadError.message || 'Không tải được danh mục kinh doanh.');
+          showErrorAlert(loadError.message || 'Không tải được danh mục kinh doanh.');
           setCategories([]);
         }
       } finally {
@@ -234,10 +256,11 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
         ? Number(initialVerification.longitude)
         : null
     );
-    setShopDescription(initialVerification.shopDescription || '');
     setCategoryId((current) =>
       current || normalizeCategoryId(initialVerification.categoryId)
     );
+    setShopName((current) => current || initialVerification.shopName || '');
+    setShopUsername((current) => current || initialVerification.shopUsername || '');
 
     if (initialVerification.cccdFrontImage) {
       setCccdFront({ uri: initialVerification.cccdFrontImage });
@@ -258,7 +281,7 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
         setter(image);
       }
     } catch (pickError) {
-      setError(pickError.message || 'Không chọn được ảnh.');
+      showErrorAlert(pickError.message || 'Không chọn được ảnh.');
     }
   }
 
@@ -284,7 +307,7 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
       const displayName = await reverseGeocodeLocation(nextLat, nextLng);
       setSystemAddress(displayName || '');
     } catch (locationError) {
-      setError(locationError.message || 'Không lấy được vị trí hiện tại.');
+      showErrorAlert(locationError.message || 'Không lấy được vị trí hiện tại.');
     } finally {
       setIsLocating(false);
     }
@@ -296,6 +319,50 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
     setSystemAddress(picked || '');
     setIsPickingLocation(false);
     setError('');
+  }
+
+  async function verifyShopUsernameAvailability(nextUsername) {
+    const normalized = normalizeShopUsername(nextUsername);
+    const formatError = getShopUsernameFormatError(normalized);
+    if (formatError) {
+      setFieldErrors((current) => ({ ...current, shopUsername: formatError }));
+      return false;
+    }
+
+    const initialUsername = normalizeShopUsername(initialVerification?.shopUsername || '');
+    if (initialUsername && normalized === initialUsername) {
+      setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+      return true;
+    }
+
+    setIsCheckingShopUsername(true);
+    try {
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) {
+        throw new Error('Phiên đăng nhập đã hết hạn.');
+      }
+      const result = await checkSellerShopUsernameAvailabilityOnBackend({
+        idToken,
+        shopUsername: normalized,
+      });
+      if (!result?.available) {
+        setFieldErrors((current) => ({
+          ...current,
+          shopUsername: result?.message || 'Username shop đã được sử dụng.',
+        }));
+        return false;
+      }
+      setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+      return true;
+    } catch (checkError) {
+      setFieldErrors((current) => ({
+        ...current,
+        shopUsername: checkError.message || 'Không kiểm tra được username shop.',
+      }));
+      return false;
+    } finally {
+      setIsCheckingShopUsername(false);
+    }
   }
 
   async function handleSubmit() {
@@ -318,24 +385,26 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
       return;
     }
 
-    if (!String(profile?.fullName || '').trim()) {
-      setError('Hãy cập nhật họ tên tài khoản trước khi đăng ký bán.');
+    if (!String(shopName || '').trim() || String(shopName).trim().length < 2) {
+      setError('Tên gian hàng phải từ 2 ký tự trở lên.');
       return;
     }
 
-    if (!String(profile?.userName || '').trim()) {
-      setError('Hãy cập nhật username tài khoản trước khi đăng ký bán.');
+    const usernameFormatError = getShopUsernameFormatError(shopUsername);
+    if (usernameFormatError || fieldErrors.shopUsername || isCheckingShopUsername) {
+      setError(usernameFormatError || fieldErrors.shopUsername || 'Đang kiểm tra username shop...');
+      return;
+    }
+
+    const usernameOk = await verifyShopUsernameAvailability(shopUsername);
+    if (!usernameOk) {
+      setError(fieldErrors.shopUsername || 'Username shop không hợp lệ.');
       return;
     }
 
     const normalizedCategoryId = normalizeCategoryId(categoryId);
     if (!isValidCategoryId(normalizedCategoryId)) {
       setError('Vui lòng chọn danh mục kinh doanh.');
-      return;
-    }
-
-    if (!shopDescription.trim()) {
-      setError('Vui lòng nhập giới thiệu shop.');
       return;
     }
 
@@ -387,7 +456,8 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
             systemAddress: systemAddress.trim(),
             addressHeThong: systemAddress.trim(),
             categoryId: normalizedCategoryId,
-            shopDescription: shopDescription.trim(),
+            shopName: String(shopName).trim(),
+            shopUsername: normalizeShopUsername(shopUsername),
             latitude,
             longitude,
           },
@@ -420,7 +490,7 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
       }
     } catch (submitError) {
       logErrorDetails('SellerRegistration', 'submit failed', submitError);
-      setError(
+      showErrorAlert(
         resolveErrorMessage(submitError, 'Không gửi được hồ sơ đăng ký.')
       );
     } finally {
@@ -480,13 +550,45 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
         />
 
         <View style={styles.field}>
-          <Text style={styles.label}>Tên hiển thị & username</Text>
-          <Text style={styles.readOnlyValue}>
-            {profile?.fullName || 'Chưa có họ tên'} · @{profile?.userName || '—'}
-          </Text>
-          <Text style={styles.fieldHint}>
-            Gian hàng dùng chung họ tên và username tài khoản. Đổi ở tab Tài khoản nếu cần.
-          </Text>
+          <Text style={styles.label}>Tên gian hàng</Text>
+          <KeyboardAwareTextInput
+            value={shopName}
+            onChangeText={(value) => {
+              setShopName(value);
+              setError('');
+            }}
+            placeholder="Tên hiển thị của gian hàng"
+            placeholderTextColor="#94a3b8"
+            style={styles.textInput}
+          />
+          <Text style={styles.fieldHint}>Tên công khai trên FastMark, khác họ tên tài khoản.</Text>
+        </View>
+
+        <View style={styles.field}>
+          <Text style={styles.label}>Username gian hàng</Text>
+          <KeyboardAwareTextInput
+            value={shopUsername}
+            onChangeText={(value) => {
+              setShopUsername(normalizeShopUsername(value));
+              setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+              setError('');
+            }}
+            onBlur={() => {
+              if (shopUsername.trim()) {
+                verifyShopUsernameAvailability(shopUsername);
+              }
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="vd: tiembanh_123"
+            placeholderTextColor="#94a3b8"
+            style={[styles.textInput, fieldErrors.shopUsername ? styles.textInputError : null]}
+          />
+          {fieldErrors.shopUsername ? (
+            <Text style={styles.fieldError}>{fieldErrors.shopUsername}</Text>
+          ) : (
+            <Text style={styles.fieldHint}>Chỉ chữ thường, số và dấu _. Hiển thị dạng @username.</Text>
+          )}
         </View>
 
         <View style={styles.field}>
@@ -511,18 +613,6 @@ export default function SellerRegistrationScreen({ onBack, onSubmitted, initialV
               />
             </>
           )}
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>Giới thiệu shop</Text>
-          <TextInput
-            value={shopDescription}
-            onChangeText={setShopDescription}
-            placeholder="Mô tả ngắn về gian hàng, sản phẩm chính, phong cách bán hàng..."
-            placeholderTextColor="#94a3b8"
-            style={[styles.input, styles.noteInput]}
-            multiline
-          />
         </View>
 
         <View style={styles.locationBox}>
@@ -656,6 +746,24 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontWeight: '600',
   },
+  fieldError: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '600',
+  },
+  textInput: {
+    minHeight: 46,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    color: '#0f172a',
+    backgroundColor: '#ffffff',
+  },
+  textInputError: {
+    borderColor: '#fca5a5',
+  },
   readOnlyValue: {
     fontSize: 15,
     fontWeight: '700',
@@ -706,21 +814,6 @@ const styles = StyleSheet.create({
     color: '#076F32',
     fontSize: 14,
     fontWeight: '800',
-  },
-  input: {
-    minHeight: 48,
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    color: '#0f172a',
-    backgroundColor: '#ffffff',
-    fontSize: 15,
-  },
-  noteInput: {
-    minHeight: 96,
-    paddingTop: 12,
-    textAlignVertical: 'top',
   },
   locationBox: {
     marginBottom: 16,

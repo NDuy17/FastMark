@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { markNotificationReadOnBackend } from '../../api/notificationApi';
 
 function formatNotificationTime(value) {
@@ -75,11 +75,7 @@ export default function NotificationDetailScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} variant="surface" />
-        <Text style={styles.headerTitle}>Chi tiết thông báo</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+      <SubScreenHeader title="Chi tiết thông báo" onBack={onBack} />
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
@@ -113,26 +109,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f8fafc',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
-  headerSpacer: {
-    width: 40,
   },
   content: {
     padding: 16,

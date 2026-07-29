@@ -3,10 +3,11 @@ const mongoose = require("mongoose");
 /**
  * Report — báo cáo / khiếu nại.
  *
- * Hai nhóm:
+ * Ba nhóm:
  * 1) Nội dung: review / user / shop / product / system / other (reportType 1–4, 8–9).
  * 2) Giữ hàng / tranh chấp cọc: BUYER_NO_SHOW / SELLER_NO_SHOW / … (5–7, 9)
  *    — gắn reservationId, GPS, mô tả; tối đa 5 ReportImage.
+ * 3) Khiếu nại khóa: ACCOUNT_LOCK_APPEAL (10) | SHOP_LOCK_APPEAL (11) — 1 lần/lượt khóa.
  */
 const ReportSchema = new mongoose.Schema({
   // Người gửi báo cáo (ref User).
@@ -17,7 +18,7 @@ const ReportSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
   // Gian hàng bị báo cáo / liên quan.
   shopId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopProfile", index: true },
-  // Đơn giữ hàng liên quan (bắt buộc với reportType 5–8).
+  // Đơn giữ hàng liên quan (bắt buộc với reportType 5–7).
   reservationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Reservation",
@@ -31,7 +32,7 @@ const ReportSchema = new mongoose.Schema({
    * Loại báo cáo:
    * 1 đánh giá | 2 user | 3 shop | 4 product
    * 5 BUYER_NO_SHOW | 6 SELLER_NO_SHOW | 7 PRODUCT_ISSUE
-   * 8 SYSTEM | 9 OTHER
+   * 8 SYSTEM | 9 OTHER | 10 ACCOUNT_LOCK_APPEAL | 11 SHOP_LOCK_APPEAL
    */
   reportType: { type: Number, required: true, index: true },
   /**
@@ -61,6 +62,9 @@ const ReportSchema = new mongoose.Schema({
 
   // Trạng thái: 0 = chờ xử lý, 1 = đã duyệt/xử lý, 2 = bác bỏ.
   status: { type: Number, default: 0, index: true },
+
+  // Mốc lượt khóa khi tạo khiếu nại (đối chiếu user.lockedAt / shop.lockedAt).
+  lockSessionAt: { type: Date, default: null },
 
   // Admin xử lý (ref User).
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

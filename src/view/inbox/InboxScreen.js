@@ -7,7 +7,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useSelector } from 'react-redux';
 
 import {
@@ -20,10 +19,12 @@ import {
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
+import { useMessageInboxSocket } from '../../hooks/useMessageInboxSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { selectIsSeller } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import ChatScreen from './ChatScreen';
 import NotificationDetailScreen from './NotificationDetailScreen';
@@ -201,6 +202,17 @@ export default function InboxScreen({
     onNotificationNew: handleRealtimeNotification,
   });
 
+  const handleInboxMessageSent = useCallback(() => {
+    if (messagesOnly || activeTab === 'messages') {
+      loadConversations();
+    }
+  }, [activeTab, loadConversations, messagesOnly]);
+
+  useMessageInboxSocket({
+    enabled: !messagesOnly,
+    onMessageSent: handleInboxMessageSent,
+  });
+
   useEffect(() => {
     if (buyerView || messagesOnly || activeTab === 'messages') {
       loadConversations();
@@ -295,17 +307,7 @@ export default function InboxScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        {onBack ? (
-          <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={22} color="#0f172a" />
-          </Pressable>
-        ) : (
-          <View style={styles.backBtn} />
-        )}
-        <Text style={styles.title}>Tin nhắn</Text>
-        <View style={styles.backBtn} />
-      </View>
+      <SubScreenHeader title="Tin nhắn" onBack={onBack} />
 
       {showInboxTabs ? (
         <View style={styles.tabRow}>
@@ -494,27 +496,6 @@ export default function InboxScreen({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f8fafc' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 12,
-    paddingHorizontal: 12,
-    paddingBottom: 12,
-    backgroundColor: '#ffffff',
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0f172a',
-    textAlign: 'center',
-  },
   tabRow: {
     flexDirection: 'row',
     gap: 8,

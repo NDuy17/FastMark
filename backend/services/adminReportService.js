@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Report = require("../models/Report");
 const ReportImage = require("../models/ReportImage");
 const Review = require("../models/Review");
@@ -15,13 +16,78 @@ const {
   SHOP_STATUS,
   SHOP_OPEN,
   NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
   USER_ROLE,
 } = require("../constants");
 const { resolveMediaUrl } = require("../utils/resolveMediaUrl");
 const { createNotification } = require("./notificationService");
-const { blockAccount } = require("./adminAccountService");
+const { emitAdminUpdated } = require("./realtimeService");
+const { notifyReviewerReviewModerated } = require("./adminReviewService");
+const { blockAccount, unblockAccount } = require("./adminAccountService");
+const { setShopStatus } = require("./adminCatalogService");
+const { isLegacyShopLockAppealReport } = require("./reportService");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+} = require("../utils/shopIdentity");
+const { buildSearchRegex } = require("../utils/searchText");
+const {
+  findUsersBySearchRegex,
+  buildObjectIdSearchConditions,
+  appendStatusLabelSearchConditions,
+  appendUniqueOrConditions,
+} = require("../utils/adminSearchHelpers");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 
 const SEED_DEMO_TAG = "seed-report-demo";
+
+const MEMBER_REPORT_TYPES = [
+  REPORT_TYPE.USER,
+  REPORT_TYPE.SHOP,
+  REPORT_TYPE.ACCOUNT_LOCK_APPEAL,
+  REPORT_TYPE.SHOP_LOCK_APPEAL,
+];
+
+function isAccountLockAppealReport(report) {
+  return Number(report?.reportType) === REPORT_TYPE.ACCOUNT_LOCK_APPEAL;
+}
+
+function isShopLockAppealReport(report) {
+  if (Number(report?.reportType) === REPORT_TYPE.SHOP_LOCK_APPEAL) {
+    return true;
+  }
+  return isLegacyShopLockAppealReport(report);
+}
+
+function isReservationDisputeReport(report) {
+  const type = Number(report?.reportType);
+  if (
+    [REPORT_TYPE.BUYER_NO_SHOW, REPORT_TYPE.SELLER_NO_SHOW, REPORT_TYPE.PRODUCT_ISSUE].includes(
+      type
+    )
+  ) {
+    return true;
+  }
+  return type === REPORT_TYPE.OTHER && Boolean(report?.reservationId);
+}
+
+function resolveReportTypeLabel(report) {
+  if (isShopLockAppealReport(report)) {
+    return REPORT_TYPE_LABELS[REPORT_TYPE.SHOP_LOCK_APPEAL];
+  }
+  return REPORT_TYPE_LABELS[report.reportType] || "Không rõ";
+}
+
+async function resolveShopIdForShopLockAppeal(report) {
+  if (report.shopId) {
+    return report.shopId;
+  }
+  if (!report.userId) {
+    return null;
+  }
+  const shop = await ShopProfile.findOne({ userId: report.userId }).select("_id").lean();
+  return shop?._id || null;
+}
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -42,16 +108,7 @@ function isStrictMongoObjectId(value) {
 }
 
 function pickShopDisplayName(shop, owner = null) {
-  if (!shop && !owner) {
-    return "";
-  }
-  // Tên gian hàng = FullName/UserName chủ shop; description chỉ là bio, không dùng làm tên.
-  return (
-    pickString(owner?.FullName) ||
-    pickString(owner?.UserName) ||
-    pickString(shop?.shopName) ||
-    ""
-  );
+  return resolveShopDisplayName(shop, owner);
 }
 
 async function loadReportTargetContext(reports) {
@@ -337,7 +394,7 @@ function toReportListItem(report, reporter, targetUser, targetNames = {}) {
   return {
     id: String(report._id),
     reportType: report.reportType,
-    reportTypeLabel: REPORT_TYPE_LABELS[report.reportType] || "Không rõ",
+    reportTypeLabel: resolveReportTypeLabel(report),
     title: report.title || "",
     content: report.content || "",
     description: report.content || report.description || "",
@@ -358,18 +415,38 @@ function toReportListItem(report, reporter, targetUser, targetNames = {}) {
   };
 }
 
-async function buildReportFilter({ search, reportType, status }) {
+async function buildReportFilter({ search, reportType, status, scope, productId, from, to }) {
   const filter = {};
   const normalizedType = pickString(reportType);
   const normalizedStatus = pickString(status);
+  const normalizedScope = pickString(scope);
   const keyword = pickString(search);
+  const normalizedProductId = pickString(productId);
+
+  const hasProductScope =
+    normalizedProductId && mongoose.Types.ObjectId.isValid(normalizedProductId);
+
+  if (hasProductScope) {
+    filter.productId = new mongoose.Types.ObjectId(normalizedProductId);
+  }
 
   // Tab Báo cáo chỉ quản lý báo cáo nội dung (review/user/shop/product).
   // Khiếu nại đơn giữ hàng → tab Tranh chấp.
-  if (normalizedType !== "" && CONTENT_REPORT_TYPES.includes(Number(normalizedType))) {
+  // Trang chi tiết sản phẩm truyền productId → hiển thị mọi báo cáo gắn sản phẩm (kể cả sự cố giữ hàng).
+  if (!hasProductScope) {
+    if (normalizedScope === "members") {
+      if (normalizedType !== "" && MEMBER_REPORT_TYPES.includes(Number(normalizedType))) {
+        filter.reportType = Number(normalizedType);
+      } else {
+        filter.reportType = { $in: MEMBER_REPORT_TYPES };
+      }
+    } else if (normalizedType !== "" && CONTENT_REPORT_TYPES.includes(Number(normalizedType))) {
+      filter.reportType = Number(normalizedType);
+    } else {
+      filter.reportType = { $in: CONTENT_REPORT_TYPES };
+    }
+  } else if (normalizedType !== "" && Number.isFinite(Number(normalizedType))) {
     filter.reportType = Number(normalizedType);
-  } else {
-    filter.reportType = { $in: CONTENT_REPORT_TYPES };
   }
 
   if (normalizedStatus === "history" || normalizedStatus === "processed") {
@@ -386,27 +463,30 @@ async function buildReportFilter({ search, reportType, status }) {
   }
 
   if (keyword) {
-    const escaped = escapeRegex(keyword);
-    const regex = new RegExp(escaped, "i");
-    const matchedUsers = await User.find({
-      $or: [
-        { UserName: regex },
-        { FullName: regex },
-        { Email: regex },
-        { Phone: regex },
-      ],
-    })
-      .select("_id")
-      .lean();
+    const orConditions = [];
+    const regex = buildSearchRegex(keyword);
 
-    const userIds = matchedUsers.map((user) => user._id);
+    if (regex) {
+      const matchedUsers = await findUsersBySearchRegex(User, regex);
+      const userIds = matchedUsers.map((user) => user._id);
 
-    filter.$or = [
-      { title: regex },
-      { content: regex },
-      ...(userIds.length ? [{ userId: { $in: userIds } }, { targetUserId: { $in: userIds } }] : []),
-    ];
+      orConditions.push(
+        { title: regex },
+        { content: regex },
+        ...(userIds.length ? [{ userId: { $in: userIds } }, { targetUserId: { $in: userIds } }] : [])
+      );
+    }
+
+    appendStatusLabelSearchConditions(orConditions, keyword, REPORT_STATUS_LABELS);
+    appendStatusLabelSearchConditions(orConditions, keyword, REPORT_TYPE_LABELS, [], "reportType");
+    orConditions.push(...buildObjectIdSearchConditions(keyword));
+
+    if (orConditions.length) {
+      appendUniqueOrConditions(filter, orConditions);
+    }
   }
+
+  applyCreatedAtRange(filter, { from, to });
 
   return filter;
 }
@@ -421,13 +501,19 @@ async function listReports({
   search = "",
   reportType = "",
   status = "",
+  scope = "",
+  productId = "",
+  from = "",
+  to = "",
   page = 1,
   limit = 20,
 } = {}) {
   const currentPage = Math.max(1, Number(page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(limit) || 20));
   const skip = (currentPage - 1) * pageSize;
-  const filter = buildDatabaseQuery(await buildReportFilter({ search, reportType, status }));
+  const filter = buildDatabaseQuery(
+    await buildReportFilter({ search, reportType, status, scope, productId, from, to })
+  );
 
   const [reports, total] = await Promise.all([
     Report.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(pageSize).lean(),
@@ -541,7 +627,7 @@ async function getReportDetail(reportId) {
   return {
     id: String(report._id),
     reportType: report.reportType,
-    reportTypeLabel: REPORT_TYPE_LABELS[report.reportType] || "Không rõ",
+    reportTypeLabel: resolveReportTypeLabel(report),
     title: report.title || "",
     content: report.content || "",
     description: report.content || report.description || "",
@@ -601,6 +687,7 @@ async function notifyReporter(report, { title, content }) {
       content ||
       "Báo cáo của bạn đã được hệ thống cập nhật. Cảm ơn bạn đã đóng góp.",
     audience: NOTIFICATION_AUDIENCE.SYSTEM,
+    index: NOTIFICATION_INDEX.SYSTEM,
   });
 }
 
@@ -608,22 +695,52 @@ const DEFAULT_APPROVE_REPLY =
   "Cảm ơn bạn đã báo cáo. Chúng tôi đã tiếp nhận và sẽ xem xét lại nội dung này.";
 const DEFAULT_DISMISS_REPLY =
   "Báo cáo của bạn đã bị bác bỏ. Cảm ơn bạn đã đóng góp ý kiến.";
+const DEFAULT_LOCK_APPEAL_APPROVE_REPLY =
+  "Khiếu nại đã được chấp nhận. Tài khoản của bạn đã được mở khóa.";
+const DEFAULT_LOCK_APPEAL_DISMISS_REPLY =
+  "Khiếu nại khóa tài khoản đã bị từ chối. Tài khoản vẫn bị khóa.";
+const DEFAULT_SHOP_LOCK_APPEAL_APPROVE_REPLY =
+  "Khiếu nại đã được chấp nhận. Gian hàng của bạn đã được mở khóa.";
+const DEFAULT_SHOP_LOCK_APPEAL_DISMISS_REPLY =
+  "Khiếu nại khóa gian hàng đã bị từ chối. Gian hàng vẫn bị khóa.";
 
 async function dismissReport(adminUser, reportId, { replyMessage } = {}) {
   const report = await assertPendingReport(reportId);
   const now = new Date();
-  const message = pickString(replyMessage) || DEFAULT_DISMISS_REPLY;
+  const isAccountLockAppeal = isAccountLockAppealReport(report);
+  const isShopLockAppeal = isShopLockAppealReport(report);
+  const message =
+    pickString(replyMessage) ||
+    (isAccountLockAppeal
+      ? DEFAULT_LOCK_APPEAL_DISMISS_REPLY
+      : isShopLockAppeal
+        ? DEFAULT_SHOP_LOCK_APPEAL_DISMISS_REPLY
+        : DEFAULT_DISMISS_REPLY);
 
   report.status = REPORT_STATUS.REJECTED;
   report.processedBy = adminUser._id;
   report.processedAt = now;
   report.adminNote = message;
+  report.adminDecision = isAccountLockAppeal
+    ? "reject-lock-appeal"
+    : isShopLockAppeal
+      ? "reject-shop-lock-appeal"
+      : "dismiss";
   report.UpdatedAt = now;
   await report.save();
 
   await notifyReporter(report, {
-    title: "Tố cáo đã bị bác bỏ",
+    title: isAccountLockAppeal
+      ? "Khiếu nại khóa tài khoản bị từ chối"
+      : isShopLockAppeal
+        ? "Khiếu nại khóa gian hàng bị từ chối"
+        : "Tố cáo đã bị bác bỏ",
     content: message,
+  });
+
+  emitAdminUpdated("report", {
+    reportId: String(report._id),
+    status: REPORT_STATUS.REJECTED,
   });
 
   return getReportDetail(report._id);
@@ -644,6 +761,9 @@ async function applyReviewAction(report, action) {
     throw createServiceError("Không tìm thấy đánh giá liên quan.", 404);
   }
 
+  const wasHidden = Boolean(review.isHidden);
+  const wasDeleted = Boolean(review.isDeleted);
+
   if (action === "hide") {
     review.isHidden = true;
   } else if (action === "delete") {
@@ -656,6 +776,11 @@ async function applyReviewAction(report, action) {
 
   review.UpdatedAt = new Date();
   await review.save();
+  if (action === "hide" && !wasHidden) {
+    await notifyReviewerReviewModerated(review, "hidden");
+  } else if (action === "delete" && !wasDeleted) {
+    await notifyReviewerReviewModerated(review, "deleted");
+  }
   return review;
 }
 
@@ -689,6 +814,7 @@ async function notifyShopOwner(shop, title, content) {
     title,
     content,
     audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.SYSTEM,
   });
 }
 
@@ -727,6 +853,7 @@ async function applyShopAction(report, action, adminUser) {
     shop.status = SHOP_STATUS.BLOCKED;
     shop.isOpen = SHOP_OPEN.CLOSED;
     shop.suspendedUntil = suspendedUntil;
+    shop.lockedAt = now;
     shop.UpdatedAt = now;
     await shop.save();
     await hideShopProducts(shop._id);
@@ -743,6 +870,7 @@ async function applyShopAction(report, action, adminUser) {
     shop.isOpen = SHOP_OPEN.CLOSED;
     shop.permanentlyClosedAt = now;
     shop.suspendedUntil = null;
+    shop.lockedAt = now;
     shop.UpdatedAt = now;
     await shop.save();
     await hideShopProducts(shop._id);
@@ -787,6 +915,7 @@ async function applyUserAction(report, action, adminUser) {
       title: "Cảnh cáo vi phạm",
       content: `Tài khoản của bạn đã nhận cảnh cáo từ quản trị viên do báo cáo "${report.title || "Vi phạm"}". Vui lòng tuân thủ quy định của FastMark.`,
       audience: NOTIFICATION_AUDIENCE.SYSTEM,
+      index: NOTIFICATION_INDEX.SYSTEM,
     });
     return { action: "warn" };
   }
@@ -803,16 +932,55 @@ async function approveReport(adminUser, reportId, { action, replyMessage } = {})
   const report = await assertPendingReport(reportId);
 
   // Báo cáo tranh chấp giữ hàng → dùng approve-buyer / approve-seller / reject.
-  if (RESERVATION_REPORT_TYPES.includes(Number(report.reportType))) {
+  if (isReservationDisputeReport(report)) {
     throw createServiceError(
       "Báo cáo giữ hàng: dùng /admin/reports/:id/approve-buyer | approve-seller | reject.",
       400
     );
   }
 
-  const message = pickString(replyMessage) || DEFAULT_APPROVE_REPLY;
-  // Chỉ duyệt + gửi thông báo cho người tố cáo — không áp dụng xử lý đối tượng.
-  const normalizedAction = "resolve";
+  const isAccountLockAppeal = isAccountLockAppealReport(report);
+  const isShopLockAppeal = isShopLockAppealReport(report);
+  const message =
+    pickString(replyMessage) ||
+    (isAccountLockAppeal
+      ? DEFAULT_LOCK_APPEAL_APPROVE_REPLY
+      : isShopLockAppeal
+        ? DEFAULT_SHOP_LOCK_APPEAL_APPROVE_REPLY
+        : DEFAULT_APPROVE_REPLY);
+  const normalizedAction = isAccountLockAppeal
+    ? "unlock-account"
+    : isShopLockAppeal
+      ? "unlock-shop"
+      : "resolve";
+
+  if (isAccountLockAppeal) {
+    if (!report.userId) {
+      throw createServiceError("Khiếu nại thiếu người gửi.", 400);
+    }
+    try {
+      await unblockAccount(adminUser, report.userId);
+    } catch (unlockError) {
+      // Đã mở khóa rồi thì vẫn đánh dấu khiếu nại đã xử lý.
+      if (!/đang hoạt động/i.test(String(unlockError.message || ""))) {
+        throw unlockError;
+      }
+    }
+  }
+
+  if (isShopLockAppeal) {
+    const shopId = await resolveShopIdForShopLockAppeal(report);
+    if (!shopId) {
+      throw createServiceError("Khiếu nại thiếu thông tin gian hàng.", 400);
+    }
+    try {
+      await setShopStatus(shopId, SHOP_STATUS.ACTIVE);
+    } catch (unlockError) {
+      if (!/đang hoạt động/i.test(String(unlockError.message || ""))) {
+        throw unlockError;
+      }
+    }
+  }
 
   const now = new Date();
   report.status = REPORT_STATUS.PROCESSED;
@@ -824,8 +992,18 @@ async function approveReport(adminUser, reportId, { action, replyMessage } = {})
   await report.save();
 
   await notifyReporter(report, {
-    title: "Tố cáo đã được duyệt",
+    title: isAccountLockAppeal
+      ? "Tài khoản đã được mở khóa"
+      : isShopLockAppeal
+        ? "Gian hàng đã được mở khóa"
+        : "Tố cáo đã được duyệt",
     content: message,
+  });
+
+  emitAdminUpdated("report", {
+    reportId: String(report._id),
+    status: REPORT_STATUS.PROCESSED,
+    action: normalizedAction,
   });
 
   return getReportDetail(report._id);

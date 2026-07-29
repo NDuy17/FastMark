@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch } from 'react-redux';
 
 import { discoverProductsOnBackend, getProductCategoriesOnBackend, listPromotionProductsOnBackend } from '../../api/productApi';
 import {
@@ -26,27 +26,33 @@ import {
 import { listActiveBannersOnBackend, recordBannerClickOnBackend } from '../../api/bannerApi';
 import { formatDistance, hasValidLocation, normalizeExpoLocation, calculateDistanceMeters } from '../../core/utils/geo';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
+import { confirmLogout } from '../../core/utils/appAlert';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
 import { normalizeProduct } from '../../model/productModel';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-import {
-  selectSellerVerification,
-  selectUserRole,
-} from '../../viewmodel/auth/authSelectors';
+import { usePublicSocket } from '../../hooks/usePublicSocket';
 import { logoutUser } from '../../viewmodel/auth/authSlice';
-import { getSellerRegisterButtonLabel } from '../seller/sellerRegistrationFlow';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
 import SearchScreen from './SearchScreen';
-import InboxScreen from '../inbox/InboxScreen';
+import BuyerProfileScreen from '../profile/BuyerProfileScreen';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import BuyerQuickMenu from '../shared/components/BuyerQuickMenu';
 
-const NEARBY_RADIUS_METERS = 20000;
-const ALL_PRODUCTS_RADIUS_METERS = 0;
+const NEARBY_RADIUS_METERS = 5000;
+const ALL_PRODUCTS_RADIUS_METERS = 20000;
+const PROMOTION_MAX_DISTANCE_METERS = 5000;
+
+function isWithinRadiusMeters(distanceMeters, maxMeters) {
+  const value = Number(distanceMeters);
+  if (!Number.isFinite(value) || value < 0) {
+    return false;
+  }
+  return value <= maxMeters;
+}
 
 function SectionHeader({ title, onSeeAll }) {
   return (
@@ -236,9 +242,11 @@ function CategoryChip({ category, label, onPress, active = false }) {
 }
 
 const BANNER_AUTO_MS = 3000;
-const BANNER_FALLBACK_WIDTH = Dimensions.get('window').width - 32;
-/** Khớp bề ngang card “Sản phẩm gần bạn”; cao hơn một chút để ảnh banner rõ hơn. */
-const NEARBY_BANNER_HEIGHT = 140;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const BANNER_FALLBACK_WIDTH = SCREEN_WIDTH;
+/** Banner full màn hình — tỉ lệ gần mockup trang chủ. */
+const NEARBY_BANNER_HEIGHT = Math.round(SCREEN_WIDTH * 0.44);
+const HOME_HORIZONTAL_PADDING = 4;
 
 function shuffleBannerList(items = []) {
   const next = Array.isArray(items) ? [...items] : [];
@@ -406,21 +414,15 @@ export default function HomeScreen({
   onStartSellerRegister,
   onOpenShop,
   onOpenWalletTopUp,
-  onOpenChat,
   onNavigateDirections,
   resumeReserveRequest = null,
   onResumeReserveHandled,
+  keepNestedAcrossTabs = false,
   isScreenActive = true,
   onNavigationStateChange,
-  unreadMessagesCount = 0,
 }) {
   const insets = useScreenInsets();
   const dispatch = useDispatch();
-  const role = useSelector(selectUserRole);
-  const sellerVerification = useSelector(selectSellerVerification);
-  const sellerButtonLabel =
-    getSellerRegisterButtonLabel({ role, verification: sellerVerification }) ||
-    (Number(role) === 2 ? 'Gian hàng' : '');
 
   const [currentLocation, setCurrentLocation] = useState(null);
   const [products, setProducts] = useState([]);
@@ -437,22 +439,10 @@ export default function HomeScreen({
   const [locationChecked, setLocationChecked] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState(null);
+  const [selectedBuyerUserId, setSelectedBuyerUserId] = useState(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
   const [showSearchScreen, setShowSearchScreen] = useState(false);
-  const [showInboxScreen, setShowInboxScreen] = useState(false);
-  const [chatOpenRequest, setChatOpenRequest] = useState(null);
   const [seeAllSection, setSeeAllSection] = useState(null);
-
-  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
-    if (!shopId) {
-      return;
-    }
-    setChatOpenRequest({
-      shopId: String(shopId),
-      shopName: shopName || 'Gian hàng',
-      at: Date.now(),
-    });
-  }, []);
 
   useEffect(() => {
     onNavigationStateChange?.(
@@ -460,33 +450,30 @@ export default function HomeScreen({
         isScreenActive &&
           (selectedProductId ||
             selectedStoreId ||
+            selectedBuyerUserId ||
             showSearchScreen ||
-            showInboxScreen ||
-            chatOpenRequest ||
             seeAllSection)
       )
     );
   }, [
-    chatOpenRequest,
     isScreenActive,
     onNavigationStateChange,
     seeAllSection,
+    selectedBuyerUserId,
     selectedProductId,
     selectedStoreId,
     showSearchScreen,
-    showInboxScreen,
   ]);
 
   useEffect(() => {
-    if (isScreenActive) {
+    if (isScreenActive || keepNestedAcrossTabs) {
       return;
     }
     setSelectedProductId(null);
     setSelectedStoreId(null);
+    setSelectedBuyerUserId(null);
     setShowSearchScreen(false);
-    setShowInboxScreen(false);
-    setChatOpenRequest(null);
-  }, [isScreenActive]);
+  }, [isScreenActive, keepNestedAcrossTabs]);
 
   useEffect(() => {
     if (!resumeReserveRequest?.productId || !resumeReserveRequest?.at) {
@@ -667,7 +654,8 @@ export default function HomeScreen({
         });
 
         setPromotionProducts(
-          (Array.isArray(promoRows) ? promoRows : []).map((row) => {
+          (Array.isArray(promoRows) ? promoRows : [])
+            .map((row) => {
             const product = normalizeProduct(row);
             const fromDiscover =
               distanceByProductId.get(product.id) ??
@@ -703,6 +691,9 @@ export default function HomeScreen({
 
             return { ...product, distanceMeters };
           })
+            .filter((product) =>
+              isWithinRadiusMeters(product.distanceMeters, PROMOTION_MAX_DISTANCE_METERS)
+            )
         );
       } finally {
         setIsLoading(false);
@@ -720,6 +711,19 @@ export default function HomeScreen({
   useEffect(() => {
     loadNearbyContent();
   }, [loadNearbyContent]);
+
+  const handlePublicUpdated = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type === 'banner' || type === 'product') {
+        loadHomeMeta();
+        loadNearbyContent({ refresh: true });
+      }
+    },
+    [loadHomeMeta, loadNearbyContent]
+  );
+
+  usePublicSocket({ enabled: true, onPublicUpdated: handlePublicUpdated });
 
   const toggleLikeProduct = useCallback(
     async (productId) => {
@@ -775,18 +779,16 @@ export default function HomeScreen({
     }
   }
 
-  if (chatOpenRequest) {
+  if (selectedBuyerUserId) {
     return (
-      <InboxScreen
-        buyerView
-        messagesOnly
-        chatRequest={chatOpenRequest}
-        onBack={() => setChatOpenRequest(null)}
-        onViewShop={(shopId) => {
-          setChatOpenRequest(null);
-          setSelectedProductId(null);
+      <BuyerProfileScreen
+        userId={selectedBuyerUserId}
+        onBack={() => setSelectedBuyerUserId(null)}
+        onOpenShop={(shopId) => {
+          setSelectedBuyerUserId(null);
           setSelectedStoreId(String(shopId));
         }}
+        onOpenUser={(nextUserId) => setSelectedBuyerUserId(String(nextUserId))}
       />
     );
   }
@@ -803,9 +805,9 @@ export default function HomeScreen({
           setSelectedProductId(null);
           setSelectedStoreId(storeId);
         }}
-        onOpenChat={handleOpenChatLocal}
         onOrderSuccess={onOpenBuyerOrders}
         onOpenTopUp={onOpenWalletTopUp}
+        reservationSource="home"
         resumeReserveRequest={
           resumeReserveRequest &&
           String(resumeReserveRequest.productId) === String(selectedProductId)
@@ -827,7 +829,6 @@ export default function HomeScreen({
           setSelectedStoreId(null);
           setSelectedProductId(productId);
         }}
-        onOpenChat={handleOpenChatLocal}
         onNavigateDirections={onNavigateDirections}
       />
     );
@@ -846,19 +847,9 @@ export default function HomeScreen({
           setShowSearchScreen(false);
           setSelectedStoreId(String(shopId));
         }}
-      />
-    );
-  }
-
-  if (showInboxScreen) {
-    return (
-      <InboxScreen
-        buyerView
-        messagesOnly
-        onBack={() => setShowInboxScreen(false)}
-        onViewShop={(shopId) => {
-          setShowInboxScreen(false);
-          setSelectedStoreId(String(shopId));
+        onOpenBuyer={(userId) => {
+          setShowSearchScreen(false);
+          setSelectedBuyerUserId(String(userId));
         }}
       />
     );
@@ -928,8 +919,6 @@ export default function HomeScreen({
     );
   }
 
-  const messageBadgeCount = Math.max(0, Number(unreadMessagesCount) || 0);
-
   function handleSelectCategory(categoryId = '') {
     setSelectedCategoryId(String(categoryId || ''));
   }
@@ -960,19 +949,11 @@ export default function HomeScreen({
       >
         <View style={styles.headerRow}>
           <BuyerQuickMenu
-            sellerButtonLabel={sellerButtonLabel}
             onEditAccount={onEditAccount}
             onOpenWallet={onOpenWallet}
             onOpenFavoriteProducts={onOpenFavoriteProducts}
             onOpenReport={onOpenReport}
-            onSellerAction={() => {
-              if (getSellerRegisterButtonLabel({ role, verification: sellerVerification })) {
-                onStartSellerRegister?.();
-                return;
-              }
-              onOpenShop?.();
-            }}
-            onLogout={() => dispatch(logoutUser())}
+            onLogout={() => confirmLogout(() => dispatch(logoutUser()))}
             buttonStyle={styles.utilityBtn}
             iconColor="#334155"
           />
@@ -988,73 +969,62 @@ export default function HomeScreen({
             >
               <Ionicons name="search" size={22} color="#334155" />
             </Pressable>
-            <Pressable
-              style={styles.bellBtn}
-              onPress={() => setShowInboxScreen(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Tin nhắn"
-            >
-              <Ionicons name="chatbubble-outline" size={22} color="#334155" />
-              {messageBadgeCount > 0 ? (
-                <View style={styles.bellBadge}>
-                  <Text style={styles.bellBadgeText}>
-                    {messageBadgeCount > 9 ? '9+' : String(messageBadgeCount)}
-                  </Text>
-                </View>
-              ) : null}
-            </Pressable>
           </View>
         </View>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryRow}
-        >
-          <CategoryChip
-            label="Tất cả"
-            active={!selectedCategoryId}
-            onPress={() => handleSelectCategory('')}
-          />
-          {categories.map((item) => (
-            <CategoryChip
-              key={String(item.id)}
-              category={item}
-              active={String(selectedCategoryId) === String(item.id)}
-              onPress={(category) => handleSelectCategory(category.id)}
+        <View style={styles.bannerFullBleed}>
+          {banners.length > 0 ? (
+            <HomeBannerCarousel
+              banners={banners}
+              onPressInterest={handleBannerInterest}
             />
-          ))}
-        </ScrollView>
+          ) : (
+            <Pressable style={styles.mapBanner} onPress={onOpenMap}>
+              <View style={styles.mapBannerCopy}>
+                <Text style={styles.mapBannerTitle}>Trợ quê – Gần bạn</Text>
+                <Text style={styles.mapBannerSubtitle}>
+                  Kết nối người mua và người bán trong khu vực của bạn
+                </Text>
+                <View style={styles.mapBannerBtn}>
+                  <Text style={styles.mapBannerBtnText}>Xem trên bản đồ</Text>
+                </View>
+              </View>
+              <View style={styles.mapBannerArt}>
+                <View style={styles.mapGrid}>
+                  <View style={[styles.mapLine, styles.mapLineH1]} />
+                  <View style={[styles.mapLine, styles.mapLineH2]} />
+                  <View style={[styles.mapLine, styles.mapLineV1]} />
+                  <View style={[styles.mapLine, styles.mapLineV2]} />
+                </View>
+                <View style={styles.mapPulseOuter}>
+                  <View style={styles.mapPulseInner} />
+                </View>
+              </View>
+            </Pressable>
+          )}
+        </View>
 
-        {banners.length > 0 ? (
-          <HomeBannerCarousel
-            banners={banners}
-            onPressInterest={handleBannerInterest}
-          />
-        ) : (
-          <Pressable style={styles.mapBanner} onPress={onOpenMap}>
-            <View style={styles.mapBannerCopy}>
-              <Text style={styles.mapBannerTitle}>Sản phẩm gần bạn</Text>
-              <Text style={styles.mapBannerSubtitle}>
-                Xem các cửa hàng và sản phẩm xung quanh bạn
-              </Text>
-              <View style={styles.mapBannerBtn}>
-                <Text style={styles.mapBannerBtnText}>Xem trên bản đồ</Text>
-              </View>
-            </View>
-            <View style={styles.mapBannerArt}>
-              <View style={styles.mapGrid}>
-                <View style={[styles.mapLine, styles.mapLineH1]} />
-                <View style={[styles.mapLine, styles.mapLineH2]} />
-                <View style={[styles.mapLine, styles.mapLineV1]} />
-                <View style={[styles.mapLine, styles.mapLineV2]} />
-              </View>
-              <View style={styles.mapPulseOuter}>
-                <View style={styles.mapPulseInner} />
-              </View>
-            </View>
-          </Pressable>
-        )}
+        <View style={styles.categorySection}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryRow}
+          >
+            <CategoryChip
+              label="Tất cả"
+              active={!selectedCategoryId}
+              onPress={() => handleSelectCategory('')}
+            />
+            {categories.map((item) => (
+              <CategoryChip
+                key={String(item.id)}
+                category={item}
+                active={String(selectedCategoryId) === String(item.id)}
+                onPress={(category) => handleSelectCategory(category.id)}
+              />
+            ))}
+          </ScrollView>
+        </View>
 
         {visiblePromotionProducts.length > 0 ? (
           <>
@@ -1158,7 +1128,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   scrollContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: HOME_HORIZONTAL_PADDING,
     paddingTop: 8,
   },
   pressed: {
@@ -1214,11 +1184,25 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
   },
+  bannerFullBleed: {
+    marginHorizontal: -HOME_HORIZONTAL_PADDING,
+    marginBottom: 4,
+  },
+  categorySection: {
+    marginHorizontal: -HOME_HORIZONTAL_PADDING,
+    marginTop: 0,
+    paddingTop: 12,
+    paddingBottom: 8,
+    paddingHorizontal: HOME_HORIZONTAL_PADDING,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+  },
   categoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingBottom: 14,
+    paddingBottom: 8,
     paddingRight: 4,
   },
   categoryChip: {
@@ -1246,7 +1230,7 @@ const styles = StyleSheet.create({
   bannerCarouselWrap: {
     alignSelf: 'stretch',
     width: '100%',
-    marginBottom: 16,
+    marginBottom: 0,
   },
   bannerCarousel: {
     alignSelf: 'stretch',
@@ -1257,7 +1241,6 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
   },
   bannerSlide: {
-    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#055528',
   },
@@ -1301,30 +1284,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignSelf: 'stretch',
     width: '100%',
-    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#076F32',
     height: NEARBY_BANNER_HEIGHT,
     minHeight: NEARBY_BANNER_HEIGHT,
-    marginBottom: 16,
   },
   mapBannerCopy: {
     flex: 1.15,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingVertical: 20,
+    paddingHorizontal: 18,
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
   },
   mapBannerTitle: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 22,
+    fontWeight: '900',
+    lineHeight: 28,
   },
   mapBannerSubtitle: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 11,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
     fontWeight: '500',
-    lineHeight: 15,
+    lineHeight: 18,
   },
   mapBannerBtn: {
     alignSelf: 'flex-start',
@@ -1435,7 +1417,7 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   seeAllContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: HOME_HORIZONTAL_PADDING,
     paddingTop: 4,
   },
   shopGrid: {

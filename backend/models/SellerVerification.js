@@ -24,6 +24,13 @@ const SellerVerificationSchema = new mongoose.Schema({
   // Danh mục kinh doanh đề xuất (ref ShopCategory).
   categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopCategory" },
 
+  // Tên hiển thị gian hàng (lưu tại thời điểm đăng ký).
+  shopName: { type: String, default: "", trim: true },
+  // Username gian hàng (@handle).
+  shopUsername: { type: String, default: "", trim: true, lowercase: true, index: true },
+  // Mô tả / giới thiệu gian hàng (tùy chọn lúc đăng ký).
+  shopDescription: { type: String, default: "" },
+
   // Địa chỉ hệ thống / geocode.
   addressHeThong: { type: String, default: "" },
 

@@ -5,6 +5,7 @@ import { getCurrentUserIdToken } from '../repository/authRepository';
 
 const sessionReviewedOrderCodes = new Set();
 const sessionReviewsByOrderId = new Map();
+const pendingReviewKeys = new Set();
 
 export function getOrderReviewKey(order) {
   return String(order?.orderCode || order?.reservationId || order?.id || '').trim();
@@ -19,27 +20,46 @@ function rememberReview(key, review) {
 
 export async function loadReviewedOrderData() {
   const codes = new Set(sessionReviewedOrderCodes);
-  const reviewsByOrderId = new Map(sessionReviewsByOrderId);
 
   try {
     const idToken = await getCurrentUserIdToken();
     if (idToken) {
       const reviews = await getMyReviewsOnBackend(idToken);
+      const reviewsByOrderId = new Map();
+      const apiKeys = new Set();
+
       (reviews || []).forEach((review) => {
         const key = String(review.reservationId || review.orderCode || '').trim();
         if (!key) {
           return;
         }
+        apiKeys.add(key);
         codes.add(key);
         rememberReview(key, review);
         reviewsByOrderId.set(key, review);
+        pendingReviewKeys.delete(key);
       });
+
+      for (const [key, review] of sessionReviewsByOrderId.entries()) {
+        if (review?.id && pendingReviewKeys.has(key) && !reviewsByOrderId.has(key)) {
+          reviewsByOrderId.set(key, review);
+        }
+      }
+
+      for (const key of [...sessionReviewsByOrderId.keys()]) {
+        if (apiKeys.has(key) || pendingReviewKeys.has(key)) {
+          continue;
+        }
+        sessionReviewsByOrderId.delete(key);
+      }
+
+      return { codes, reviewsByOrderId };
     }
   } catch {
     // Keep session-only data when API is unavailable.
   }
 
-  return { codes, reviewsByOrderId };
+  return { codes, reviewsByOrderId: new Map(sessionReviewsByOrderId) };
 }
 
 export async function loadReviewedOrderCodes() {
@@ -55,6 +75,9 @@ export function markOrderAsReviewed(order, review = null) {
   sessionReviewedOrderCodes.add(key);
   if (review) {
     rememberReview(key, review);
+    if (review.id) {
+      pendingReviewKeys.add(key);
+    }
   }
 }
 
@@ -65,6 +88,7 @@ export function unmarkOrderAsReviewed(order) {
   }
   sessionReviewedOrderCodes.delete(key);
   sessionReviewsByOrderId.delete(key);
+  pendingReviewKeys.delete(key);
 }
 
 export function getReviewForOrder(order, reviewsByOrderId) {

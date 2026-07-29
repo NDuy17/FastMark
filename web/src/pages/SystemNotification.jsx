@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { getBroadcastHistory, sendSystemNotification } from '../api/notificationApi';
+import AdminDateFilter from '../components/admin/AdminDateFilter';
+import AdminPagination from '../components/admin/AdminPagination';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 
 const AUDIENCE_OPTIONS = [
   { value: 'all', label: 'Tất cả' },
@@ -30,13 +34,25 @@ export default function SystemNotification() {
   const [lastResult, setLastResult] = useState(null);
   const [history, setHistory] = useState({ items: [], pagination: null });
   const [historyPage, setHistoryPage] = useState(1);
+  const [historyLimit, setHistoryLimit] = useState(DEFAULT_PAGE_SIZE);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const {
+    from: historyFrom,
+    to: historyTo,
+    preset: historyPreset,
+    applyRange: applyHistoryRange,
+    queryParams: historyQueryParams,
+  } = useAdminDateFilter();
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
       const token = await getIdToken();
-      const payload = await getBroadcastHistory(token, { page: historyPage, limit: 10 });
+      const payload = await getBroadcastHistory(token, {
+        page: historyPage,
+        limit: historyLimit,
+        ...historyQueryParams,
+      });
       setHistory({
         items: payload.data?.items || [],
         pagination: payload.data?.pagination || null,
@@ -46,7 +62,7 @@ export default function SystemNotification() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [getIdToken, historyPage]);
+  }, [getIdToken, historyFrom, historyLimit, historyQueryParams, historyPage, historyTo]);
 
   useEffect(() => {
     loadHistory();
@@ -86,13 +102,14 @@ export default function SystemNotification() {
   }
 
   return (
-    <div className="page">
+    <div className="page notifications-admin-page">
       {snackbar ? <p className="snackbar">{snackbar}</p> : null}
       {error ? <p className="error-banner">{error}</p> : null}
 
       <section className="category-form-card notification-form-card">
         <div className="category-form-header">
           <h2>Tạo thông báo mới</h2>
+          <p className="muted">Gửi thông báo toàn hệ thống tới người mua, người bán hoặc tất cả.</p>
         </div>
 
         <form className="category-form notification-form" onSubmit={handleSubmit}>
@@ -138,7 +155,7 @@ export default function SystemNotification() {
       </section>
 
       {lastResult ? (
-        <section className="detail-card detail-card-wide">
+        <section className="detail-card detail-card-wide notification-result-card">
           <h3>Kết quả gửi gần nhất</h3>
           <dl className="detail-list">
             <div><dt>Đối tượng</dt><dd>{lastResult.audienceLabel}</dd></div>
@@ -149,66 +166,73 @@ export default function SystemNotification() {
         </section>
       ) : null}
 
-      <section className="table-card">
-        <header className="category-form-header">
-          <h2>Lịch sử gửi thông báo</h2>
-          <button type="button" className="ghost-btn" onClick={loadHistory} disabled={historyLoading}>
-            Làm mới
-          </button>
+      <section className="table-card notification-history-card">
+        <header className="notification-history-head">
+          <div>
+            <h2>Lịch sử gửi thông báo</h2>
+            <p className="muted">Chỉ hiển thị các lần admin gửi broadcast từ trang này.</p>
+          </div>
+          <div className="notification-history-tools">
+            <AdminDateFilter
+              from={historyFrom}
+              to={historyTo}
+              preset={historyPreset}
+              onApply={(range) => applyHistoryRange(range, () => setHistoryPage(1))}
+            />
+            <button type="button" className="ghost-btn" onClick={loadHistory} disabled={historyLoading}>
+              Làm mới
+            </button>
+          </div>
         </header>
+
         {historyLoading ? (
           <div className="skeleton skeleton-line" style={{ height: 90 }} />
         ) : history.items.length === 0 ? (
-          <p className="empty-inline">Chưa có thông báo nào được gửi.</p>
+          <p className="empty-inline">Chưa có thông báo broadcast nào được gửi.</p>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Thời gian</th>
-                <th>Tiêu đề</th>
-                <th>Nội dung</th>
-                <th>Đối tượng</th>
-                <th>Người nhận</th>
-                <th>Đã đọc</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.items.map((item, index) => (
-                <tr key={`${item.sentAt}-${index}`}>
-                  <td>{item.sentAt ? new Date(item.sentAt).toLocaleString('vi-VN') : ''}</td>
-                  <td>{item.title || ''}</td>
-                  <td className="category-desc-cell">{item.content || ''}</td>
-                  <td>{AUDIENCE_LABELS[item.audience] || item.audience || ''}</td>
-                  <td>{item.recipientCount}</td>
-                  <td>{item.readCount}</td>
+          <div className="notification-history-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Thời gian</th>
+                  <th>Tiêu đề</th>
+                  <th>Nội dung</th>
+                  <th>Đối tượng</th>
+                  <th>Người nhận</th>
+                  <th>Đã đọc</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {history.pagination && history.pagination.totalPages > 1 ? (
-          <div className="pagination-row">
-            <span className="muted">
-              Trang {history.pagination.page}/{history.pagination.totalPages}
-            </span>
-            <div className="table-actions">
-              <button
-                type="button"
-                disabled={history.pagination.page <= 1 || historyLoading}
-                onClick={() => setHistoryPage((current) => current - 1)}
-              >
-                Trước
-              </button>
-              <button
-                type="button"
-                disabled={history.pagination.page >= history.pagination.totalPages || historyLoading}
-                onClick={() => setHistoryPage((current) => current + 1)}
-              >
-                Sau
-              </button>
-            </div>
+              </thead>
+              <tbody>
+                {history.items.map((item, index) => (
+                  <tr key={`${item.sentAt}-${index}`}>
+                    <td>{item.sentAt ? new Date(item.sentAt).toLocaleString('vi-VN') : ''}</td>
+                    <td>{item.title || ''}</td>
+                    <td className="category-desc-cell">{item.content || ''}</td>
+                    <td>{AUDIENCE_LABELS[item.audience] || item.audience || ''}</td>
+                    <td>{item.recipientCount}</td>
+                    <td>{item.readCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ) : null}
+        )}
+
+        <div className="admin-pagination">
+          <AdminPagination
+            page={history.pagination?.page || historyPage}
+            totalPages={history.pagination?.totalPages || 1}
+            total={history.pagination?.total || 0}
+            label="thông báo"
+            limit={historyLimit}
+            onLimitChange={(next) => {
+              setHistoryLimit(next);
+              setHistoryPage(1);
+            }}
+            loading={historyLoading}
+            onPageChange={setHistoryPage}
+          />
+        </div>
       </section>
     </div>
   );

@@ -5,37 +5,6 @@ const asyncHandler = require("../utils/asyncHandler");
 
 const router = express.Router();
 
-router.get(
-  "/conversations",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.listConversations)
-);
-router.get("/shops", verifyFirebaseToken, asyncHandler(buyerController.listShops));
-router.post(
-  "/conversations",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.startConversation)
-);
-router.get(
-  "/conversations/:id/messages",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.listMessages)
-);
-router.post(
-  "/conversations/:id/messages",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.sendMessage)
-);
-router.delete(
-  "/conversations/:id/messages/:messageId",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.deleteMessage)
-);
-router.get(
-  "/conversations/:id/peer",
-  verifyFirebaseToken,
-  asyncHandler(buyerController.getConversationPeer)
-);
 router.get("/reviews", verifyFirebaseToken, asyncHandler(buyerController.listReviews));
 router.post("/reviews", verifyFirebaseToken, asyncHandler(buyerController.createReview));
 router.put("/reviews/:id", verifyFirebaseToken, asyncHandler(buyerController.updateReview));
@@ -63,6 +32,14 @@ router.delete(
   asyncHandler(buyerController.unfollowShop)
 );
 router.delete("/follows", verifyFirebaseToken, asyncHandler(buyerController.unfollowShop));
+
+router.get("/users/search", verifyFirebaseToken, asyncHandler(buyerController.searchUsers));
+router.get(
+  "/users/:userId/following",
+  verifyFirebaseToken,
+  asyncHandler(buyerController.getPublicUserFollowing)
+);
+router.get("/users/:userId", verifyFirebaseToken, asyncHandler(buyerController.getPublicUserProfile));
 
 router.get("/orders", verifyFirebaseToken, asyncHandler(buyerOpsController.listOrders));
 router.post("/reservations", verifyFirebaseToken, asyncHandler(buyerOpsController.createReservation));

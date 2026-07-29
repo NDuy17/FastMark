@@ -3,17 +3,19 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+
+import KeyboardAwareScrollView from './KeyboardAwareScrollView';
+import KeyboardStickyFooter from './KeyboardStickyFooter';
+import KeyboardAwareTextInput from './KeyboardAwareTextInput';
+
+const ACTIONS_BAR_ESTIMATE = 72;
 
 const REVIEW_PLACEHOLDER =
   'Hãy chia sẻ trải nghiệm của bạn về dịch vụ và sản phẩm của gian hàng này...';
@@ -102,14 +104,11 @@ export default function ShopReviewModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
+      <View style={styles.overlay}>
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
+          extraBottomInset={ACTIONS_BAR_ESTIMATE}
+          nestedScrollPadding={false}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.card}>
@@ -132,7 +131,7 @@ export default function ShopReviewModal({
             </View>
 
             <Text style={styles.label}>Nhận xét</Text>
-            <TextInput
+            <KeyboardAwareTextInput
               value={comment}
               onChangeText={setComment}
               style={styles.input}
@@ -161,33 +160,35 @@ export default function ShopReviewModal({
                 </View>
               ))}
             </View>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.submitButton,
-                pressed && styles.pressed,
-                isSubmitting && styles.submitButtonDisabled,
-              ]}
-              onPress={handleSubmit}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.submitText}>Gửi đánh giá</Text>
-              )}
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
-              onPress={onClose}
-              disabled={isSubmitting}
-            >
-              <Text style={styles.cancelText}>Hủy</Text>
-            </Pressable>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
+
+        <KeyboardStickyFooter style={styles.footerActions}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.submitButton,
+              pressed && styles.pressed,
+              isSubmitting && styles.submitButtonDisabled,
+            ]}
+            onPress={handleSubmit}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.submitText}>Gửi đánh giá</Text>
+            )}
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+            onPress={onClose}
+            disabled={isSubmitting}
+          >
+            <Text style={styles.cancelText}>Hủy</Text>
+          </Pressable>
+        </KeyboardStickyFooter>
+      </View>
     </Modal>
   );
 }
@@ -196,6 +197,7 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    position: 'relative',
   },
   scrollContent: {
     flexGrow: 1,
@@ -308,7 +310,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   submitButton: {
-    marginTop: 18,
     minHeight: 48,
     borderRadius: 10,
     alignItems: 'center',
@@ -324,12 +325,16 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   cancelButton: {
-    marginTop: 10,
     minHeight: 42,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#e2e8f0',
+  },
+  footerActions: {
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 12,
   },
   cancelText: {
     color: '#334155',

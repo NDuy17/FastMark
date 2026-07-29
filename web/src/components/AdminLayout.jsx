@@ -1,131 +1,17 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { LogOut, ChevronsLeft, ChevronsRight, ChevronDown } from 'lucide-react';
 
+import AdminBreadcrumb from './admin/AdminBreadcrumb';
+import {
+  ADMIN_NAV_GROUPS,
+  findActiveNavEntry,
+  getAdminBreadcrumbs,
+  isNavItemActiveExclusive,
+} from '../config/adminNavigation';
 import { useAuth } from '../context/AuthContext';
 
 const SIDEBAR_COLLAPSED_KEY = 'fm_admin_sidebar_collapsed';
-
-const NAV_GROUPS = [
-  {
-    id: 'dashboard',
-    title: 'Dashboard',
-    icon: '▦',
-    items: [
-      { to: '/', label: 'Dashboard', end: true },
-    ],
-  },
-  {
-    id: 'users',
-    title: 'Người dùng',
-    icon: '👤',
-    items: [
-      { to: '/accounts', label: 'Tất cả tài khoản', match: { path: '/accounts', role: '' } },
-      { to: '/accounts?role=2', label: 'Người bán', match: { path: '/accounts', role: '2' } },
-      { to: '/accounts?role=1', label: 'Người mua', match: { path: '/accounts', role: '1' } },
-      { to: '/verifications', label: 'Duyệt người bán' },
-    ],
-  },
-  {
-    id: 'categories',
-    title: 'Danh mục',
-    icon: '🗂',
-    items: [
-      {
-        to: '/categories?type=shops',
-        label: 'Danh mục cửa hàng',
-        match: { path: '/categories', type: 'shops' },
-      },
-      {
-        to: '/categories?type=products',
-        label: 'Danh mục sản phẩm',
-        match: { path: '/categories', type: 'products' },
-      },
-    ],
-  },
-  {
-    id: 'catalog',
-    title: 'Sản phẩm & Đơn hàng',
-    icon: '📦',
-    items: [
-      { to: '/products', label: 'Sản phẩm' },
-      {
-        to: '/reservations',
-        label: 'Đơn giữ hàng',
-        match: { path: '/reservations', tab: 'not-disputes' },
-      },
-      {
-        to: '/reservations?tab=disputes',
-        label: 'Tranh chấp',
-        match: { path: '/reservations', tab: 'disputes' },
-      },
-    ],
-  },
-  {
-    id: 'content',
-    title: 'Nội dung',
-    icon: '📝',
-    items: [
-      { to: '/reports', label: 'Báo cáo nội dung' },
-      { to: '/reviews', label: 'Đánh giá' },
-      { to: '/notifications', label: 'Thông báo' },
-      { to: '/audit-logs', label: 'Nhật ký admin' },
-    ],
-  },
-  {
-    id: 'plans',
-    title: 'Gói & Banner',
-    icon: '🎯',
-    items: [
-      { to: '/seller-plans', label: 'Seller Plans' },
-      { to: '/seller-subscriptions', label: 'Seller Subscriptions' },
-      { to: '/banner-plans', label: 'Banner Plans' },
-      { to: '/seller-banners', label: 'Seller Banners' },
-    ],
-  },
-  {
-    id: 'finance',
-    title: 'Tài chính',
-    icon: '💳',
-    items: [
-      { to: '/finance', label: 'Tổng quan tài chính' },
-      { to: '/banks', label: 'Ngân hàng' },
-      { to: '/withdrawals', label: 'Rút tiền / Lịch sử' },
-    ],
-  },
-];
-
-function isItemActive(item, pathname, searchParams) {
-  if (item.match) {
-    const { path, role, type, tab } = item.match;
-    const onPath =
-      pathname === path || (path !== '/' && pathname.startsWith(`${path}/`));
-    if (!onPath) return false;
-
-    if (role !== undefined) {
-      return (searchParams.get('role') || '') === role;
-    }
-    if (type !== undefined) {
-      return (searchParams.get('type') || 'products') === type;
-    }
-    if (tab === 'disputes') {
-      return searchParams.get('tab')?.toLowerCase() === 'disputes';
-    }
-    if (tab === 'not-disputes') {
-      return searchParams.get('tab')?.toLowerCase() !== 'disputes';
-    }
-    return true;
-  }
-
-  if (item.end) {
-    return pathname === item.to;
-  }
-
-  return pathname === item.to || pathname.startsWith(`${item.to}/`);
-}
-
-function groupHasActive(group, pathname, searchParams) {
-  return group.items.some((item) => isItemActive(item, pathname, searchParams));
-}
 
 function readCollapsedPreference() {
   try {
@@ -135,38 +21,41 @@ function readCollapsedPreference() {
   }
 }
 
+function adminInitial(email = '') {
+  return (email.charAt(0) || 'A').toUpperCase();
+}
+
 export default function AdminLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
 
   const [collapsed, setCollapsed] = useState(readCollapsedPreference);
-
   const [openGroups, setOpenGroups] = useState(() => {
+    const active = findActiveNavEntry(location.pathname, searchParams);
     const initial = {};
-    NAV_GROUPS.forEach((group) => {
-      initial[group.id] = groupHasActive(group, location.pathname, searchParams);
+    ADMIN_NAV_GROUPS.forEach((group) => {
+      initial[group.id] = active?.group.id === group.id;
     });
     return initial;
   });
 
-  // Tự mở nhóm chứa route đang active khi điều hướng.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    setOpenGroups((current) => {
-      const next = { ...current };
-      NAV_GROUPS.forEach((group) => {
-        if (groupHasActive(group, location.pathname, params)) {
-          next[group.id] = true;
-        }
-      });
-      return next;
-    });
+    const active = findActiveNavEntry(location.pathname, params);
+    if (!active) return;
+    setOpenGroups((current) => ({
+      ...current,
+      [active.group.id]: true,
+    }));
   }, [location.pathname, location.search]);
 
   function toggleGroup(groupId) {
     if (collapsed) return;
-    setOpenGroups((current) => ({ ...current, [groupId]: !current[groupId] }));
+    setOpenGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId],
+    }));
   }
 
   function toggleCollapsed() {
@@ -175,18 +64,22 @@ export default function AdminLayout() {
       try {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
       } catch {
-        // localStorage không khả dụng thì bỏ qua, không chặn UI.
+        // ignore
       }
       return next;
     });
   }
 
+  const breadcrumbs = getAdminBreadcrumbs(location.pathname, searchParams);
+  const email = user?.email || 'Admin';
+
   return (
-    <div className={`admin-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+    <div className={`admin-shell admin-shell-v2${collapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className="admin-sidebar">
         <div className="sidebar-top">
           <div className="brand" title="FastMark Admin">
-            {collapsed ? 'FM' : 'FastMark Admin'}
+            <span className="brand-mark">FM</span>
+            {!collapsed ? <span>FastMark Admin</span> : null}
           </div>
           <button
             type="button"
@@ -195,50 +88,38 @@ export default function AdminLayout() {
             title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
             aria-label={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
           >
-            {collapsed ? '»' : '«'}
+            {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
           </button>
         </div>
+
         <nav>
-          {NAV_GROUPS.map((group) => {
+          {ADMIN_NAV_GROUPS.map((group) => {
             const isOpen = Boolean(openGroups[group.id]);
-            const hasActive = groupHasActive(group, location.pathname, searchParams);
+            const Icon = group.icon;
+
             return (
-              <div
-                key={group.id}
-                className={`nav-group${isOpen && !collapsed ? ' open' : ''}`}
-              >
+              <div key={group.id} className={`nav-group${isOpen && !collapsed ? ' open' : ''}`}>
                 <button
                   type="button"
-                  className={`nav-group-header${hasActive ? ' has-active' : ''}`}
+                  className="nav-group-header"
                   onClick={() => toggleGroup(group.id)}
                   aria-expanded={collapsed ? undefined : isOpen}
                   title={collapsed ? group.title : undefined}
                 >
-                  <span className="nav-group-icon">{group.icon}</span>
-                  <span className="nav-group-label">{group.title}</span>
-                  <span
-                    className={`nav-group-chevron${isOpen ? ' open' : ''}`}
-                    aria-hidden="true"
-                  >
-                    <svg viewBox="0 0 20 20" width="14" height="14" fill="none">
-                      <path
-                        d="M4.5 7.5 L10 13 L15.5 7.5"
-                        stroke="currentColor"
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                  <span className="nav-group-icon">
+                    {Icon ? <Icon size={20} strokeWidth={2} aria-hidden="true" /> : null}
                   </span>
+                  {!collapsed ? <span className="nav-group-label">{group.title}</span> : null}
+                  {!collapsed ? (
+                    <span className="nav-group-chevron" aria-hidden="true">
+                      <ChevronDown size={16} strokeWidth={2} />
+                    </span>
+                  ) : null}
                 </button>
-                {/* Khi thu gọn, links hiển thị dưới dạng flyout khi hover (CSS). */}
-                {isOpen || collapsed ? (
+                {isOpen && !collapsed ? (
                   <div className="nav-group-links">
-                    {collapsed ? (
-                      <div className="nav-flyout-title">{group.title}</div>
-                    ) : null}
                     {group.items.map((item) => {
-                      const active = isItemActive(item, location.pathname, searchParams);
+                      const active = isNavItemActiveExclusive(item, location.pathname, searchParams);
                       return (
                         <NavLink
                           key={`${item.to}-${item.label}`}
@@ -256,17 +137,40 @@ export default function AdminLayout() {
             );
           })}
         </nav>
+
         <div className="sidebar-footer">
-          {!collapsed ? <div className="admin-email">{user?.email}</div> : null}
-          <button type="button" onClick={logout} title="Đăng xuất">
-            {collapsed ? '⎋' : 'Đăng xuất'}
+          {!collapsed ? <div className="admin-email">{email}</div> : null}
+          <button type="button" onClick={logout} title="Đăng xuất" aria-label="Đăng xuất">
+            {collapsed ? (
+              <LogOut size={18} />
+            ) : (
+              <>
+                <LogOut size={16} aria-hidden="true" />
+                <span>Đăng xuất</span>
+              </>
+            )}
           </button>
         </div>
       </aside>
 
-      <main className="admin-main">
-        <Outlet />
-      </main>
+      <div className="admin-workspace">
+        <header className="admin-topbar">
+          <AdminBreadcrumb items={breadcrumbs} />
+          <div className="admin-topbar-actions">
+            <div className="admin-topbar-avatar" title={email}>
+              <span className="admin-topbar-avatar-circle">{adminInitial(email)}</span>
+              <div className="admin-topbar-avatar-info">
+                <strong>Quản trị viên</strong>
+                <span>{email}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="admin-main">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

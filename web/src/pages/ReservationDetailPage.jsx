@@ -6,20 +6,14 @@ import {
   refundReservation,
   releaseReservation,
 } from '../api/reservationAdminApi';
+import ReservationOrderProgress from '../components/admin/ReservationOrderProgress';
 import { useAuth } from '../context/AuthContext';
+import { useAdminOrderSocket } from '../hooks/useAdminOrderSocket';
 import { goBackOr } from '../utils/navigation';
+import { formatDate, formatDateActivity, formatDateTimeDetail, formatPrice } from '../utils/format';
+import { formatReservationOrderCode } from '../utils/reservationOrderCode';
+import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 import { reverseGeocode } from '../utils/reverseGeocode';
-
-const STATUS_LABELS = {
-  0: 'Chờ shop xác nhận',
-  1: 'Đã từ chối',
-  2: 'Chờ nhận hàng',
-  3: 'Hoàn thành',
-  4: 'Tranh chấp',
-  5: 'Tự hoàn thành',
-  6: 'Đã hủy (hoàn cọc)',
-  7: 'Đã hủy (tranh chấp)',
-};
 
 const AUDIT_ACTION_LABELS = {
   ADMIN_REFUND_BUYER: 'Hoàn cọc cho người mua',
@@ -28,41 +22,29 @@ const AUDIT_ACTION_LABELS = {
 
 const DISPUTED_STATUS = 4;
 
-function formatDate(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('vi-VN');
-}
-
-function formatPrice(value) {
-  return `${Number(value || 0).toLocaleString('vi-VN')}đ`;
-}
-
-function statusBadgeClass(status) {
-  if (status === 0) return 'badge badge-warning';
-  if (status === 1) return 'badge badge-danger';
-  if (status === 2) return 'badge badge-info';
-  if (status === 3) return 'badge badge-success';
-  if (status === 4) return 'badge badge-danger';
-  if (status === 5) return 'badge badge-neutral';
-  if (status === 6) return 'badge badge-neutral';
-  if (status === 7) return 'badge badge-danger';
-  return 'badge';
-}
-
-function resolveStatusLabel(reservation) {
-  if (reservation?.statusLabel) return reservation.statusLabel;
-  return STATUS_LABELS[reservation?.status] || 'Không rõ';
+function resolveListStatusMeta(status) {
+  const value = Number(status);
+  if (value === 3 || value === 5) {
+    return { label: 'Hoàn thành', className: 'badge badge-success' };
+  }
+  if (value === 4) {
+    return { label: 'Tranh chấp', className: 'badge badge-warning' };
+  }
+  if (value === 0 || value === 2) {
+    return { label: 'Giữ hàng', className: 'badge badge-warning' };
+  }
+  return { label: 'Đã hủy', className: 'badge badge-danger' };
 }
 
 function DetailSkeleton() {
   return (
-    <div className="detail-grid">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="detail-card">
-          <div className="skeleton skeleton-line" />
-          <div className="skeleton skeleton-line short" />
-        </div>
-      ))}
+    <div className="reservation-order-layout">
+      <div className="skeleton skeleton-card reservation-order-header-card" />
+      <div className="reservation-order-cards">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="skeleton skeleton-card reservation-order-info-card" />
+        ))}
+      </div>
     </div>
   );
 }
@@ -127,41 +109,102 @@ function DisputeGpsBlock({ latitude, longitude, storedAddress }) {
   );
 }
 
-function buildTimeline(reservation) {
-  const events = [
-    { label: 'Tạo đơn giữ hàng', at: reservation.createdAt },
-    { label: 'Shop xác nhận giữ hàng', at: reservation.sellerConfirmedAt || reservation.confirmedAt },
-    { label: 'Giờ hẹn nhận hàng', at: reservation.pickupTime },
-    { label: 'Mở tranh chấp', at: reservation.disputedAt, tone: 'danger' },
-    { label: 'Hủy đơn', at: reservation.cancelledAt, tone: 'danger' },
-    { label: 'Hoàn tất đơn', at: reservation.completedAt, tone: 'success' },
-    { label: 'Quyết toán tiền cọc', at: reservation.depositSettledAt, tone: 'success' },
-  ];
-
-  return events
-    .filter((event) => Boolean(event.at))
-    .sort((left, right) => new Date(left.at) - new Date(right.at));
+function PartyAvatar({ src, fallback }) {
+  if (src) {
+    return <img src={src} alt="" className="reservation-party-avatar" />;
+  }
+  return (
+    <div className="reservation-party-avatar reservation-party-avatar--fallback">
+      {String(fallback || '?').charAt(0).toUpperCase()}
+    </div>
+  );
 }
 
-function ReservationTimeline({ reservation }) {
-  const events = buildTimeline(reservation);
-  if (!events.length) return null;
+function resolveUnitPrice(reservation) {
+  const agreed = Number(reservation?.agreedPrice);
+  const reserved = Number(reservation?.reservedPrice) || 0;
+  if (Number.isFinite(agreed) && agreed > 0) {
+    return agreed;
+  }
+  return reserved;
+}
+
+function resolveOriginalUnitPrice(reservation) {
+  const variantPrice = Number(reservation?.variant?.price) || 0;
+  const unitPrice = resolveUnitPrice(reservation);
+  if (variantPrice > unitPrice) {
+    return variantPrice;
+  }
+  const reserved = Number(reservation?.reservedPrice) || 0;
+  if (reserved > unitPrice) {
+    return reserved;
+  }
+  return 0;
+}
+
+function resolveDiscountPercent(originalPrice, unitPrice) {
+  if (!originalPrice || originalPrice <= unitPrice) {
+    return 0;
+  }
+  return Math.round(((originalPrice - unitPrice) / originalPrice) * 100);
+}
+
+function formatPickupTime(value) {
+  const formatted = formatDateActivity(value);
+  if (!formatted) return '—';
+  return `${formatted.time} · ${formatted.day}`;
+}
+
+function OrderSummaryRow({ label, value, emphasize = false }) {
+  return (
+    <div className="reservation-order-summary-row">
+      <span>{label}</span>
+      <strong className={emphasize ? 'reservation-order-summary-emphasis' : undefined}>{value}</strong>
+    </div>
+  );
+}
+
+function OrderProductLine({ product, variant, quantity, unitPrice, originalUnitPrice, discountPercent, onOpenProduct }) {
+  const thumb = resolveMediaUrl(
+    product?.thumbnail || variant?.imageUrl || product?.thumbnails?.[0] || '',
+  );
+  const productName = product?.productName || '—';
+  const variantName = variant?.variantName || '—';
 
   return (
-    <article className="detail-card">
-      <h3>Tiến trình đơn hàng</h3>
-      <ol className="order-timeline">
-        {events.map((event, index) => (
-          <li key={`${event.label}-${index}`} className={event.tone || ''}>
-            <span className="timeline-dot" />
-            <div>
-              <strong>{event.label}</strong>
-              <p>{formatDate(event.at)}</p>
-            </div>
-          </li>
-        ))}
-      </ol>
-    </article>
+    <div className="reservation-order-product-line">
+      {thumb ? (
+        <img src={thumb} alt="" className="reservation-order-product-thumb" />
+      ) : (
+        <span className="reservation-order-product-thumb reservation-order-product-thumb--placeholder">SP</span>
+      )}
+      <div className="reservation-order-product-body">
+        <div className="reservation-order-product-name-row">
+          {product?.id ? (
+            <button type="button" className="link-btn link-btn-plain" onClick={onOpenProduct}>
+              {productName}
+            </button>
+          ) : (
+            <strong>{productName}</strong>
+          )}
+        </div>
+        <p className="reservation-order-product-variant">Phân loại: {variantName}</p>
+        <div className="reservation-order-product-price-row">
+          {originalUnitPrice > unitPrice ? (
+            <>
+              <span className="reservation-order-price-original">{formatPrice(originalUnitPrice)}</span>
+              <span>{formatPrice(unitPrice)}</span>
+              {discountPercent > 0 ? (
+                <span className="reservation-order-price-discount">Giảm {discountPercent}%</span>
+              ) : null}
+            </>
+          ) : (
+            <span>{formatPrice(unitPrice)}</span>
+          )}
+          <span className="reservation-order-product-qty">× {quantity || 0}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -194,6 +237,22 @@ export default function ReservationDetailPage() {
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
+
+  const handleOrderUpdated = useCallback(
+    (payload) => {
+      if (!payload?.reservationId || String(payload.reservationId) !== String(reservationId)) {
+        return;
+      }
+      loadDetail();
+    },
+    [loadDetail, reservationId]
+  );
+
+  useAdminOrderSocket({
+    enabled: Boolean(reservationId),
+    getIdToken,
+    onOrderUpdated: handleOrderUpdated,
+  });
 
   useEffect(() => {
     if (!message) return undefined;
@@ -260,24 +319,33 @@ export default function ReservationDetailPage() {
   const auditLogs = reservation?.auditLogs || [];
   const isDisputed = Number(reservation?.status) === DISPUTED_STATUS;
 
-  const orderCode =
-    reservation?.code ||
-    reservation?.orderCode ||
-    (reservation?.id ? String(reservation.id).slice(-8).toUpperCase() : '');
+  const orderCode = formatReservationOrderCode(reservation);
+  const statusMeta = resolveListStatusMeta(reservation?.status);
+  const quantity = Number(reservation?.quantity) || 0;
+  const unitPrice = resolveUnitPrice(reservation);
+  const originalUnitPrice = resolveOriginalUnitPrice(reservation);
+  const discountPercent = resolveDiscountPercent(originalUnitPrice, unitPrice);
+  const subtotal = unitPrice * quantity;
+  const depositAmount = Number(reservation?.depositAmount) || 0;
+  const cashDueOnPickup = Math.max(0, subtotal - depositAmount);
 
   const sellerName =
-    seller?.fullName ||
-    shop?.fullName ||
-    shop?.shopName ||
-    reservation?.shopName ||
-    '';
-  const sellerNick =
-    seller?.userName || shop?.userName || '';
+    shop?.shopName || reservation?.shopName || seller?.fullName || '';
+  const sellerNick = shop?.shopUsername || shop?.userName || seller?.userName || '';
+  const sellerAvatar = shop?.avatar || seller?.avatar || '';
   const sellerAccountId = seller?.id || shop?.userId || '';
+  const shopAddress = shop?.address || shop?.addressHeThong || shop?.systemAddress || '';
+
+  const hasDisputeSection =
+    isDisputed ||
+    reservation?.disputeByBuyer ||
+    reservation?.disputeBySeller ||
+    reservation?.disputedAt ||
+    (Array.isArray(reservation?.disputeReports) && reservation.disputeReports.length > 0);
 
   return (
-    <div className="page reservation-detail-page">
-      <header className="account-detail-toolbar">
+    <div className="admin-detail-page reservation-detail-page reservation-order-page">
+      <header className="admin-detail-toolbar reservation-order-toolbar no-print">
         <button
           type="button"
           className="ghost-btn"
@@ -325,250 +393,173 @@ export default function ReservationDetailPage() {
       {!loading && !reservation ? (
         <section className="table-card">
           <p>Không tìm thấy đơn giữ hàng.</p>
-          <button type="button" className="ghost-btn" onClick={() => goBackOr(navigate, '/reservations')}>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => goBackOr(navigate, '/reservations')}
+          >
             Quay lại
           </button>
         </section>
       ) : null}
 
       {!loading && reservation ? (
-        <>
-          <section className="detail-hero reservation-detail-hero">
-            <div className="account-detail-hero-main">
-              <div className="account-detail-hero-top">
-                <h2>{orderCode || 'Đơn giữ hàng'}</h2>
-                <span className={statusBadgeClass(reservation.status)}>
-                  {resolveStatusLabel(reservation)}
-                </span>
+        <div className="reservation-order-layout">
+          <section className="reservation-order-header-card">
+            <div className="reservation-order-header-main">
+              <div className="reservation-order-header-copy">
+                <h1>Đơn hàng #{orderCode}</h1>
+                <div className="reservation-order-header-meta">
+                  <span>
+                    <strong>Đặt lúc:</strong> {formatDateTimeDetail(reservation.createdAt)}
+                  </span>
+                  <span>
+                    <strong>Cập nhật cuối:</strong> {formatDateTimeDetail(reservation.updatedAt)}
+                  </span>
+                </div>
               </div>
-              <p>
-                {product?.productName || 'Sản phẩm'}
-                {reservation.variant?.variantName
-                  ? ` · ${reservation.variant.variantName}`
-                  : ''}
-                {' · '}
-                {formatPrice(reservation.reservedPrice)} × {reservation.quantity ?? 0}
-                {' · Cọc '}
-                {formatPrice(reservation.depositAmount)}
-              </p>
+              <span className={`reservation-order-header-status ${statusMeta.className}`}>
+                {statusMeta.label}
+              </span>
             </div>
+            <ReservationOrderProgress reservation={reservation} />
           </section>
 
-          <div className="reservation-parties-grid">
-            <article className="detail-card">
-              <h3>Đơn hàng</h3>
-              <dl className="detail-list">
-                <div>
-                  <dt>Sản phẩm</dt>
-                  <dd>
-                    {product?.id ? (
-                      <button
-                        type="button"
-                        className="link-btn link-btn-plain"
-                        onClick={() => navigate(`/products?search=${encodeURIComponent(product.productName || '')}`)}
-                      >
-                        {product.productName || ''}
-                      </button>
-                    ) : (
-                      product?.productName || ''
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Phân loại</dt>
-                  <dd>{reservation.variant?.variantName || ''}</dd>
-                </div>
-                <div>
-                  <dt>SL / Giá</dt>
-                  <dd>
-                    {reservation.quantity ?? ''} · {formatPrice(reservation.reservedPrice)}
-                    {reservation.agreedPrice != null &&
-                    Number(reservation.agreedPrice) !== Number(reservation.reservedPrice)
-                      ? ` → ${formatPrice(reservation.agreedPrice)}`
-                      : ''}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Cọc</dt>
-                  <dd>{formatPrice(reservation.depositAmount)}</dd>
-                </div>
-                <div>
-                  <dt>Giờ nhận</dt>
-                  <dd>{formatDate(reservation.pickupTime)}</dd>
-                </div>
-                <div>
-                  <dt>Ghi chú</dt>
-                  <dd>{reservation.note || ''}</dd>
-                </div>
-                {reservation.cancelReason ? (
-                  <div>
-                    <dt>Lý do hủy</dt>
-                    <dd>{reservation.cancelReason}</dd>
+          <div className="reservation-order-cards">
+            <article className="reservation-order-info-card">
+              <h2>Thông tin đơn hàng</h2>
+
+              <OrderProductLine
+                product={product}
+                variant={reservation.variant}
+                quantity={quantity}
+                unitPrice={unitPrice}
+                originalUnitPrice={originalUnitPrice}
+                discountPercent={discountPercent}
+                onOpenProduct={() =>
+                  navigate(`/products?search=${encodeURIComponent(product?.productName || '')}`)
+                }
+              />
+
+              <div className="reservation-order-summary">
+                <OrderSummaryRow label="Tổng tiền hàng" value={formatPrice(subtotal)} />
+                <OrderSummaryRow label="Tiền đặt cọc" value={formatPrice(depositAmount)} />
+                <OrderSummaryRow
+                  label="Giờ nhận hàng"
+                  value={formatPickupTime(reservation.pickupTime)}
+                />
+                {reservation.note ? (
+                  <div className="reservation-order-note-block">
+                    <span className="reservation-order-note-label">Ghi chú</span>
+                    <p className="reservation-order-note-text">{reservation.note}</p>
                   </div>
                 ) : null}
-                <div>
-                  <dt>Thời gian</dt>
-                  <dd>
-                    Tạo {formatDate(reservation.createdAt)}
-                    {reservation.completedAt
-                      ? ` · HT ${formatDate(reservation.completedAt)}`
-                      : ''}
-                  </dd>
-                </div>
-              </dl>
+              </div>
+
+              <div className="reservation-order-total-row">
+                <span>Thanh toán khi nhận hàng</span>
+                <strong>{formatPrice(cashDueOnPickup)}</strong>
+              </div>
             </article>
 
-            <article className="detail-card party-card">
-              <div className="party-card-head">
-                <h3>Người mua</h3>
+            <article className="reservation-order-info-card reservation-order-party-card">
+              <h2>Người mua</h2>
+              <div className="reservation-party-head">
+                <PartyAvatar
+                  src={buyer?.avatar}
+                  fallback={buyer?.fullName || buyer?.userName || 'B'}
+                />
+                <div className="reservation-party-head-text">
+                  <div className="reservation-party-name-row">
+                    <strong>{buyer?.fullName || '—'}</strong>
+                  </div>
+                  <span className="reservation-party-handle">
+                    {buyer?.userName ? `@${buyer.userName}` : '—'}
+                  </span>
+                </div>
                 {buyer?.id ? (
-                  <Link className="detail-btn" to={`/accounts/${buyer.id}`}>
+                  <Link className="detail-btn reservation-party-link" to={`/accounts/${buyer.id}`}>
                     Chi tiết
                   </Link>
                 ) : null}
               </div>
-              <div className="party-identity">
-                {buyer?.avatar ? (
-                  <img src={buyer.avatar} alt="" className="thumb-sm" />
-                ) : (
-                  <div className="thumb-sm thumb-fallback">
-                    {(buyer?.userName || buyer?.fullName || 'B').charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div>
-                  <div className="cell-title">{buyer?.fullName || ''}</div>
-                  <div className="cell-sub">{buyer?.userName ? `@${buyer.userName}` : ''}</div>
-                </div>
-              </div>
-              <dl className="detail-list">
+              <dl className="reservation-order-fields">
                 <div>
                   <dt>Email</dt>
-                  <dd>{buyer?.email || ''}</dd>
+                  <dd>{buyer?.email || '—'}</dd>
                 </div>
                 <div>
                   <dt>SĐT</dt>
-                  <dd>{buyer?.phone || ''}</dd>
+                  <dd>{buyer?.phone || '—'}</dd>
                 </div>
               </dl>
-              <div className="party-stats">
-                <span>
-                  <strong>{buyerStats?.totalReservations || 0}</strong> đơn
-                </span>
-                <span>
-                  <strong>{buyerStats?.successfulReservations || 0}</strong> OK
-                </span>
-                <span>
-                  <strong>{buyerStats?.previousDisputes || 0}</strong> tranh chấp
-                </span>
+              <div className="reservation-party-stats">
+                <div>
+                  <strong>{buyerStats?.totalReservations || 0}</strong>
+                  <span>Tổng đơn đã mua</span>
+                </div>
+                <div>
+                  <strong>{buyerStats?.successfulReservations || 0}</strong>
+                  <span>Đơn hoàn thành</span>
+                </div>
+                <div>
+                  <strong>{buyerStats?.previousDisputes || 0}</strong>
+                  <span>Đơn tranh chấp</span>
+                </div>
               </div>
             </article>
 
-            <article className="detail-card party-card">
-              <div className="party-card-head">
-                <h3>Người bán</h3>
+            <article className="reservation-order-info-card reservation-order-party-card">
+              <h2>Người bán</h2>
+              <div className="reservation-party-head">
+                <PartyAvatar src={sellerAvatar} fallback={sellerNick || sellerName || 'S'} />
+                <div className="reservation-party-head-text">
+                  <div className="reservation-party-name-row">
+                    <strong>{sellerName || '—'}</strong>
+                  </div>
+                  <span className="reservation-party-handle">
+                    {sellerNick ? `@${sellerNick}` : '—'}
+                  </span>
+                </div>
                 {sellerAccountId ? (
-                  <Link className="detail-btn" to={`/accounts/${sellerAccountId}`}>
+                  <Link
+                    className="detail-btn reservation-party-link"
+                    to={`/accounts/${sellerAccountId}`}
+                  >
                     Chi tiết
                   </Link>
                 ) : null}
               </div>
-              <div className="party-identity">
-                {seller?.avatar || shop?.avatar ? (
-                  <img src={seller?.avatar || shop?.avatar} alt="" className="thumb-sm" />
-                ) : (
-                  <div className="thumb-sm thumb-fallback">
-                    {(sellerNick || sellerName || 'S').charAt(0).toUpperCase()}
-                  </div>
-                )}
+              <dl className="reservation-order-fields">
                 <div>
-                  <div className="cell-title">{sellerName}</div>
-                  <div className="cell-sub">{sellerNick ? `@${sellerNick}` : ''}</div>
-                </div>
-              </div>
-              <dl className="detail-list">
-                <div>
-                  <dt>Email</dt>
-                  <dd>{seller?.email || shop?.email || ''}</dd>
+                  <dt>SĐT shop</dt>
+                  <dd>{seller?.phone || shop?.phone || '—'}</dd>
                 </div>
                 <div>
-                  <dt>SĐT</dt>
-                  <dd>{seller?.phone || shop?.phone || ''}</dd>
+                  <dt>Địa chỉ shop</dt>
+                  <dd>{shopAddress || '—'}</dd>
                 </div>
-                <div>
-                  <dt>Địa chỉ</dt>
-                  <dd>{shop?.address || ''}</dd>
-                </div>
-                {shop?.id ? (
-                  <div>
-                    <dt>Gian hàng</dt>
-                    <dd>
-                      <Link className="detail-btn" to={`/shops/${shop.id}`}>
-                        Chi tiết
-                      </Link>
-                    </dd>
-                  </div>
-                ) : null}
               </dl>
-              <div className="party-stats">
-                <span>
-                  <strong>{sellerStats?.totalReservations || 0}</strong> đơn
-                </span>
-                <span>
-                  <strong>{sellerStats?.completedOrders || 0}</strong> HT
-                </span>
-                <span>
-                  <strong>{sellerStats?.previousDisputes || 0}</strong> tranh chấp
-                </span>
+              <div className="reservation-party-stats">
+                <div>
+                  <strong>{sellerStats?.totalReservations || 0}</strong>
+                  <span>Tổng đơn đã bán</span>
+                </div>
+                <div>
+                  <strong>{sellerStats?.completedOrders || 0}</strong>
+                  <span>Đơn hoàn thành</span>
+                </div>
+                <div>
+                  <strong>{sellerStats?.previousDisputes || 0}</strong>
+                  <span>Đơn tranh chấp</span>
+                </div>
               </div>
             </article>
           </div>
 
-          <div className="reservation-extra-grid">
-            <ReservationTimeline reservation={reservation} />
-
-            <article className="detail-card">
-              <h3>Tranh chấp / Cọc</h3>
-              <dl className="detail-list">
-                <div>
-                  <dt>Trạng thái</dt>
-                  <dd>
-                    {reservation.disputeByBuyer ||
-                    reservation.disputeBySeller ||
-                    reservation.disputedAt ||
-                    isDisputed
-                      ? 'Có tranh chấp'
-                      : 'Không'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Lý do</dt>
-                  <dd>
-                    {reservation.disputeReasonLabel || reservation.disputeReason || ''}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Mô tả</dt>
-                  <dd>{reservation.disputeDescription || ''}</dd>
-                </div>
-                <div>
-                  <dt>Báo cáo lúc</dt>
-                  <dd>{formatDate(reservation.disputedAt)}</dd>
-                </div>
-                <div>
-                  <dt>Quyết toán cọc</dt>
-                  <dd>
-                    {reservation.depositSettleToLabel ||
-                      (Number(reservation.depositSettleTo) === 1
-                        ? 'Hoàn người mua'
-                        : Number(reservation.depositSettleTo) === 2
-                          ? 'Giải ngân seller'
-                          : 'Đang giữ')}
-                    {reservation.depositSettledAt
-                      ? ` · ${formatDate(reservation.depositSettledAt)}`
-                      : ''}
-                  </dd>
-                </div>
-              </dl>
+          {hasDisputeSection ? (
+            <section className="reservation-order-info-card reservation-order-dispute-card">
+              <h2>Tranh chấp</h2>
 
               {(reservation.disputeReports || []).map((report) => {
                 const isSellerReport = report.reporterSide === 'seller';
@@ -592,7 +583,9 @@ export default function ReservationDetailPage() {
                     key={report.id}
                     className={`dispute-report-card ${isSellerReport ? 'seller' : 'buyer'}`}
                   >
-                    <strong>{isSellerReport ? 'Seller' : 'Buyer'}: {title}</strong>
+                    <strong>
+                      {isSellerReport ? 'Seller' : 'Buyer'}: {title}
+                    </strong>
                     <p>{content || ''}</p>
                     <DisputeGpsBlock
                       latitude={lat}
@@ -617,8 +610,8 @@ export default function ReservationDetailPage() {
                   </div>
                 );
               })}
-            </article>
-          </div>
+            </section>
+          ) : null}
 
           <section className="table-card reservation-audit-card">
             <h3>Nhật ký xử lý</h3>
@@ -651,7 +644,7 @@ export default function ReservationDetailPage() {
               </div>
             )}
           </section>
-        </>
+        </div>
       ) : null}
     </div>
   );

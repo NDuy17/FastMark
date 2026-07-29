@@ -24,7 +24,7 @@ export async function fetchStoreById(storeId, originLocation = null) {
     }
     log.warn('fetchStoreById:node-api-not-found', { storeId: normalizedId });
   } catch (error) {
-    log.fail('fetchStoreById:node-api-failed', error);
+    log.warn('fetchStoreById:node-api-failed', error?.message || error);
   }
 
   return null;

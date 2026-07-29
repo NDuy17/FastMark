@@ -1,6 +1,8 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BOTTOM_SHEET_BORDER, BottomSheetDismissOverlay, BottomSheetHandle, BottomSheetPanel } from './bottomSheetChrome';
+
 const DEFAULT_REPORT_REASONS = [
   'Hàng giả / hàng kém chất lượng',
   'Lừa đảo / gian lận',
@@ -17,10 +19,9 @@ export default function ReportSheet({ visible, title, reasons, onClose, onSubmit
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
-          <View style={styles.handle} />
+      <BottomSheetDismissOverlay onClose={onClose}>
+        <BottomSheetPanel style={[styles.sheet, { paddingBottom: bottomInset }]}>
+          <BottomSheetHandle />
           <Text style={styles.title}>{title || 'Báo cáo vi phạm'}</Text>
           <Text style={styles.subtitle}>Chọn lý do báo cáo</Text>
 
@@ -44,36 +45,21 @@ export default function ReportSheet({ visible, title, reasons, onClose, onSubmit
           <Pressable style={styles.cancelButton} onPress={onClose}>
             <Text style={styles.cancelText}>Hủy</Text>
           </Pressable>
-        </View>
-      </View>
+        </BottomSheetPanel>
+      </BottomSheetDismissOverlay>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-  },
   sheet: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
+    ...BOTTOM_SHEET_BORDER,
     paddingHorizontal: 16,
     paddingTop: 10,
     maxHeight: '72%',
-  },
-  handle: {
-    alignSelf: 'center',
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#cbd5e1',
-    marginBottom: 14,
   },
   title: {
     fontSize: 18,

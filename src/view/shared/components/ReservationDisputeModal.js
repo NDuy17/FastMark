@@ -3,14 +3,11 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +20,11 @@ import {
   RESERVATION_DISPUTE_REASON_LABELS,
 } from '../../../constants/sellerOrders';
 import { reverseGeocodeLocation } from '../../../viewmodel/map/mapViewModel';
+import KeyboardAwareScrollView from './KeyboardAwareScrollView';
+import KeyboardStickyFooter from './KeyboardStickyFooter';
+import KeyboardAwareTextInput from './KeyboardAwareTextInput';
+
+const ACTIONS_BAR_ESTIMATE = 72;
 
 const MAX_IMAGES = 5;
 
@@ -185,22 +187,16 @@ export default function ReservationDisputeModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
+      <View style={styles.overlay}>
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
+          extraBottomInset={ACTIONS_BAR_ESTIMATE}
+          nestedScrollPadding={false}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.card}>
             <Text style={styles.title}>
               {isBuyer ? 'Báo cáo người bán' : 'Báo cáo người mua không đến'}
-            </Text>
-            <Text style={styles.subtitle}>
-              Gửi ảnh chứng cứ và vị trí GPS. Tiền cọc sẽ được giữ chờ admin xử lý.
             </Text>
 
             {isBuyer ? (
@@ -232,7 +228,7 @@ export default function ReservationDisputeModal({
                   : 'Ghi chú thêm (tuỳ chọn)'
                 : 'Ghi chú *'}
             </Text>
-            <TextInput
+            <KeyboardAwareTextInput
               style={styles.input}
               value={note}
               onChangeText={setNote}
@@ -267,30 +263,30 @@ export default function ReservationDisputeModal({
             ) : (
               <Text style={styles.hint}>Cần ít nhất 1 ảnh. Có thể chụp hoặc chọn từ thư viện.</Text>
             )}
-
-            <View style={styles.actions}>
-              <Pressable
-                style={[styles.btn, styles.btnGhost]}
-                onPress={onClose}
-                disabled={isSubmitting}
-              >
-                <Text style={styles.btnGhostText}>Huỷ</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.btn, styles.btnPrimary, isSubmitting && styles.btnDisabled]}
-                onPress={handleSubmit}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.btnPrimaryText}>Gửi báo cáo</Text>
-                )}
-              </Pressable>
-            </View>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
+
+        <KeyboardStickyFooter style={styles.actions}>
+          <Pressable
+            style={[styles.btn, styles.btnGhost]}
+            onPress={onClose}
+            disabled={isSubmitting}
+          >
+            <Text style={styles.btnGhostText}>Huỷ</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.btn, styles.btnPrimary, isSubmitting && styles.btnDisabled]}
+            onPress={handleSubmit}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.btnPrimaryText}>Gửi báo cáo</Text>
+            )}
+          </Pressable>
+        </KeyboardStickyFooter>
+      </View>
     </Modal>
   );
 }
@@ -300,6 +296,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.45)',
     justifyContent: 'center',
+    position: 'relative',
   },
   scrollContent: {
     flexGrow: 1,
@@ -316,12 +313,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '900',
     color: '#0f172a',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#64748b',
-    fontWeight: '600',
-    lineHeight: 18,
   },
   label: {
     fontSize: 13,
@@ -411,7 +402,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 6,
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
   btn: {
     flex: 1,

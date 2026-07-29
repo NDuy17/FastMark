@@ -58,6 +58,27 @@ export async function checkSellerShopUsernameAvailabilityOnBackend({ idToken, sh
   return parsed.data || { available: false, message: 'Không kiểm tra được username shop.' };
 }
 
+export async function uploadShopAvatarOnBackend({ idToken, imageBase64, mimeType = 'image/jpeg' }) {
+  if (!imageBase64) {
+    throw new Error('Thiếu dữ liệu ảnh để upload.');
+  }
+
+  const response = await apiRequest(
+    API_ENDPOINTS.sellerShopAvatar,
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: JSON.stringify({
+        imageBase64,
+        mimeType,
+      }),
+    },
+    SELLER_UPLOAD_TIMEOUT_MS
+  );
+  const parsed = await parseApiResponse(response);
+  return parsed.data?.shop || null;
+}
+
 export async function getSellerOrdersOnBackend({ idToken, tab }) {
   const response = await apiRequest(
     `${API_ENDPOINTS.sellerOrders}?tab=${encodeURIComponent(tab)}`,
@@ -102,13 +123,32 @@ export async function rejectSellerReservationOnBackend({ idToken, reservationId,
   return payload.data?.reservation;
 }
 
-export async function cancelSellerReservationOnBackend({ idToken, reservationId, reason }) {
+export async function cancelSellerReservationOnBackend({
+  idToken,
+  reservationId,
+  reason,
+  images = [],
+}) {
   const response = await apiRequest(
     API_ENDPOINTS.sellerReservationCancel(reservationId),
     {
       method: 'POST',
       headers: await authHeaders(idToken),
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, images }),
+    },
+    SELLER_UPLOAD_TIMEOUT_MS
+  );
+  const payload = await parseApiResponse(response);
+  return payload.data?.reservation;
+}
+
+export async function refundSellerDisputeDepositOnBackend(idToken, reservationId) {
+  const response = await apiRequest(
+    API_ENDPOINTS.sellerReservationRefundDispute(reservationId),
+    {
+      method: 'POST',
+      headers: await authHeaders(idToken),
+      body: '{}',
     },
     AUTH_TIMEOUT_MS
   );

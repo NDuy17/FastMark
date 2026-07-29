@@ -8,19 +8,30 @@ import { getCurrentUserIdToken } from '../repository/authRepository';
 let sharedSocket = null;
 let connectPromise = null;
 let listenerCount = 0;
-const listeners = new Set();
+const newListeners = new Set();
+const readListeners = new Set();
 
-function notifyListeners(payload) {
+function notifyNewListeners(payload) {
   const normalized = normalizeSocketNotification(payload);
   if (!normalized) {
     return;
   }
 
-  listeners.forEach((listener) => {
+  newListeners.forEach((listener) => {
     try {
       listener(normalized);
     } catch (error) {
       console.warn('notification socket listener failed:', error?.message || error);
+    }
+  });
+}
+
+function notifyReadListeners(payload) {
+  readListeners.forEach((listener) => {
+    try {
+      listener(payload || {});
+    } catch (error) {
+      console.warn('notification read socket listener failed:', error?.message || error);
     }
   });
 }
@@ -62,9 +73,9 @@ async function ensureSharedSocket() {
       reconnection: true,
     });
 
-    socket.on('notification:new', (payload) => {
-      notifyListeners(payload);
-    });
+    socket.on('notification:new', notifyNewListeners);
+    socket.on('notification_created', notifyNewListeners);
+    socket.on('notification:read', notifyReadListeners);
 
     socket.on('disconnect', () => {
       if (listenerCount === 0) {
@@ -83,22 +94,44 @@ async function ensureSharedSocket() {
   }
 }
 
-export function useNotificationSocket({ enabled = true, onNotificationNew } = {}) {
+export function useNotificationSocket({
+  enabled = true,
+  onNotificationNew,
+  onNotificationRead,
+} = {}) {
   useEffect(() => {
-    if (!enabled || typeof onNotificationNew !== 'function') {
+    if (!enabled) {
       return undefined;
     }
 
-    listeners.add(onNotificationNew);
+    const hasNewListener = typeof onNotificationNew === 'function';
+    const hasReadListener = typeof onNotificationRead === 'function';
+
+    if (!hasNewListener && !hasReadListener) {
+      return undefined;
+    }
+
+    if (hasNewListener) {
+      newListeners.add(onNotificationNew);
+    }
+    if (hasReadListener) {
+      readListeners.add(onNotificationRead);
+    }
+
     listenerCount += 1;
     ensureSharedSocket();
 
     return () => {
-      listeners.delete(onNotificationNew);
+      if (hasNewListener) {
+        newListeners.delete(onNotificationNew);
+      }
+      if (hasReadListener) {
+        readListeners.delete(onNotificationRead);
+      }
       listenerCount = Math.max(0, listenerCount - 1);
       if (listenerCount === 0) {
         disconnectSharedSocket();
       }
     };
-  }, [enabled, onNotificationNew]);
+  }, [enabled, onNotificationNew, onNotificationRead]);
 }

@@ -135,29 +135,6 @@ const RESERVATION_AUDIT_ACTION = {
   ADMIN_RELEASE_SELLER: "ADMIN_RELEASE_SELLER",
 };
 
-// ── Messaging ────────────────────────────────────────────────────────
-const MESSAGE_TYPE = {
-  TEXT: 0,
-  IMAGE: 1,
-  OFFER: 2,
-};
-
-const MESSAGE_STATUS = {
-  SENT: 0,
-  DELIVERED: 1,
-  SEEN: 2,
-};
-
-const MESSAGE_READ = {
-  UNREAD: 0,
-  READ: 1,
-};
-
-const SENDER_TYPE = {
-  USER: 0,
-  SHOP: 1,
-};
-
 // ── Reports ──────────────────────────────────────────────────────────
 /**
  * Loại báo cáo.
@@ -165,6 +142,8 @@ const SENDER_TYPE = {
  * 5–7: báo cáo giữ hàng / tranh chấp.
  * 8: lỗi hệ thống (tố cáo từ tài khoản).
  * 9: khác (tố cáo chung / giữ hàng “khác”).
+ * 10: khiếu nại khóa tài khoản (buyer/seller bị khóa nick).
+ * 11: khiếu nại khóa gian hàng (seller bị khóa shop, nick vẫn hoạt động).
  */
 const REPORT_TYPE = {
   REVIEW: 1,
@@ -181,6 +160,10 @@ const REPORT_TYPE = {
   SYSTEM: 8,
   /** Khác (tố cáo chung hoặc giữ hàng). */
   OTHER: 9,
+  /** User bị khóa nick khiếu nại mở lại tài khoản. */
+  ACCOUNT_LOCK_APPEAL: 10,
+  /** Seller bị khóa gian hàng khiếu nại mở lại shop. */
+  SHOP_LOCK_APPEAL: 11,
 };
 
 const REPORT_TYPE_LABELS = {
@@ -193,6 +176,8 @@ const REPORT_TYPE_LABELS = {
   [REPORT_TYPE.PRODUCT_ISSUE]: "Sự cố sản phẩm (giữ hàng)",
   [REPORT_TYPE.SYSTEM]: "Hệ thống lỗi",
   [REPORT_TYPE.OTHER]: "Khác",
+  [REPORT_TYPE.ACCOUNT_LOCK_APPEAL]: "Khiếu nại khóa tài khoản",
+  [REPORT_TYPE.SHOP_LOCK_APPEAL]: "Khiếu nại khóa gian hàng",
 };
 
 /** Các loại report gắn Reservation (tranh chấp cọc). */
@@ -211,6 +196,8 @@ const CONTENT_REPORT_TYPES = [
   REPORT_TYPE.PRODUCT,
   REPORT_TYPE.SYSTEM,
   REPORT_TYPE.OTHER,
+  REPORT_TYPE.ACCOUNT_LOCK_APPEAL,
+  REPORT_TYPE.SHOP_LOCK_APPEAL,
 ];
 
 /** Loại tố cáo từ màn Tài khoản (combobox). */
@@ -222,6 +209,9 @@ const ACCOUNT_REPORT_TYPES = [
 ];
 
 const MAX_ACCOUNT_REPORT_IMAGES = 5;
+
+/** Số ảnh chứng minh tối đa khi seller hủy đơn sau xác nhận. */
+const MAX_SELLER_CANCEL_IMAGES = 5;
 
 const REPORT_STATUS = {
   PENDING: 0,
@@ -262,6 +252,23 @@ function normalizeNotificationAudience(value, fallback = NOTIFICATION_AUDIENCE.S
     .toLowerCase();
   if (Object.values(NOTIFICATION_AUDIENCE).includes(raw)) {
     return raw;
+  }
+  return fallback;
+}
+
+/** 1 = đơn hàng, 2 = hệ thống (tab lọc thông báo). */
+const NOTIFICATION_INDEX = {
+  ORDER: 1,
+  SYSTEM: 2,
+};
+
+function normalizeNotificationIndex(value, fallback = NOTIFICATION_INDEX.SYSTEM) {
+  const parsed = Number(value);
+  if (parsed === NOTIFICATION_INDEX.ORDER) {
+    return NOTIFICATION_INDEX.ORDER;
+  }
+  if (parsed === NOTIFICATION_INDEX.SYSTEM) {
+    return NOTIFICATION_INDEX.SYSTEM;
   }
   return fallback;
 }
@@ -407,6 +414,8 @@ function activeSubscriptionFilter() {
   return { isActive: true };
 }
 
+const reservationOrderFlow = require("./reservationOrderFlow");
+
 module.exports = {
   SELLER_VERIFICATION_STATUS,
   USER_ROLE,
@@ -423,22 +432,21 @@ module.exports = {
   BUYER_DISPUTE_REASON_OPTIONS,
   normalizeBuyerDisputeReason,
   RESERVATION_AUDIT_ACTION,
-  MESSAGE_TYPE,
-  MESSAGE_STATUS,
-  MESSAGE_READ,
-  SENDER_TYPE,
   REPORT_TYPE,
   REPORT_TYPE_LABELS,
   RESERVATION_REPORT_TYPES,
   CONTENT_REPORT_TYPES,
   ACCOUNT_REPORT_TYPES,
   MAX_ACCOUNT_REPORT_IMAGES,
+  MAX_SELLER_CANCEL_IMAGES,
   REPORT_STATUS,
   REPORT_STATUS_LABELS,
   REPORT_REPORTER_ROLE,
   REPORT_REPORTER_ROLE_LABELS,
   NOTIFICATION_AUDIENCE,
   normalizeNotificationAudience,
+  NOTIFICATION_INDEX,
+  normalizeNotificationIndex,
   BANNER_TARGET_TYPE,
   BANNER_TARGET_TYPE_LABEL,
   SELLER_BANNER_STATUS,
@@ -461,4 +469,5 @@ module.exports = {
   getShopExpiry,
   isSubscriptionActive,
   activeSubscriptionFilter,
+  ...reservationOrderFlow,
 };

@@ -1,13 +1,5 @@
-import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -21,8 +13,9 @@ import {
   completeGoogleProfile,
 } from '../../viewmodel/auth/authSlice';
 import { validateGoogleProfileForm } from '../../viewmodel/auth/authFormValidation';
+import { showErrorAlert } from '../../core/utils/appAlert';
+import AuthFormScreen from './components/AuthFormScreen';
 import AuthBrand from './components/AuthBrand';
-import CircularBackButton from '../shared/components/CircularBackButton';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import AuthInput from './components/AuthInput';
 import { AUTH_COLORS, AUTH_RADIUS } from './components/authTheme';
@@ -35,19 +28,22 @@ export default function GoogleUsernameSetupScreen() {
 
   const [fullName, setFullName] = useState(pendingGoogle?.fullName || '');
   const [userName, setUserName] = useState('');
-  const [localError, setLocalError] = useState('');
 
   const isLoading = actionStatus === 'loading';
-  const displayError = localError || error;
+
+  useEffect(() => {
+    if (error) {
+      showErrorAlert(error);
+    }
+  }, [error]);
 
   function handleSubmit() {
     const validationError = validateGoogleProfileForm({ fullName, userName });
     if (validationError) {
-      setLocalError(validationError);
+      showErrorAlert(validationError);
       return;
     }
 
-    setLocalError('');
     dispatch(
       completeGoogleProfile({
         fullName: fullName.trim(),
@@ -62,22 +58,8 @@ export default function GoogleUsernameSetupScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <CircularBackButton
-          onPress={handleCancel}
-          variant="surface"
-          size={40}
-          style={styles.backButton}
-        />
-
+    <AuthFormScreen title="Hoàn tất tài khoản" onBack={handleCancel}>
+      <View style={styles.formContent}>
         <AuthBrand
           title="Hoàn tất tài khoản"
           subtitle="Đây là lần đăng nhập Google đầu tiên. Hãy chọn tên đăng nhập để tiếp tục."
@@ -101,7 +83,6 @@ export default function GoogleUsernameSetupScreen() {
             value={fullName}
             onChangeText={(value) => {
               setFullName(value);
-              setLocalError('');
             }}
             autoCapitalize="words"
             autoComplete="name"
@@ -113,18 +94,11 @@ export default function GoogleUsernameSetupScreen() {
             value={userName}
             onChangeText={(value) => {
               setUserName(value);
-              setLocalError('');
             }}
             autoCapitalize="none"
             autoComplete="username"
             placeholder="nguyenvana"
           />
-
-          {displayError ? (
-            <View style={styles.alertBox}>
-              <Text style={styles.alertText}>{displayError}</Text>
-            </View>
-          ) : null}
 
           <Pressable
             disabled={isLoading}
@@ -140,27 +114,14 @@ export default function GoogleUsernameSetupScreen() {
             </Text>
           </Pressable>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </View>
+    </AuthFormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: AUTH_COLORS.background,
-  },
-  content: {
+  formContent: {
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 36,
-  },
-  backButton: {
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: AUTH_COLORS.border,
-    backgroundColor: '#ffffff',
   },
   card: {
     backgroundColor: AUTH_COLORS.card,

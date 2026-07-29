@@ -82,6 +82,46 @@ function isPromotionActiveNow(product, now = new Date()) {
   return true;
 }
 
+function formatAdminPriceRange(min, max) {
+  const formatOne = (value) => `${Number(value || 0).toLocaleString("vi-VN")} đ`;
+  const minPrice = Number(min) || 0;
+  const maxPrice = Number(max) || 0;
+  if (minPrice === maxPrice) {
+    return formatOne(minPrice);
+  }
+  return `${formatOne(minPrice)} - ${formatOne(maxPrice)}`;
+}
+
+/** Giá gốc + giá KM cho admin (list/detail/lịch sử). */
+function buildAdminProductPriceFields(product, now = new Date()) {
+  const minPrice = Number(product.MinPrice ?? product.minPrice) || 0;
+  const maxPrice = Number(product.MaxPrice ?? product.maxPrice) || 0;
+  const active = isPromotionActiveNow(product, now);
+  const discountPercent = active ? Number(product.DiscountPercent ?? product.discountPercent) || 0 : 0;
+  const isPromotion = active && discountPercent > 0;
+  const promotionMinPrice = isPromotion
+    ? computePromotionPriceFromPercent(minPrice, discountPercent)
+    : null;
+  const promotionMaxPrice = isPromotion
+    ? computePromotionPriceFromPercent(maxPrice, discountPercent)
+    : null;
+
+  return {
+    minPrice,
+    maxPrice,
+    isPromotion,
+    discountPercent: isPromotion ? discountPercent : 0,
+    discountLabel: isPromotion ? `−${discountPercent}%` : "",
+    promotionMinPrice: isPromotion ? promotionMinPrice : null,
+    promotionMaxPrice: isPromotion ? promotionMaxPrice : null,
+    priceLabel: formatAdminPriceRange(minPrice, maxPrice),
+    promotionPriceLabel:
+      isPromotion && promotionMinPrice != null
+        ? formatAdminPriceRange(promotionMinPrice, promotionMaxPrice ?? promotionMinPrice)
+        : "",
+  };
+}
+
 /** Giá đơn vị sau KM (áp % giảm lên giá biến thể). */
 function getPromotionalUnitPrice(product, variantPrice, now = new Date()) {
   const base = Number(variantPrice) || 0;
@@ -570,6 +610,7 @@ module.exports = {
   applyPromotionToProduct,
   attachPromotionDto,
   isPromotionActiveNow,
+  buildAdminProductPriceFields,
   getPromotionalUnitPrice,
   expireDuePromotions,
   ensureProductPromotionFresh,

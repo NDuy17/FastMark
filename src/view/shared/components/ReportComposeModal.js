@@ -7,12 +7,17 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+
+import { BOTTOM_SHEET_BORDER, BottomSheetDismissOverlay, BottomSheetHandle, BottomSheetPanel } from './bottomSheetChrome';
+import KeyboardAwareScrollView from './KeyboardAwareScrollView';
+import KeyboardStickyFooter from './KeyboardStickyFooter';
+import KeyboardAwareTextInput from './KeyboardAwareTextInput';
+
+const ACTIONS_BAR_ESTIMATE = 72;
 
 const MAX_IMAGES = 5;
 
@@ -42,8 +47,6 @@ export default function ReportComposeModal({
   onClose,
   onSubmit,
 }) {
-  const insets = useSafeAreaInsets();
-  const bottomInset = Math.max(insets.bottom, 12);
   const [content, setContent] = useState('');
   const [imageUris, setImageUris] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -151,98 +154,98 @@ export default function ReportComposeModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
-          <View style={styles.handle} />
-          <Text style={styles.title}>{headerTitle}</Text>
-          {reasonTitle ? (
-            <View style={styles.reasonBox}>
-              <Text style={styles.reasonLabel}>Lý do</Text>
-              <Text style={styles.reasonText}>{reasonTitle}</Text>
-            </View>
-          ) : null}
+      <BottomSheetDismissOverlay onClose={onClose}>
+        <BottomSheetPanel style={styles.sheet}>
+          <BottomSheetHandle />
 
-          <Text style={styles.label}>Chi tiết tố cáo</Text>
-          <TextInput
-            value={content}
-            onChangeText={setContent}
-            style={styles.textArea}
-            multiline
-            placeholder="Mô tả chi tiết vấn đề..."
-            placeholderTextColor="#94a3b8"
-            textAlignVertical="top"
-          />
-
-          <View style={styles.imagesHeader}>
-            <Text style={styles.label}>Ảnh đính kèm (tối đa {MAX_IMAGES})</Text>
-            <Text style={styles.imageCount}>
-              {imageUris.length}/{MAX_IMAGES}
-            </Text>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.imagesRow}
-          >
-            {imageUris.map((uri, index) => (
-              <View key={`${index}-${uri.slice(0, 24)}`} style={styles.imageWrap}>
-                <Image source={{ uri }} style={styles.image} />
-                <Pressable style={styles.removeImageBtn} onPress={() => removeImage(index)}>
-                  <Ionicons name="close" size={14} color="#ffffff" />
-                </Pressable>
-              </View>
-            ))}
-            {imageUris.length < MAX_IMAGES ? (
-              <Pressable style={styles.addImageBtn} onPress={handleAddPhoto}>
-                <Ionicons name="camera-outline" size={22} color="#076F32" />
-                <Text style={styles.addImageText}>Thêm</Text>
-              </Pressable>
-            ) : null}
-          </ScrollView>
-
-          <View style={styles.actions}>
-            <Pressable style={styles.cancelBtn} onPress={onClose} disabled={isSubmitting}>
-              <Text style={styles.cancelText}>Hủy</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.submitBtn, isSubmitting && styles.submitDisabled]}
-              onPress={handleSubmit}
-              disabled={isSubmitting}
+          <View style={styles.sheetBody}>
+            <KeyboardAwareScrollView
+              contentContainerStyle={styles.scrollContent}
+              extraBottomInset={ACTIONS_BAR_ESTIMATE}
+              nestedScrollPadding={false}
+              showsVerticalScrollIndicator={false}
             >
-              <Text style={styles.submitText}>{isSubmitting ? 'Đang gửi...' : 'Gửi tố cáo'}</Text>
-            </Pressable>
+              <Text style={styles.title}>{headerTitle}</Text>
+              {reasonTitle ? (
+                <View style={styles.reasonBox}>
+                  <Text style={styles.reasonLabel}>Lý do</Text>
+                  <Text style={styles.reasonText}>{reasonTitle}</Text>
+                </View>
+              ) : null}
+
+              <Text style={styles.label}>Chi tiết tố cáo</Text>
+              <KeyboardAwareTextInput
+                value={content}
+                onChangeText={setContent}
+                style={styles.textArea}
+                multiline
+                placeholder="Mô tả chi tiết vấn đề..."
+                placeholderTextColor="#94a3b8"
+                textAlignVertical="top"
+              />
+
+              <View style={styles.imagesHeader}>
+                <Text style={styles.label}>Ảnh đính kèm (tối đa {MAX_IMAGES})</Text>
+                <Text style={styles.imageCount}>
+                  {imageUris.length}/{MAX_IMAGES}
+                </Text>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.imagesRow}
+              >
+                {imageUris.map((uri, index) => (
+                  <View key={`${index}-${uri.slice(0, 24)}`} style={styles.imageWrap}>
+                    <Image source={{ uri }} style={styles.image} />
+                    <Pressable style={styles.removeImageBtn} onPress={() => removeImage(index)}>
+                      <Ionicons name="close" size={14} color="#ffffff" />
+                    </Pressable>
+                  </View>
+                ))}
+                {imageUris.length < MAX_IMAGES ? (
+                  <Pressable style={styles.addImageBtn} onPress={handleAddPhoto}>
+                    <Ionicons name="camera-outline" size={22} color="#076F32" />
+                    <Text style={styles.addImageText}>Thêm</Text>
+                  </Pressable>
+                ) : null}
+              </ScrollView>
+            </KeyboardAwareScrollView>
+
+            <KeyboardStickyFooter style={styles.actions}>
+              <Pressable style={styles.cancelBtn} onPress={onClose} disabled={isSubmitting}>
+                <Text style={styles.cancelText}>Hủy</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.submitBtn, isSubmitting && styles.submitDisabled]}
+                onPress={handleSubmit}
+                disabled={isSubmitting}
+              >
+                <Text style={styles.submitText}>{isSubmitting ? 'Đang gửi...' : 'Gửi tố cáo'}</Text>
+              </Pressable>
+            </KeyboardStickyFooter>
           </View>
-        </View>
-      </View>
+        </BottomSheetPanel>
+      </BottomSheetDismissOverlay>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-  },
   sheet: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    paddingHorizontal: 16,
-    paddingTop: 10,
+    ...BOTTOM_SHEET_BORDER,
     maxHeight: '88%',
   },
-  handle: {
-    alignSelf: 'center',
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#cbd5e1',
-    marginBottom: 12,
+  sheetBody: {
+    position: 'relative',
+    minHeight: 0,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
   },
   title: {
     fontSize: 18,
@@ -342,7 +345,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
   cancelBtn: {
     flex: 1,

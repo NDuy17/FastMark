@@ -19,11 +19,16 @@ startSellerPlanExpiryJob();
 const { startPromotionExpiryJob } = require("./jobs/promotionExpiryJob");
 startPromotionExpiryJob();
 
+const { startPickupReminderJob } = require("./jobs/pickupReminderJob");
+startPickupReminderJob();
+
 const server = http.createServer(app);
 initSocket(server);
 
 server.listen(port, '0.0.0.0', () => {
   const { isPayosConfigured } = require('./services/payosClient');
+  const { isPusherConfigured } = require('./services/pusherService');
   console.log(`Server running on port ${port}`);
   console.log(`PayOS: ${isPayosConfigured() ? 'configured' : 'NOT configured (check FastMark/.env)'}`);
+  console.log(`Pusher: ${isPusherConfigured() ? 'configured' : 'NOT configured (add PUSHER_* to FastMark/.env and restart)'}`);
 });

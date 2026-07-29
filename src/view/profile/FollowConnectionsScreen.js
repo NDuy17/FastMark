@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -17,9 +17,13 @@ import {
   unfollowShopOnBackend,
 } from '../../api/followApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+
+const SEARCH_DEBOUNCE_MS = 400;
+const FOLLOWERS_REFRESH_MS = 20000;
 
 function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
   const isShop = Boolean(item.shopId || item.shopName);
@@ -82,17 +86,17 @@ export default function FollowConnectionsScreen({
   shopId = '',
 }) {
   const insets = useScreenInsets();
+  const searchTimerRef = useRef(null);
   const resolvedMode = mode || (initialTab === 'followers' ? 'followers' : 'following');
   const [activeTab, setActiveTab] = useState(resolvedMode);
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [error, setError] = useState('');
 
   const tabs = useMemo(() => {
     if (shopId || resolvedMode === 'followers') {
@@ -105,26 +109,39 @@ export default function FollowConnectionsScreen({
     setActiveTab(shopId ? 'followers' : resolvedMode);
   }, [shopId, resolvedMode]);
 
+  useEffect(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    searchTimerRef.current = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+    };
+  }, [search]);
+
   const loadData = useCallback(
-    async ({ refresh = false, nextPage = 1 } = {}) => {
-      if (refresh) {
+    async ({ refresh = false, nextPage = 1, silent = false } = {}) => {
+      if (refresh && !silent) {
         setIsRefreshing(true);
       } else if (nextPage > 1) {
         setIsLoadingMore(true);
-      } else {
+      } else if (!silent) {
         setIsLoading(true);
       }
-      setError('');
-
       try {
         const idToken = await getCurrentUserIdToken();
         if (!idToken) {
           setItems([]);
-          setError('Đăng nhập để xem danh sách theo dõi.');
+          showErrorAlert('Đăng nhập để xem danh sách theo dõi.');
           return;
         }
 
-        const params = { page: nextPage, limit: 20, search: appliedSearch };
+        const params = { page: nextPage, limit: 20, search: debouncedSearch };
         if (activeTab === 'followers' && shopId) {
           params.shopId = shopId;
         }
@@ -144,19 +161,33 @@ export default function FollowConnectionsScreen({
         if (nextPage === 1) {
           setItems([]);
         }
-        setError(loadError.message || 'Không tải được danh sách.');
+        showErrorAlert(loadError.message || 'Không tải được danh sách.');
       } finally {
-        setIsLoading(false);
-        setIsRefreshing(false);
+        if (!silent) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
         setIsLoadingMore(false);
       }
     },
-    [activeTab, appliedSearch, shopId]
+    [activeTab, debouncedSearch, shopId]
   );
 
   useEffect(() => {
     loadData({ nextPage: 1 });
   }, [loadData]);
+
+  useEffect(() => {
+    if (activeTab !== 'followers') {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      loadData({ refresh: true, silent: true });
+    }, FOLLOWERS_REFRESH_MS);
+
+    return () => clearInterval(timer);
+  }, [activeTab, loadData]);
 
   async function handleUnfollow(item) {
     try {
@@ -194,6 +225,8 @@ export default function FollowConnectionsScreen({
                 onPress={() => {
                   setActiveTab(tab.key);
                   setPage(1);
+                  setSearch('');
+                  setDebouncedSearch('');
                 }}
                 style={[styles.tabItem, isActive && styles.tabItemActive]}
               >
@@ -208,16 +241,13 @@ export default function FollowConnectionsScreen({
         <ClearableSearchField
           value={search}
           onChangeText={setSearch}
-          placeholder={activeTab === 'following' ? 'Tìm gian hàng...' : 'Tìm người theo dõi...'}
+          placeholder={
+            activeTab === 'following'
+              ? 'Tìm người đang theo dõi...'
+              : 'Tìm người theo dõi...'
+          }
           style={styles.searchField}
-          onSubmitEditing={() => setAppliedSearch(search.trim())}
         />
-        <Pressable
-          onPress={() => setAppliedSearch(search.trim())}
-          style={({ pressed }) => [styles.searchBtn, pressed && styles.rowPressed]}
-        >
-          <Text style={styles.searchBtnText}>Tìm</Text>
-        </Pressable>
       </View>
 
       {isLoading ? (
@@ -228,13 +258,6 @@ export default function FollowConnectionsScreen({
               <View key={index} style={styles.skeletonRow} />
             ))}
           </View>
-        </View>
-      ) : error ? (
-        <View style={styles.centerState}>
-          <Text style={styles.emptyTitle}>{error}</Text>
-          <Pressable onPress={() => loadData({ nextPage: 1 })} style={styles.retryBtn}>
-            <Text style={styles.retryText}>Thử lại</Text>
-          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -337,27 +360,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   searchRow: {
-    flexDirection: 'row',
-    gap: 8,
     paddingHorizontal: 16,
     marginTop: 12,
     marginBottom: 8,
-    alignItems: 'center',
   },
   searchField: {
     flex: 1,
-  },
-  searchBtn: {
-    height: 44,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#076F32',
-  },
-  searchBtnText: {
-    color: '#ffffff',
-    fontWeight: '800',
   },
   listContent: {
     paddingHorizontal: 16,

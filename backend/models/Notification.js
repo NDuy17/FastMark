@@ -24,6 +24,12 @@ const NotificationSchema = new mongoose.Schema({
   // Đã đọc: 0 = chưa đọc, 1 = đã đọc.
   isRead: { type: Number, default: 0 },
 
+  // 1 = đơn hàng, 2 = hệ thống (tab lọc).
+  index: { type: Number, default: 2, index: true },
+
+  // true = admin gửi broadcast từ Quản lý thông báo (dùng cho lịch sử admin).
+  isAdminBroadcast: { type: Boolean, default: false, index: true },
+
   // Thời điểm tạo thông báo.
   CreatedAt: { type: Date, default: Date.now },
   // Thời điểm cập nhật gần nhất.

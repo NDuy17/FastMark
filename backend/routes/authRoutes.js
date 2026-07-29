@@ -1,6 +1,9 @@
 const express = require("express");
 const authController = require("../controllers/authController");
-const verifyFirebaseToken = require("../middleware/authMiddleware");
+const {
+  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
+} = require("../middleware/authMiddleware");
 const { singleImage } = require("../config/commom/upload");
 const asyncHandler = require("../utils/asyncHandler");
 
@@ -15,8 +18,29 @@ router.post("/forgot-password/verify", asyncHandler(authController.verifyPasswor
 router.post("/forgot-password/reset", asyncHandler(authController.resetPassword));
 router.post("/verify-email/request", verifyFirebaseToken, asyncHandler(authController.requestEmailVerification));
 router.post("/verify-email/confirm", verifyFirebaseToken, asyncHandler(authController.confirmEmailVerification));
-router.get("/me", verifyFirebaseToken, asyncHandler(authController.getMe));
+router.get("/me", verifyFirebaseTokenAllowBlocked, asyncHandler(authController.getMe));
 router.put("/me", verifyFirebaseToken, asyncHandler(authController.updateMe));
+router.get(
+  "/lock-appeal",
+  verifyFirebaseTokenAllowBlocked,
+  asyncHandler(authController.getLockAppealStatus)
+);
+router.post(
+  "/lock-appeal",
+  verifyFirebaseTokenAllowBlocked,
+  asyncHandler(authController.createLockAppeal)
+);
+router.get(
+  "/shop-lock-appeal",
+  verifyFirebaseToken,
+  asyncHandler(authController.getShopLockAppealStatus)
+);
+router.post(
+  "/shop-lock-appeal",
+  verifyFirebaseToken,
+  asyncHandler(authController.createShopLockAppeal)
+);
+
 function optionalMultipartAvatar(req, res, next) {
   const contentType = String(req.headers["content-type"] || "");
 

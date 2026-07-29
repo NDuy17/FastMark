@@ -1,7 +1,6 @@
-const Conversation = require("../models/Conversation");
 const ShopProfile = require("../models/ShopProfile");
 const { mapPresenceFields } = require("../utils/activityLabel");
-const { emitConversationEvent, emitUserEvent } = require("../socket");
+const { emitUserEvent } = require("../socket");
 
 function buildPresencePayload({ userId, shopId, target, presence }) {
   return {
@@ -12,42 +11,9 @@ function buildPresencePayload({ userId, shopId, target, presence }) {
   };
 }
 
-/**
- * Gửi presence cho chính user + mọi đối phương trong hội thoại gần đây,
- * và vào room conversation đang mở để ChatScreen cập nhật realtime.
- */
 async function emitPresenceUpdate({ userId, shopId, target, presence }) {
   const payload = buildPresencePayload({ userId, shopId, target, presence });
-  const selfId = String(userId);
-
-  emitUserEvent(selfId, "presence:update", payload);
-
-  const conversations = await Conversation.find({
-    $or: [{ participantA: userId }, { participantB: userId }],
-  })
-    .select("_id participantA participantB")
-    .sort({ UpdatedAt: -1 })
-    .limit(80)
-    .lean();
-
-  const notifiedPeers = new Set();
-
-  for (const conversation of conversations) {
-    const conversationId = String(conversation._id);
-    emitConversationEvent(conversationId, "presence:update", payload);
-
-    const peerId =
-      String(conversation.participantA) === selfId
-        ? String(conversation.participantB)
-        : String(conversation.participantA);
-
-    if (!peerId || peerId === selfId || notifiedPeers.has(peerId)) {
-      continue;
-    }
-
-    notifiedPeers.add(peerId);
-    emitUserEvent(peerId, "presence:update", payload);
-  }
+  emitUserEvent(String(userId), "presence:update", payload);
 }
 
 async function findShopByUser(user) {

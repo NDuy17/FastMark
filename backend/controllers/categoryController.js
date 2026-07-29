@@ -5,7 +5,6 @@ function pickPayload(body = {}) {
   const payload = {
     name: body.name ?? body.categoryName,
     description: body.description,
-    isDeleted: body.isDeleted ?? body.IsDeleted,
   };
 
   if (body.icon !== undefined) {
@@ -16,16 +15,16 @@ function pickPayload(body = {}) {
 }
 
 exports.listProductCategories = async (req, res) => {
-  const categories = await categoryService.listProductCategories({ includeHidden: true });
+  const categories = await categoryService.listProductCategories({ includeHidden: false });
   return success(res, { data: { categories } });
 };
 
 exports.createProductCategory = async (req, res) => {
-  const category = await categoryService.createProductCategory(pickPayload(req.body));
+  const { category, restored } = await categoryService.createProductCategory(pickPayload(req.body));
   return success(res, {
     status: 201,
-    message: "Tạo danh mục sản phẩm thành công.",
-    data: { category },
+    message: restored ? "Đã khôi phục danh mục sản phẩm." : "Tạo danh mục sản phẩm thành công.",
+    data: { category, restored: Boolean(restored) },
   });
 };
 
@@ -42,6 +41,11 @@ exports.deleteProductCategory = async (req, res) => {
   return success(res, { message: "Xóa danh mục sản phẩm thành công." });
 };
 
+exports.restoreProductCategory = async (req, res) => {
+  const category = await categoryService.restoreProductCategory(req.params.id);
+  return success(res, { message: "Đã khôi phục danh mục sản phẩm.", data: { category } });
+};
+
 exports.uploadProductCategoryIcon = async (req, res) => {
   const uploaded = await categoryService.uploadProductCategoryIcon({
     file: req.file,
@@ -51,16 +55,16 @@ exports.uploadProductCategoryIcon = async (req, res) => {
 };
 
 exports.listShopCategories = async (req, res) => {
-  const categories = await categoryService.listShopCategories({ includeHidden: true });
+  const categories = await categoryService.listShopCategories({ includeHidden: false });
   return success(res, { data: { categories } });
 };
 
 exports.createShopCategory = async (req, res) => {
-  const category = await categoryService.createShopCategory(pickPayload(req.body));
+  const { category, restored } = await categoryService.createShopCategory(pickPayload(req.body));
   return success(res, {
     status: 201,
-    message: "Tạo danh mục cửa hàng thành công.",
-    data: { category },
+    message: restored ? "Đã khôi phục danh mục cửa hàng." : "Tạo danh mục cửa hàng thành công.",
+    data: { category, restored: Boolean(restored) },
   });
 };
 
@@ -75,6 +79,11 @@ exports.updateShopCategory = async (req, res) => {
 exports.deleteShopCategory = async (req, res) => {
   await categoryService.deleteShopCategory(req.params.id);
   return success(res, { message: "Xóa danh mục cửa hàng thành công." });
+};
+
+exports.restoreShopCategory = async (req, res) => {
+  const category = await categoryService.restoreShopCategory(req.params.id);
+  return success(res, { message: "Đã khôi phục danh mục cửa hàng.", data: { category } });
 };
 
 // Legacy single-category handlers

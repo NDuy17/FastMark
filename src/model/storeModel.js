@@ -70,5 +70,7 @@ export function normalizeStore(row) {
     categoryId: row.categoryId || row.category_id || '',
     category_id: row.categoryId || row.category_id || '',
     depositPercent: Math.max(0, Math.min(100, Number(row.depositPercent) || 0)),
+    status: row.status ?? 1,
+    isShopLocked: Boolean(row.isShopLocked || row.isLocked || Number(row.status) === 0),
   };
 }

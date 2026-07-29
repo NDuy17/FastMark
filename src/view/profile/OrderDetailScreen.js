@@ -10,12 +10,11 @@ import {
 import {
   canShowReviewButton,
   getPurchaseStatusLabel,
-  isOrderAlreadyReviewed,
+  getReservationStatusLabel,
   submitShopReview,
 } from '../../core/utils/orderReview';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
-import { getReservationStatusLabel } from '../../core/utils/orderReview';
-import { ReviewedBadge, ReviewNowButton } from '../shared/components/ReviewOrderAction';
+import { ReviewNowButton } from '../shared/components/ReviewOrderAction';
 import ShopReviewModal from '../shared/components/ShopReviewModal';
 import ProfileSubScreen from './ProfileSubScreen';
 
@@ -54,7 +53,6 @@ export default function OrderDetailScreen({
   const isPurchase = order.type === 'purchase';
   const title = isPurchase ? 'Chi tiết đơn hàng' : 'Chi tiết phiếu giữ hàng';
   const showReviewButton = canShowReviewButton(order, reviewedOrderCodes);
-  const alreadyReviewed = isOrderAlreadyReviewed(order, reviewedOrderCodes);
 
   async function handleSubmitReview({ rating, comment, images, imageUrl }) {
     try {
@@ -68,13 +66,13 @@ export default function OrderDetailScreen({
         imageUrl,
       });
       setReviewVisible(false);
-      markReviewed(order);
+      markReviewed({ ...order, hasReviewed: true });
       onOrderReviewed?.(order);
       setLocalRefreshKey((value) => value + 1);
       Alert.alert('Cảm ơn bạn', 'Đánh giá của bạn đã được gửi thành công.');
     } catch (error) {
       if (error.statusCode === 409) {
-        markReviewed(order);
+        markReviewed({ ...order, hasReviewed: true });
         onOrderReviewed?.(order);
         setReviewVisible(false);
         Alert.alert('Thông báo', 'Bạn đã đánh giá đơn hàng này rồi.');
@@ -145,8 +143,6 @@ export default function OrderDetailScreen({
       {showReviewButton ? (
         <ReviewNowButton onPress={() => setReviewVisible(true)} />
       ) : null}
-
-      {alreadyReviewed ? <ReviewedBadge /> : null}
 
       <Pressable
         style={({ pressed }) => [styles.actionButton, pressed && styles.actionButtonPressed]}

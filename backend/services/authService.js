@@ -271,9 +271,7 @@ async function loginWithEmail({ login, email, password }) {
     user = matchedUser;
   }
 
-  const { assertUserIsActive } = require("./adminAccountService");
-  assertUserIsActive(user);
-
+  // Cho phép đăng nhập khi bị khóa để vào màn khiếu nại (Status=0).
   await updateUserActivity(user);
 
   const customToken = await auth.createCustomToken(payload.localId);
@@ -383,8 +381,7 @@ async function registerOrLoginWithGoogle({ idToken, fullName, userName }) {
     isNew = true;
     await ensureDefaultUserAvatar(user);
   } else {
-    const { assertUserIsActive } = require("./adminAccountService");
-    assertUserIsActive(user);
+    // Cho phép đăng nhập Google khi bị khóa để vào màn khiếu nại.
 
     // Không ghi đè tên người dùng đã có bằng tên mặc định từ Google mỗi lần đăng nhập.
     // Chỉ backfill khi tài khoản chưa có FullName.

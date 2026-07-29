@@ -14,10 +14,11 @@ import {
   canReviewReservationOrder,
   canShowReviewButton,
   getReservationStatusLabel,
-  isOrderAlreadyReviewed,
+  hasOrderReviewSubmitted,
   submitShopReview,
 } from '../../core/utils/orderReview';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
+import { useOrderSocket } from '../../hooks/useOrderSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { ReviewedBadge, ReviewNowButton } from '../shared/components/ReviewOrderAction';
 import ShopReviewModal from '../shared/components/ShopReviewModal';
@@ -59,10 +60,7 @@ function ReservationList({ items, onOpenOrderDetail, onOpenStore, onReviewStore,
       { ...item, orderCode: item.id },
       reviewedOrderCodes
     );
-    const alreadyReviewed = isOrderAlreadyReviewed(
-      { ...item, orderCode: item.id },
-      reviewedOrderCodes
-    );
+    const reviewSubmitted = hasOrderReviewSubmitted({ ...item, orderCode: item.id });
     return (
       <Pressable
         key={item.id}
@@ -96,7 +94,7 @@ function ReservationList({ items, onOpenOrderDetail, onOpenStore, onReviewStore,
           </Pressable>
         ) : isPickedUp && showReviewButton ? (
           <ReviewNowButton compact onPress={() => onReviewStore?.(item)} />
-        ) : isPickedUp && alreadyReviewed ? (
+        ) : isPickedUp && reviewSubmitted ? (
           <ReviewedBadge compact />
         ) : (
           <View style={styles.secondaryActionWrap}>
@@ -137,7 +135,7 @@ export default function ReservationHistoryScreen({
 
       const data = await getBuyerOrdersOnBackend({
         idToken,
-        tab: RESERVATION_TAB.HOLDING,
+        tab: RESERVATION_TAB.PENDING,
       });
       const rows = (data?.reservations || []).map((reservation) => ({
         id: String(reservation.id),
@@ -167,6 +165,15 @@ export default function ReservationHistoryScreen({
   useEffect(() => {
     loadReservations();
   }, [loadReservations, localRefreshKey]);
+
+  const handleOrderUpdated = useCallback(() => {
+    loadReservations();
+  }, [loadReservations]);
+
+  useOrderSocket({
+    enabled: true,
+    onOrderUpdated: handleOrderUpdated,
+  });
 
   async function handleSubmitReview({ rating, comment, images, imageUrl }) {
     if (!reviewTarget) {

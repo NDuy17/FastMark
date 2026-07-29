@@ -13,6 +13,7 @@ import {
 
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 
@@ -27,14 +28,12 @@ function buildQrImageUrl(payload, size = 280) {
  */
 export default function SellerShopQrScreen({ onBack }) {
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [qrPayload, setQrPayload] = useState('');
   const [qrCodeValue, setQrCodeValue] = useState('');
   const [shopName, setShopName] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
@@ -49,7 +48,7 @@ export default function SellerShopQrScreen({ onBack }) {
       setQrCodeValue(String(shop?.qrCodeValue || shopId || ''));
       setShopName(shop?.shopName || shop?.name || 'Gian hàng');
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được QR gian hàng.');
+      showErrorAlert(loadError.message || 'Không tải được QR gian hàng.');
       setQrPayload('');
     } finally {
       setLoading(false);
@@ -66,9 +65,9 @@ export default function SellerShopQrScreen({ onBack }) {
         <View style={styles.center}>
           <ActivityIndicator color={t.primary} size="large" />
         </View>
-      ) : error ? (
+      ) : !qrPayload ? (
         <View style={styles.center}>
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.errorText}>Không tải được QR gian hàng.</Text>
           <Pressable onPress={load} style={styles.retryBtn}>
             <Text style={styles.retryText}>Thử lại</Text>
           </Pressable>

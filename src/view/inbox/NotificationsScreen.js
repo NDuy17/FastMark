@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,8 +13,16 @@ import {
   notificationMatchesAudience,
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
+import {
+  NOTIFICATION_TAB,
+  NOTIFICATION_TABS,
+  filterNotificationsByTab,
+  resolveNotificationIndex,
+} from '../../constants/notifications';
+import OrderStatusTabBar from '../shared/components/OrderStatusTabBar';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import NotificationDetailScreen from './NotificationDetailScreen';
 
@@ -69,19 +77,28 @@ export default function NotificationsScreen({
   const insets = useScreenInsets();
   const [notifications, setNotifications] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadError, setLoadError] = useState('');
   const [selectedNotification, setSelectedNotification] = useState(null);
+  const [activeTab, setActiveTab] = useState(NOTIFICATION_TAB.ALL);
+
+  const filteredNotifications = useMemo(
+    () => filterNotificationsByTab(notifications, activeTab),
+    [notifications, activeTab]
+  );
 
   const loadNotifications = useCallback(async () => {
     setIsLoading(true);
-    setLoadError('');
 
     try {
       const items = await getMyNotificationsOnBackend(audience);
-      setNotifications(Array.isArray(items) ? items : []);
+      setNotifications(
+        (Array.isArray(items) ? items : []).map((item) => ({
+          ...item,
+          index: resolveNotificationIndex(item),
+        }))
+      );
     } catch (error) {
       setNotifications([]);
-      setLoadError(error.message || 'Không tải được thông báo.');
+      showErrorAlert(error.message || 'Không tải được thông báo.');
     } finally {
       setIsLoading(false);
     }
@@ -142,23 +159,17 @@ export default function NotificationsScreen({
 
   return (
     <View style={styles.screen}>
-      {onBack ? (
-        <SubScreenHeader title="Thông báo" onBack={onBack} />
-      ) : (
-        <View style={styles.headerPlain}>
-          <Text style={styles.titlePlain}>Thông báo</Text>
-        </View>
-      )}
+      <SubScreenHeader title="Thông báo" onBack={onBack} />
 
-      {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
+      <OrderStatusTabBar tabs={NOTIFICATION_TABS} activeTab={activeTab} onChangeTab={setActiveTab} />
 
-      {isLoading && notifications.length === 0 ? (
+      {isLoading && filteredNotifications.length === 0 ? (
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" />
         </View>
       ) : (
         <FlatList
-          data={notifications}
+          data={filteredNotifications}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={[
             styles.listContent,
@@ -173,7 +184,13 @@ export default function NotificationsScreen({
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>
-              <Text style={styles.emptyTitle}>Chưa có thông báo</Text>
+              <Text style={styles.emptyTitle}>
+                {activeTab === NOTIFICATION_TAB.ALL
+                  ? 'Chưa có thông báo'
+                  : activeTab === NOTIFICATION_TAB.ORDER
+                    ? 'Chưa có thông báo đơn hàng'
+                    : 'Chưa có thông báo hệ thống'}
+              </Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -203,17 +220,6 @@ export default function NotificationsScreen({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f1f5f9' },
-  headerPlain: {
-    paddingTop: 12,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: '#f1f5f9',
-  },
-  titlePlain: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: '#0f172a',
-  },
   errorText: {
     color: '#dc2626',
     marginHorizontal: 16,

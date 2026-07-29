@@ -12,6 +12,7 @@ import {
   selectAuthProfile,
   selectAuthUser,
   selectIsSeller,
+  selectSellerVerification,
 } from '../../viewmodel/auth/authSelectors';
 import {
   applyShopSettingsToProfile,
@@ -20,12 +21,14 @@ import {
   syncSellerAccess,
 } from '../../viewmodel/auth/authSlice';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { confirmLogout } from '../../core/utils/appAlert';
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import AccountProfileScreen from '../profile/AccountProfileScreen';
 import EditAccountScreen from '../profile/EditAccountScreen';
 import FollowConnectionsScreen from '../profile/FollowConnectionsScreen';
 import MyActivityScreen from '../profile/MyActivityScreen';
 import NotificationSettingsScreen from '../profile/NotificationSettingsScreen';
+import NotificationsScreen from '../inbox/NotificationsScreen';
 import PurchasedProductsScreen from '../profile/PurchasedProductsScreen';
 import ReservationHistoryScreen from '../profile/ReservationHistoryScreen';
 import VisitedStoresScreen from '../profile/VisitedStoresScreen';
@@ -46,7 +49,6 @@ import BuyerOrdersScreen from '../buyer/BuyerOrdersScreen';
 import FavoriteProductsScreen from '../buyer/FavoriteProductsScreen';
 import AccountReportScreen from '../profile/AccountReportScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
-import InboxScreen from '../inbox/InboxScreen';
 import TopUpScreen from '../wallet/TopUpScreen';
 import TopUpSuccessScreen from '../wallet/TopUpSuccessScreen';
 import WalletTransactionsScreen from '../wallet/WalletTransactionsScreen';
@@ -57,14 +59,25 @@ import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
 import { resolveTopupReturnViewModel } from '../../viewmodel/wallet/walletViewModel';
 import { subscribeTopupDeepLink } from '../../viewmodel/wallet/topupSession';
+import {
+  loadReservationResume,
+} from '../../viewmodel/buyer/reservationResumeSession';
+
+function resolveTopUpBackLabel(returnNav) {
+  if (returnNav === 'banner' || returnNav === 'seller-banner') {
+    return 'Quay lại banner';
+  }
+  if (returnNav === 'subscription' || returnNav === 'seller-subscription') {
+    return 'Quay lại gói bán';
+  }
+  return 'Về ví FastMark';
+}
 
 export default function ProfilePanel({
   profileMode = 'buyer',
   showSellerHub = false,
   onOpenStore,
   onNavigateToStore,
-  onOpenInbox,
-  onOpenChat,
   onNavigatePickup,
   sellerRegisterRequest = 0,
   isProfileVisible = false,
@@ -79,38 +92,30 @@ export default function ProfilePanel({
   onStartSellerRegister,
   onOpenShopTab,
   onContinueReservationAfterTopUp,
+  resumeReserveRequest = null,
+  onResumeReserveHandled,
   onNavigationStateChange,
 }) {
   const dispatch = useDispatch();
   const profile = useSelector(selectAuthProfile);
   const user = useSelector(selectAuthUser);
   const isSeller = useSelector(selectIsSeller);
+  const reduxVerification = useSelector(selectSellerVerification);
   const [profileNav, setProfileNav] = useState(null);
   const [followConnectionsTab, setFollowConnectionsTab] = useState('following');
   const [sellerStep, setSellerStep] = useState(null);
   const [sellerVerification, setSellerVerification] = useState(null);
-  const [selectedReservationId, setSelectedReservationId] = useState(null);
+  const [orderDetailTarget, setOrderDetailTarget] = useState(null);
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
   const [phoneChangeReturn, setPhoneChangeReturn] = useState(null);
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
   const [shopSettings, setShopSettings] = useState(null);
   const [topUpResult, setTopUpResult] = useState(null);
   const [topUpReturnNav, setTopUpReturnNav] = useState('wallet');
-  const [buyerOrdersTab, setBuyerOrdersTab] = useState(RESERVATION_TAB.HOLDING);
+  const [buyerOrdersTab, setBuyerOrdersTab] = useState(RESERVATION_TAB.PENDING);
   const [buyerOrdersTabKey, setBuyerOrdersTabKey] = useState(0);
+  const [sellerOrdersTab, setSellerOrdersTab] = useState(RESERVATION_TAB.PENDING);
   const [productStoreId, setProductStoreId] = useState(null);
-  const [chatOpenRequest, setChatOpenRequest] = useState(null);
-
-  const handleOpenChatLocal = useCallback(({ shopId, shopName }) => {
-    if (!shopId) {
-      return;
-    }
-    setChatOpenRequest({
-      shopId: String(shopId),
-      shopName: shopName || 'Gian hàng',
-      at: Date.now(),
-    });
-  }, []);
   const handledProfileNavRef = useRef(0);
   const handledRegisterRequestRef = useRef(0);
 
@@ -170,11 +175,32 @@ export default function ProfilePanel({
     if (!isProfileVisible) {
       setProfileNav(null);
       setSellerStep(null);
-      setSelectedReservationId(null);
+      setOrderDetailTarget(null);
       setPhoneChangeReturn(null);
       return;
     }
   }, [isProfileVisible]);
+
+  useEffect(() => {
+    if (!sellerStep || sellerStep === 'phone' || sellerStep === 'verify' || !reduxVerification) {
+      return;
+    }
+
+    setSellerVerification(reduxVerification);
+
+    if (
+      sellerStep === 'pending' &&
+      reduxVerification.status === SELLER_VERIFICATION_STATUS.APPROVED
+    ) {
+      setSellerStep(null);
+      dispatch(loadUserProfile()).catch(() => {});
+      dispatch(syncSellerAccess()).catch(() => {});
+      Alert.alert(
+        'Đã duyệt hồ sơ',
+        'Gian hàng của bạn đã được phê duyệt. Bạn có thể bắt đầu đăng sản phẩm và nhận đơn.'
+      );
+    }
+  }, [dispatch, reduxVerification, sellerStep]);
 
   useEffect(() => {
     if (!isProfileVisible || !sellerRegisterRequest) {
@@ -198,8 +224,12 @@ export default function ProfilePanel({
     if (requestAt) {
       handledProfileNavRef.current = requestAt;
     }
+    if (profileNavRequest.screen === '__clear__') {
+      setProfileNav(null);
+      return;
+    }
     if (profileNavRequest.screen === 'wallet-topup') {
-      setTopUpReturnNav('wallet');
+      setTopUpReturnNav(profileNavRequest.returnTo || 'wallet');
     }
     setProfileNav(profileNavRequest.screen);
   }, [isProfileVisible, profileNavRequest]);
@@ -235,11 +265,10 @@ export default function ProfilePanel({
     // Hub Tài khoản: hiện bottom nav. Mọi màn phụ: ẩn.
     const nested = Boolean(
       isProfileVisible &&
-        (sellerStep || profileNav || productDetailId || productStoreId || chatOpenRequest)
+        (sellerStep || profileNav || productDetailId || productStoreId)
     );
     onNavigationStateChange?.(nested);
   }, [
-    chatOpenRequest,
     isProfileVisible,
     onNavigationStateChange,
     productDetailId,
@@ -387,20 +416,29 @@ export default function ProfilePanel({
     return (
       <SellerOrdersScreen
         onBack={() => setProfileNav(null)}
+        activeTab={sellerOrdersTab}
+        onActiveTabChange={setSellerOrdersTab}
         onRefreshKey={ordersRefreshKey}
-        onOpenReservation={(reservationId) => {
-          setSelectedReservationId(reservationId);
+        onOpenReservation={(target) => {
+          setOrderDetailTarget(target);
           setProfileNav('seller-order-detail');
         }}
       />
     );
   }
 
-  if (profileNav === 'seller-order-detail' && selectedReservationId) {
+  if (profileNav === 'seller-order-detail' && orderDetailTarget) {
     return (
       <SellerOrderDetailScreen
-        reservationId={selectedReservationId}
-        onBack={() => setProfileNav('seller-orders')}
+        reservationId={String(orderDetailTarget.item?.id || '')}
+        initialItem={orderDetailTarget.item || null}
+        listCancelReasonText={orderDetailTarget.listCancelReasonText || ''}
+        onBack={() => {
+          if (orderDetailTarget.fromTab) {
+            setSellerOrdersTab(orderDetailTarget.fromTab);
+          }
+          setProfileNav('seller-orders');
+        }}
         onChanged={() => setOrdersRefreshKey((value) => value + 1)}
       />
     );
@@ -485,6 +523,16 @@ export default function ProfilePanel({
     return <NotificationSettingsScreen onBack={() => setProfileNav(null)} />;
   }
 
+  if (profileNav === 'buyer-notifications') {
+    return (
+      <NotificationsScreen
+        audience="buyer"
+        isScreenActive={isProfileVisible}
+        onBack={() => setProfileNav(null)}
+      />
+    );
+  }
+
   if (profileNav === 'reservation-history') {
     return (
       <ReservationHistoryScreen
@@ -517,17 +565,19 @@ export default function ProfilePanel({
       <BuyerOrdersScreen
         onBack={() => setProfileNav(null)}
         onNavigatePickup={onNavigatePickup}
+        activeTab={buyerOrdersTab}
+        onActiveTabChange={setBuyerOrdersTab}
         initialTab={buyerOrdersTab}
         tabRequestKey={buyerOrdersTabKey}
       />
     );
   }
 
-  if (profileNav === 'favorite-products') {
+  if (profileNav === 'favorite-products' && !productDetailId) {
     return (
       <View style={styles.screen}>
         <FavoriteProductsScreen
-          title="Quản lý sản phẩm yêu thích"
+          title="Sản phẩm yêu thích"
           onBack={() => setProfileNav(null)}
           onOpenProduct={(productId) => onOpenProductDetail?.(productId)}
         />
@@ -570,7 +620,22 @@ export default function ProfilePanel({
     return (
       <TopUpScreen
         balance={Number(profile?.walletBalance) || 0}
-        onBack={() => setProfileNav(topUpReturnNav || 'wallet')}
+        onBack={async () => {
+          if (topUpReturnNav === 'reservation') {
+            let resume = null;
+            try {
+              resume = await loadReservationResume();
+            } catch {
+              resume = null;
+            }
+            setProfileNav(null);
+            if (resume?.productId) {
+              onContinueReservationAfterTopUp?.(resume);
+              return;
+            }
+          }
+          setProfileNav(topUpReturnNav === 'reservation' ? null : topUpReturnNav || 'wallet');
+        }}
         onSuccess={(result) => {
           setTopUpResult(result || null);
           dispatch(loadUserProfile());
@@ -589,6 +654,7 @@ export default function ProfilePanel({
       <TopUpSuccessScreen
         amount={topUpResult?.amount || 0}
         orderCode={topUpResult?.orderCode}
+        backLabel={resolveTopUpBackLabel(topUpReturnNav)}
         onContinueReservation={(payload) => {
           setTopUpResult(null);
           setProfileNav(null);
@@ -600,7 +666,11 @@ export default function ProfilePanel({
         }}
         onViewHistory={() => {
           setTopUpResult(null);
-          setProfileNav('wallet-transactions');
+          if (topUpReturnNav === 'wallet') {
+            setProfileNav('wallet-transactions');
+          } else {
+            setProfileNav(topUpReturnNav || 'wallet');
+          }
         }}
       />
     );
@@ -629,7 +699,6 @@ export default function ProfilePanel({
             storeId={String(storeId)}
             onBack={() => setProfileNav(null)}
             onNavigateDirections={onNavigateToStore}
-            onOpenChat={handleOpenChatLocal}
             previewMode
           />
         ) : (
@@ -641,22 +710,6 @@ export default function ProfilePanel({
           </View>
         )}
       </View>
-    );
-  }
-
-  if (chatOpenRequest) {
-    return (
-      <InboxScreen
-        buyerView
-        messagesOnly
-        chatRequest={chatOpenRequest}
-        onBack={() => setChatOpenRequest(null)}
-        onViewShop={(shopId) => {
-          setChatOpenRequest(null);
-          setProductStoreId(String(shopId));
-          onOpenStore?.(String(shopId));
-        }}
-      />
     );
   }
 
@@ -672,7 +725,6 @@ export default function ProfilePanel({
               onOpenProductDetail?.(nextProductId);
             }}
             onNavigateDirections={onNavigateToStore}
-            onOpenChat={handleOpenChatLocal}
           />
         );
       }
@@ -683,10 +735,25 @@ export default function ProfilePanel({
           onBack={() => {
             setProductStoreId(null);
             onOpenProductDetail?.(null);
+            onResumeReserveHandled?.();
           }}
           onStorePress={(storeId) => setProductStoreId(String(storeId))}
-          onOpenChat={handleOpenChatLocal}
-          onOpenTopUp={() => openTopUp('wallet')}
+          onOpenTopUp={(context) => {
+            if (context?.productId) {
+              setTopUpReturnNav('reservation');
+              setProfileNav('wallet-topup');
+              return;
+            }
+            openTopUp('wallet');
+          }}
+          reservationSource="profile"
+          resumeReserveRequest={
+            resumeReserveRequest &&
+            String(resumeReserveRequest.productId) === String(productDetailId)
+              ? resumeReserveRequest
+              : null
+          }
+          onResumeReserveConsumed={onResumeReserveHandled}
         />
       );
     }
@@ -711,15 +778,14 @@ export default function ProfilePanel({
         onOpenProduct={(productId) => onOpenProductDetail?.(productId)}
         onEditAccount={() => setProfileNav('edit-account')}
         onOpenActivity={() => setProfileNav('my-activity')}
-        onOpenNotificationSettings={() => setProfileNav('notification-settings')}
-        onOpenInbox={onOpenInbox}
         onOpenBuyerOrders={() => {
-          setBuyerOrdersTab(RESERVATION_TAB.HOLDING);
+          setBuyerOrdersTab(RESERVATION_TAB.PENDING);
           setBuyerOrdersTabKey(Date.now());
           setProfileNav('buyer-orders');
         }}
         onOpenFavoriteProducts={() => setProfileNav('favorite-products')}
         onOpenReport={() => setProfileNav('account-report')}
+        onOpenVisitedStores={() => setProfileNav('visited-stores')}
         onOpenWallet={() => setProfileNav('wallet')}
         onOpenWalletTopUp={() => openTopUp('wallet')}
         onOpenSellerShopSettings={() => setProfileNav('seller-shop-settings')}
@@ -737,7 +803,7 @@ export default function ProfilePanel({
         onOpenShopTab={onOpenShopTab}
         onSwitchToSellerMode={onSwitchToSellerMode}
         onSwitchToBuyerMode={onSwitchToBuyerMode}
-        onLogout={() => dispatch(logoutUser())}
+        onLogout={() => confirmLogout(() => dispatch(logoutUser()))}
         onOpenFollowConnections={(tab = 'following') => {
           setFollowConnectionsTab(tab === 'followers' ? 'followers' : 'following');
           setProfileNav('follow-connections');
@@ -750,7 +816,7 @@ export default function ProfilePanel({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f4f7f6',
+    backgroundColor: 'transparent',
     minHeight: 0,
   },
   previewBanner: {

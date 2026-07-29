@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { Pencil, Trash2 } from 'lucide-react';
 
 import {
   createCategory,
@@ -8,22 +9,16 @@ import {
   updateCategory,
   uploadCategoryIcon,
 } from '../api/categoryApi';
+import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
+import { formatDate } from '../utils/format';
 
 const emptyForm = {
   name: '',
   description: '',
   icon: '',
-  isDeleted: 1,
 };
-
-function formatDate(value) {
-  if (!value) {
-    return '';
-  }
-  return new Date(value).toLocaleString('vi-VN');
-}
 
 function CategoryPanel({ type, showIcon = false }) {
   const { getIdToken } = useAuth();
@@ -77,7 +72,6 @@ function CategoryPanel({ type, showIcon = false }) {
       name: category.name || category.categoryName || '',
       description: category.description || '',
       icon: category.icon || '',
-      isDeleted: Number(category.isDeleted ?? category.IsDeleted) === 0 ? 0 : 1,
     });
   }
 
@@ -99,7 +93,6 @@ function CategoryPanel({ type, showIcon = false }) {
         name,
         categoryName: name,
         description: form.description.trim(),
-        isDeleted: Number(form.isDeleted) === 0 ? 0 : 1,
       };
 
       if (showIcon) {
@@ -107,12 +100,14 @@ function CategoryPanel({ type, showIcon = false }) {
       }
 
       let savedCategory;
+      let createMessage = '';
       if (editingId) {
         const response = await updateCategory(token, type, editingId, payload);
         savedCategory = response.data?.category;
       } else {
         const response = await createCategory(token, type, payload);
         savedCategory = response.data?.category;
+        createMessage = response.message || 'Tạo danh mục thành công.';
       }
 
       if (showIcon && iconFile && savedCategory?.id) {
@@ -125,7 +120,7 @@ function CategoryPanel({ type, showIcon = false }) {
         }
       }
 
-      setSuccessMessage(editingId ? 'Cập nhật danh mục thành công.' : 'Tạo danh mục thành công.');
+      setSuccessMessage(editingId ? 'Cập nhật danh mục thành công.' : createMessage);
       resetForm();
       await loadItems();
     } catch (submitError) {
@@ -136,7 +131,9 @@ function CategoryPanel({ type, showIcon = false }) {
   }
 
   async function handleDelete(categoryId, categoryName) {
-    const confirmed = window.confirm(`Xóa danh mục "${categoryName}"?`);
+    const confirmed = window.confirm(
+      `Xóa danh mục "${categoryName}"?\nDanh mục sẽ ẩn khỏi admin và app. Thêm lại đúng tên sẽ tự khôi phục.`
+    );
     if (!confirmed) {
       return;
     }
@@ -183,19 +180,6 @@ function CategoryPanel({ type, showIcon = false }) {
                 onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="VD: Trái cây, Thời trang..."
               />
-            </label>
-            <label>
-              Trạng thái
-              <select
-                className="category-select"
-                value={String(form.isDeleted)}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, isDeleted: Number(event.target.value) }))
-                }
-              >
-                <option value="1">Hiển thị</option>
-                <option value="0">Ẩn</option>
-              </select>
             </label>
           </div>
 
@@ -263,7 +247,6 @@ function CategoryPanel({ type, showIcon = false }) {
                 {showIcon ? <th>Icon</th> : null}
                 <th>Tên</th>
                 <th>Chi tiết</th>
-                <th>Trạng thái</th>
                 <th>Ngày thêm</th>
                 <th>Thao tác</th>
               </tr>
@@ -289,22 +272,24 @@ function CategoryPanel({ type, showIcon = false }) {
                     <strong>{item.name || item.categoryName}</strong>
                   </td>
                   <td className="category-desc-cell">{item.description || ''}</td>
-                  <td>{Number(item.isDeleted ?? item.IsDeleted) === 0 ? 'Ẩn' : 'Active'}</td>
                   <td>{formatDate(item.createdAt)}</td>
-                  <td>
-                    <div className="table-actions">
-                      <button type="button" onClick={() => startEdit(item)}>
-                        Sửa
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-btn"
-                        disabled={actionId === item.id}
-                        onClick={() => handleDelete(item.id, item.name || item.categoryName)}
-                      >
-                        {actionId === item.id ? 'Đang xóa...' : 'Xóa'}
-                      </button>
-                    </div>
+                  <td className="col-actions">
+                    <TableIconActions
+                      actions={[
+                        {
+                          icon: Pencil,
+                          label: 'Sửa danh mục',
+                          onClick: () => startEdit(item),
+                        },
+                        {
+                          icon: Trash2,
+                          label: 'Xóa danh mục',
+                          variant: 'danger',
+                          disabled: actionId === item.id,
+                          onClick: () => handleDelete(item.id, item.name || item.categoryName),
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}

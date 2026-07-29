@@ -19,8 +19,10 @@ const {
   NOTIFICATION_AUDIENCE,
   REPORT_REPORTER_ROLE,
   REPORT_REPORTER_ROLE_LABELS,
+  RESERVATION_CANCEL_REASON,
 } = require("../constants");
-const { createNotification } = require("./notificationService");
+const { createNotification, NOTIFICATION_INDEX } = require("./notificationService");
+const { emitOrderUpdated } = require("./orderRealtimeService");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
 const { reverseGeocode } = require("../utils/geocoding");
 const {
@@ -320,6 +322,13 @@ async function buyerReportSeller(user, payload = {}) {
   reservation.disputeReason = reason;
   reservation.disputeDescription = resolvedContent;
   reservation.disputedAt = reservation.disputedAt || now;
+  reservation.buyerDisputedAt = reservation.buyerDisputedAt || now;
+  if (!reservation.disputeFirstBy) {
+    reservation.disputeFirstBy = "buyer";
+  }
+  reservation.cancelReason = reservation.disputeBySeller
+    ? RESERVATION_CANCEL_REASON.DISPUTE_BOTH_REPORTED
+    : RESERVATION_CANCEL_REASON.BUYER_REPORT_SELLER_ABSENT;
   reservation.UpdatedAt = now;
   await reservation.save();
 
@@ -328,6 +337,7 @@ async function buyerReportSeller(user, payload = {}) {
       title: "Khách đã tố cáo bạn không có mặt",
       content: `${user.FullName || user.UserName || "Người mua"} báo cáo: ${reasonLabel}. Cọc đang giữ chờ admin xử lý.`,
       audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
@@ -335,8 +345,10 @@ async function buyerReportSeller(user, payload = {}) {
     title: "Đã gửi báo cáo tranh chấp",
     content: `Báo cáo về shop đã được ghi nhận (${reasonLabel}). Cọc đang giữ chờ admin xử lý.`,
     audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
   });
 
+  await emitOrderUpdated(reservation, { action: "buyer_dispute" });
   return {
     report: toPublicDisputeReport(report, {
       images,
@@ -441,8 +453,15 @@ async function sellerReportBuyer(user, payload = {}) {
   if (!reservation.disputeByBuyer) {
     reservation.disputeReason = RESERVATION_DISPUTE_REASON.BUYER_NO_SHOW;
     reservation.disputeDescription = content;
+    reservation.cancelReason = RESERVATION_CANCEL_REASON.SELLER_REPORT_BUYER_NO_SHOW;
+  } else {
+    reservation.cancelReason = RESERVATION_CANCEL_REASON.DISPUTE_BOTH_REPORTED;
   }
   reservation.disputedAt = reservation.disputedAt || now;
+  reservation.sellerDisputedAt = reservation.sellerDisputedAt || now;
+  if (!reservation.disputeFirstBy) {
+    reservation.disputeFirstBy = "seller";
+  }
   reservation.UpdatedAt = now;
   await reservation.save();
 
@@ -451,9 +470,11 @@ async function sellerReportBuyer(user, payload = {}) {
       title: "Shop báo cáo bạn không đến nhận hàng",
       content: "Người bán đã tố cáo bạn không đến lấy hàng. Cọc đang giữ chờ admin xử lý.",
       audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
+  await emitOrderUpdated(reservation, { action: "seller_dispute" });
   return {
     report: toPublicDisputeReport(report, {
       images,
@@ -610,7 +631,9 @@ async function adminApproveBuyer(adminUser, reportId, { note } = {}) {
   const now = new Date();
   reservation.status = RESERVATION_STATUS.REFUNDED;
   reservation.cancelledAt = reservation.cancelledAt || now;
-  reservation.cancelReason = pickString(note) || "Admin hoàn cọc cho người mua.";
+  reservation.cancelledBy = "admin";
+  reservation.cancelReason = RESERVATION_CANCEL_REASON.ADMIN_BUYER_WIN;
+  reservation.cancelNote = pickString(note);
   reservation.UpdatedAt = now;
   await reservation.save();
 
@@ -648,10 +671,12 @@ async function adminApproveBuyer(adminUser, reportId, { note } = {}) {
       title: "Admin đã xử lý tranh chấp",
       content: "Bạn thắng tranh chấp. Tiền cọc đã được hoàn về ví.",
       audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
   const images = await ReportImage.find({ reportId: report._id }).lean();
+  await emitOrderUpdated(reservation, { action: "admin_approve_buyer" });
   return {
     report: toPublicDisputeReport(report, {
       images: images.map((img) => ({ id: String(img._id), imageUrl: img.imageUrl })),
@@ -691,8 +716,9 @@ async function adminApproveSeller(adminUser, reportId, { note } = {}) {
 
   reservation.status = RESERVATION_STATUS.DISPUTE_RESOLVED;
   reservation.cancelledAt = now;
-  reservation.cancelReason =
-    pickString(note) || "Admin xử lý tranh chấp: đền cọc cho người bán.";
+  reservation.cancelledBy = "admin";
+  reservation.cancelReason = RESERVATION_CANCEL_REASON.ADMIN_SELLER_WIN;
+  reservation.cancelNote = pickString(note);
   reservation.UpdatedAt = now;
   await reservation.save();
 
@@ -731,10 +757,12 @@ async function adminApproveSeller(adminUser, reportId, { note } = {}) {
       content:
         "Bạn thắng tranh chấp. Tiền cọc đã vào ví. Đơn được ghi nhận là đã hủy (không tính bán thành công).",
       audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
   const images = await ReportImage.find({ reportId: report._id }).lean();
+  await emitOrderUpdated(reservation, { action: "admin_approve_seller" });
   return {
     report: toPublicDisputeReport(report, {
       images: images.map((img) => ({ id: String(img._id), imageUrl: img.imageUrl })),

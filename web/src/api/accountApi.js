@@ -52,6 +52,31 @@ export function getAccountFinance(token, accountId) {
   return apiRequest(`/api/admin/accounts/${accountId}/finance`, { token });
 }
 
+function buildFollowQuery(params = {}) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      searchParams.set(key, String(value));
+    }
+  });
+  const query = searchParams.toString();
+  return query ? `?${query}` : '';
+}
+
+export function getAccountFollowing(token, accountId, params = {}) {
+  return apiRequest(
+    `/api/admin/accounts/${accountId}/following${buildFollowQuery(params)}`,
+    { token }
+  );
+}
+
+export function getAccountFollowers(token, accountId, params = {}) {
+  return apiRequest(
+    `/api/admin/accounts/${accountId}/followers${buildFollowQuery(params)}`,
+    { token }
+  );
+}
+
 export function getFinanceOverview(token, params = {}) {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

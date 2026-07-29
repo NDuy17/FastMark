@@ -1,9 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Clock3,
+  Coins,
+  HandCoins,
+  Lock,
+  RotateCcw,
+  Send,
+  Store,
+  Users,
+  Wallet,
+} from 'lucide-react';
 
 import { getFinanceOverview } from '../api/accountApi';
 import DashboardDateRange, { presetDates } from '../components/DashboardDateRange';
 import { useAuth } from '../context/AuthContext';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { formatDate, formatDateDisplay } from '../utils/format';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
@@ -13,67 +28,130 @@ function formatCurrency(value) {
   return `${formatNumber(value)} ₫`;
 }
 
-function formatDateDisplay(value) {
-  const [year, month, day] = String(value || '').split('-');
-  return year && month && day ? `${day}-${month}-${year}` : value;
-}
-
-function formatDateTime(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('vi-VN');
-}
-
-function MetricCard({ label, value, detail, active = false, onClick }) {
+function MetricCard({ label, value, detail, icon: Icon, tone = 'green', active = false, onClick }) {
+  function handleClick(event) {
+    onClick?.(event);
+    event.currentTarget.blur();
+  }
   return (
     <button
       type="button"
-      onClick={onClick}
-      className={`dashboard-metric clickable${active ? ' active' : ''}`}
+      onClick={handleClick}
+      className={`dashboard-metric tone-${tone} clickable${active ? ' active' : ''}`}
     >
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {detail ? <small>{detail}</small> : null}
+      <div className="dashboard-metric-head">
+        <div className={`dashboard-metric-icon tone-${tone}`}>
+          {Icon ? <Icon size={18} strokeWidth={2} aria-hidden="true" /> : null}
+        </div>
+        <div className="dashboard-metric-body">
+          <span className="dashboard-metric-label">{label}</span>
+          <div className="dashboard-metric-value">
+            <strong>{value}</strong>
+          </div>
+          {detail ? <small className="dashboard-metric-detail">{detail}</small> : null}
+        </div>
+      </div>
     </button>
   );
 }
 
-function LineChart({ data = [], color = '#076F32' }) {
-  const width = 760;
-  const height = 210;
-  const padding = 28;
-  const values = data.map((item) => Number(item.total) || 0);
-  const max = Math.max(...values, 1);
-  const stepX = data.length > 1 ? (width - padding * 2) / (data.length - 1) : 0;
-  const points = data.map((item, index) => {
-    const x = padding + index * stepX;
-    const y = height - padding - ((Number(item.total) || 0) / max) * (height - padding * 2);
-    return `${x},${y}`;
-  });
+const BALANCE_METRICS = [
+  {
+    key: 'allWallets',
+    label: 'Tổng ví tất cả',
+    icon: Wallet,
+    tone: 'blue',
+    value: (balances) =>
+      (Number(balances.buyerWalletTotal) || 0) + (Number(balances.sellerWalletTotal) || 0),
+    detail: (balances) =>
+      `${formatNumber(
+        (Number(balances.buyerWalletCount) || 0) + (Number(balances.sellerWalletCount) || 0)
+      )} ví (buyer + seller)`,
+  },
+  {
+    key: 'buyerWallets',
+    label: 'Tổng ví người mua',
+    icon: Users,
+    tone: 'green',
+    value: (balances) => balances.buyerWalletTotal,
+    detail: (balances) => `${formatNumber(balances.buyerWalletCount)} ví`,
+  },
+  {
+    key: 'sellerWallets',
+    label: 'Tổng ví người bán',
+    icon: Store,
+    tone: 'purple',
+    value: (balances) => balances.sellerWalletTotal,
+    detail: (balances) => `${formatNumber(balances.sellerWalletCount)} ví`,
+  },
+  {
+    key: 'escrow',
+    label: 'Tiền treo escrow',
+    icon: Lock,
+    tone: 'orange',
+    value: (balances) => balances.escrowBalance,
+    detail: () => 'Cọc giữ hàng chưa quyết toán',
+  },
+  {
+    key: 'pendingWithdraw',
+    label: 'Rút tiền chờ duyệt',
+    icon: Clock3,
+    tone: 'red',
+    value: (_, pendingWithdraw) => pendingWithdraw.total,
+    detail: (_, pendingWithdraw) => `${formatNumber(pendingWithdraw.count)} yêu cầu`,
+  },
+];
 
-  if (!data.length) {
-    return <p className="empty-inline">Không có giao dịch trong khoảng đã chọn.</p>;
-  }
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img">
-      <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#e2e8f0" />
-      <polyline fill="none" stroke={color} strokeWidth="3" points={points.join(' ')} />
-      {data.map((item, index) => {
-        const [x, y] = points[index].split(',');
-        return (
-          <g key={`${item.date}-${index}`}>
-            <circle cx={x} cy={y} r="4" fill={color} />
-            {index === 0 || index === data.length - 1 || data.length <= 7 ? (
-              <text x={x} y={height - 7} textAnchor="middle" fontSize="10" fill="#64748b">
-                {item.date?.slice(5)}
-              </text>
-            ) : null}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
+const FLOW_METRICS = [
+  {
+    key: 'topup',
+    label: 'Tổng nạp',
+    icon: ArrowDownToLine,
+    tone: 'green',
+    value: (inRange) => inRange.topup?.total,
+    detail: (inRange) => `${formatNumber(inRange.topup?.count)} giao dịch`,
+  },
+  {
+    key: 'withdrawal',
+    label: 'Tổng rút',
+    icon: ArrowUpFromLine,
+    tone: 'orange',
+    value: (inRange) => inRange.withdrawal?.total,
+    detail: (inRange) => `${formatNumber(inRange.withdrawal?.count)} giao dịch`,
+  },
+  {
+    key: 'platformRevenue',
+    label: 'Doanh thu nền tảng (gói)',
+    icon: Coins,
+    tone: 'blue',
+    value: (inRange) => inRange.platformRevenue?.total,
+    detail: (inRange) => `${formatNumber(inRange.platformRevenue?.count)} thanh toán`,
+  },
+  {
+    key: 'depositHold',
+    label: 'Cọc đã đặt',
+    icon: HandCoins,
+    tone: 'purple',
+    value: (inRange) => inRange.depositHold?.total,
+    detail: (inRange) => `${formatNumber(inRange.depositHold?.count)} lần`,
+  },
+  {
+    key: 'depositRefund',
+    label: 'Cọc hoàn buyer',
+    icon: RotateCcw,
+    tone: 'red',
+    value: (inRange) => inRange.depositRefund?.total,
+    detail: (inRange) => `${formatNumber(inRange.depositRefund?.count)} lần`,
+  },
+  {
+    key: 'depositRelease',
+    label: 'Cọc giải ngân seller',
+    icon: Send,
+    tone: 'green',
+    value: (inRange) => inRange.depositRelease?.total,
+    detail: (inRange) => `${formatNumber(inRange.depositRelease?.count)} lần`,
+  },
+];
 
 const DETAIL_META = {
   allWallets: {
@@ -171,7 +249,7 @@ const DETAIL_META = {
       {
         key: 'depositPaidAt',
         label: 'Đặt cọc',
-        render: (row) => formatDateTime(row.depositPaidAt),
+        render: (row) => formatDate(row.depositPaidAt),
       },
     ],
   },
@@ -201,7 +279,7 @@ const DETAIL_META = {
       {
         key: 'createdAt',
         label: 'Tạo lúc',
-        render: (row) => formatDateTime(row.createdAt),
+        render: (row) => formatDate(row.createdAt),
       },
     ],
   },
@@ -260,7 +338,7 @@ function txColumns({ showReservation = false } = {}) {
     {
       key: 'createdAt',
       label: 'Thời gian',
-      render: (row) => formatDateTime(row.createdAt),
+      render: (row) => formatDate(row.createdAt),
     },
   ];
   if (showReservation) {
@@ -323,8 +401,8 @@ function buildDetailFields(selectedKey, row) {
       { label: 'Số lượng', value: row.quantity ?? '' },
       { label: 'Đơn giá', value: row.reservedPrice != null ? formatCurrency(row.reservedPrice) : '' },
       { label: 'Tiền cọc', value: formatCurrency(row.depositAmount) },
-      { label: 'Đặt cọc lúc', value: formatDateTime(row.depositPaidAt) },
-      { label: 'Giờ nhận', value: formatDateTime(row.pickupTime) },
+      { label: 'Đặt cọc lúc', value: formatDate(row.depositPaidAt) },
+      { label: 'Giờ nhận', value: formatDate(row.pickupTime) },
     ];
   }
 
@@ -340,7 +418,7 @@ function buildDetailFields(selectedKey, row) {
       { label: 'Chủ tài khoản', value: row.accountName || '' },
       { label: 'Số tiền', value: formatCurrency(row.amount) },
       { label: 'Trạng thái', value: row.statusLabel || '' },
-      { label: 'Tạo lúc', value: formatDateTime(row.createdAt) },
+      { label: 'Tạo lúc', value: formatDate(row.createdAt) },
       {
         label: 'Danh sách rút',
         value: <Link to="/withdrawals">Mở trang rút tiền</Link>,
@@ -371,7 +449,7 @@ function buildDetailFields(selectedKey, row) {
         ''
       ),
     },
-    { label: 'Thời gian', value: formatDateTime(row.createdAt) },
+    { label: 'Thời gian', value: formatDate(row.createdAt) },
   ];
 }
 
@@ -524,14 +602,15 @@ export default function FinancePage() {
     load();
   }, [load]);
 
+  useAdminRealtimeRefresh(['wallet', 'withdraw'], load);
+
   const balances = data?.balances || {};
   const inRange = data?.inRange || {};
   const pendingWithdraw = data?.pendingWithdraw || {};
-  const series = data?.series || {};
   const details = data?.details || {};
 
   return (
-    <div className="page dashboard-page">
+    <div className="page dashboard-page finance-page">
       <section className="dashboard-toolbar">
         <DashboardDateRange
           from={from}
@@ -560,133 +639,59 @@ export default function FinancePage() {
 
       {data ? (
         <>
-          <section>
-            <div className="dashboard-section-heading">
-              <h2>Số dư hiện tại</h2>
-              <span>Bấm thẻ để xem chi tiết · bấm lại để ẩn</span>
-            </div>
-            <div className="dashboard-metric-grid">
-              <MetricCard
-                label="Tổng ví tất cả"
-                value={formatCurrency(
-                  (Number(balances.buyerWalletTotal) || 0) +
-                    (Number(balances.sellerWalletTotal) || 0)
-                )}
-                detail={`${formatNumber(
-                  (Number(balances.buyerWalletCount) || 0) +
-                    (Number(balances.sellerWalletCount) || 0)
-                )} ví (buyer + seller)`}
-                active={selectedKey === 'allWallets'}
-                onClick={() => toggleSelect('allWallets')}
-              />
-              <MetricCard
-                label="Tổng ví người mua"
-                value={formatCurrency(balances.buyerWalletTotal)}
-                detail={`${formatNumber(balances.buyerWalletCount)} ví`}
-                active={selectedKey === 'buyerWallets'}
-                onClick={() => toggleSelect('buyerWallets')}
-              />
-              <MetricCard
-                label="Tổng ví người bán"
-                value={formatCurrency(balances.sellerWalletTotal)}
-                detail={`${formatNumber(balances.sellerWalletCount)} ví`}
-                active={selectedKey === 'sellerWallets'}
-                onClick={() => toggleSelect('sellerWallets')}
-              />
-              <MetricCard
-                label="Tiền treo escrow"
-                value={formatCurrency(balances.escrowBalance)}
-                detail="Cọc giữ hàng chưa quyết toán"
-                active={selectedKey === 'escrow'}
-                onClick={() => toggleSelect('escrow')}
-              />
-              <MetricCard
-                label="Rút tiền chờ duyệt"
-                value={formatCurrency(pendingWithdraw.total)}
-                detail={`${formatNumber(pendingWithdraw.count)} yêu cầu`}
-                active={selectedKey === 'pendingWithdraw'}
-                onClick={() => toggleSelect('pendingWithdraw')}
-              />
+          <section className="finance-section">
+            <div className="finance-section-card">
+              <div className="dashboard-section-heading">
+                <h2>Số dư hiện tại</h2>
+                <span>Bấm thẻ để xem chi tiết · bấm lại để ẩn</span>
+              </div>
+              <div className="dashboard-metric-grid finance-metric-grid--5">
+                {BALANCE_METRICS.map((metric) => (
+                  <MetricCard
+                    key={metric.key}
+                    label={metric.label}
+                    icon={metric.icon}
+                    tone={metric.tone}
+                    value={formatCurrency(metric.value(balances, pendingWithdraw))}
+                    detail={metric.detail(balances, pendingWithdraw)}
+                    active={selectedKey === metric.key}
+                    onClick={() => toggleSelect(metric.key)}
+                  />
+                ))}
+              </div>
             </div>
           </section>
 
-          <section>
-            <div className="dashboard-section-heading">
-              <h2>Dòng tiền trong khoảng đã chọn</h2>
-              <span>
-                {from === to
-                  ? formatDateDisplay(from)
-                  : `${formatDateDisplay(from)} → ${formatDateDisplay(to)}`}
-              </span>
-            </div>
-            <div className="dashboard-metric-grid">
-              <MetricCard
-                label="Tổng nạp"
-                value={formatCurrency(inRange.topup?.total)}
-                detail={`${formatNumber(inRange.topup?.count)} giao dịch`}
-                active={selectedKey === 'topup'}
-                onClick={() => toggleSelect('topup')}
-              />
-              <MetricCard
-                label="Tổng rút"
-                value={formatCurrency(inRange.withdrawal?.total)}
-                detail={`${formatNumber(inRange.withdrawal?.count)} giao dịch`}
-                active={selectedKey === 'withdrawal'}
-                onClick={() => toggleSelect('withdrawal')}
-              />
-              <MetricCard
-                label="Doanh thu nền tảng (gói)"
-                value={formatCurrency(inRange.platformRevenue?.total)}
-                detail={`${formatNumber(inRange.platformRevenue?.count)} thanh toán`}
-                active={selectedKey === 'platformRevenue'}
-                onClick={() => toggleSelect('platformRevenue')}
-              />
-              <MetricCard
-                label="Cọc đã đặt"
-                value={formatCurrency(inRange.depositHold?.total)}
-                detail={`${formatNumber(inRange.depositHold?.count)} lần`}
-                active={selectedKey === 'depositHold'}
-                onClick={() => toggleSelect('depositHold')}
-              />
-              <MetricCard
-                label="Cọc hoàn buyer"
-                value={formatCurrency(inRange.depositRefund?.total)}
-                detail={`${formatNumber(inRange.depositRefund?.count)} lần`}
-                active={selectedKey === 'depositRefund'}
-                onClick={() => toggleSelect('depositRefund')}
-              />
-              <MetricCard
-                label="Cọc giải ngân seller"
-                value={formatCurrency(inRange.depositRelease?.total)}
-                detail={`${formatNumber(inRange.depositRelease?.count)} lần`}
-                active={selectedKey === 'depositRelease'}
-                onClick={() => toggleSelect('depositRelease')}
-              />
+          <section className="finance-section">
+            <div className="finance-section-card">
+              <div className="dashboard-section-heading">
+                <h2>Dòng tiền trong khoảng đã chọn</h2>
+                <span>
+                  {from === to
+                    ? formatDateDisplay(from)
+                    : `${formatDateDisplay(from)} → ${formatDateDisplay(to)}`}
+                </span>
+              </div>
+              <div className="dashboard-metric-grid finance-metric-grid--3">
+                {FLOW_METRICS.map((metric) => (
+                  <MetricCard
+                    key={metric.key}
+                    label={metric.label}
+                    icon={metric.icon}
+                    tone={metric.tone}
+                    value={formatCurrency(metric.value(inRange))}
+                    detail={metric.detail(inRange)}
+                    active={selectedKey === metric.key}
+                    onClick={() => toggleSelect(metric.key)}
+                  />
+                ))}
+              </div>
             </div>
           </section>
 
           {selectedKey ? (
             <DetailPanel selectedKey={selectedKey} rows={details[selectedKey]} />
           ) : null}
-
-          <div className="dashboard-grid">
-            <section className="panel">
-              <h2>Nạp tiền theo ngày</h2>
-              <LineChart data={series.topup || []} />
-            </section>
-            <section className="panel">
-              <h2>Rút tiền theo ngày</h2>
-              <LineChart data={series.withdrawal || []} color="#f97316" />
-            </section>
-            <section className="panel">
-              <h2>Doanh thu nền tảng theo ngày</h2>
-              <LineChart data={series.platformRevenue || []} color="#2563eb" />
-            </section>
-            <section className="panel">
-              <h2>Giải ngân cọc theo ngày</h2>
-              <LineChart data={series.depositRelease || []} color="#9333ea" />
-            </section>
-          </div>
         </>
       ) : null}
     </div>

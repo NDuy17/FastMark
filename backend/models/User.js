@@ -70,6 +70,9 @@ const userSchema = new mongoose.Schema({
   // Trạng thái tài khoản: 0 = khóa, 1 = hoạt động.
   Status: { type: Number, default: 1 },
 
+  // Thời điểm bắt đầu lượt khóa hiện tại (khiếu nại khóa gắn theo lượt này).
+  lockedAt: { type: Date, default: null },
+
   // Số người mà user đang theo dõi (Follow.followerId).
   FollowingCount: { type: Number, default: 0 },
 

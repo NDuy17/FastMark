@@ -1,19 +1,20 @@
 const express = require("express");
 const walletController = require("../controllers/walletController");
 const verifyFirebaseToken = require("../middleware/authMiddleware");
+const { verifyFirebaseTokenAllowBlocked } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 
 const router = express.Router();
 
-router.get("/", verifyFirebaseToken, asyncHandler(walletController.getWallet));
+router.get("/", verifyFirebaseTokenAllowBlocked, asyncHandler(walletController.getWallet));
 router.get(
   "/transactions",
-  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
   asyncHandler(walletController.listTransactions)
 );
 router.get(
   "/transactions/:id",
-  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
   asyncHandler(walletController.getTransaction)
 );
 router.post("/topup", verifyFirebaseToken, asyncHandler(walletController.createTopup));
@@ -23,17 +24,17 @@ router.post("/topup/cancel", verifyFirebaseToken, asyncHandler(walletController.
 const withdrawController = require("../controllers/withdrawController");
 router.get(
   "/banks",
-  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
   asyncHandler(withdrawController.listActiveBanks)
 );
 router.get(
   "/withdraws",
-  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
   asyncHandler(withdrawController.listMyWithdraws)
 );
 router.post(
   "/withdraw",
-  verifyFirebaseToken,
+  verifyFirebaseTokenAllowBlocked,
   asyncHandler(withdrawController.createWithdraw)
 );
 

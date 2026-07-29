@@ -11,7 +11,7 @@ function pickBodyValue(body, keys) {
 }
 
 exports.listOrders = async (req, res) => {
-  const tab = req.query.tab || "holding";
+  const tab = req.query.tab || "pending";
   const search = pickBodyValue(req.query, ["search", "q"]);
   const data = await buyerOpsService.listBuyerOrders(req.currentUser, { tab, search });
   return success(res, { data });

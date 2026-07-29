@@ -28,6 +28,8 @@ exports.listBroadcastHistory = async (req, res) => {
   const data = await adminNotificationService.listBroadcastHistory({
     page: req.query.page,
     limit: req.query.limit,
+    from: req.query.from,
+    to: req.query.to,
   });
   return success(res, { data });
 };

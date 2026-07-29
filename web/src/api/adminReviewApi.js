@@ -14,11 +14,11 @@ export function listAdminReviews(token, params = {}) {
   return apiRequest(path, { token });
 }
 
-export function hideAdminReview(token, reviewId) {
+export function hideAdminReview(token, reviewId, body = {}) {
   return apiRequest(`/api/admin/reviews/${encodeURIComponent(reviewId)}/hide`, {
     method: 'POST',
     token,
-    body: {},
+    body,
   });
 }
 
@@ -30,9 +30,10 @@ export function showAdminReview(token, reviewId) {
   });
 }
 
-export function deleteAdminReview(token, reviewId) {
+export function deleteAdminReview(token, reviewId, body = {}) {
   return apiRequest(`/api/admin/reviews/${encodeURIComponent(reviewId)}`, {
     method: 'DELETE',
     token,
+    body,
   });
 }

@@ -8,7 +8,8 @@ const mongoose = require("mongoose");
  *    depositPaidAt set; depositSettleTo = 0
  * 2a) Seller từ chối / hủy → hoàn buyer: depositSettleTo = 1, depositSettledAt
  * 2b) Seller đồng ý → WaitingPickup
- * 3) Hoàn tất (QR / forfeit / auto / admin release) → seller: depositSettleTo = 2
+ * 3) Hoàn tất (QR / admin release) → seller: depositSettleTo = 2
+ *    Forfeit / quá hạn không nhận → hủy (DISPUTE_RESOLVED), cọc seller, không tính sold
  * 4) Admin/dispute refund → buyer: depositSettleTo = 1
  * GD chi tiết xem WalletTransaction theo reservationId.
  */
@@ -39,12 +40,15 @@ const ReservationSchema = new mongoose.Schema({
    * 3 = Completed (buyer xác nhận nhận hàng)
    * 4 = Disputed (có Report sau giờ lấy)
    * 5 = AutoCompleted (hết hạn báo cáo, tự hoàn tất + release cọc)
-   * 6 = Refunded (hoàn cọc)
+   * 6 = Refunded (hoàn cọc — buyer thắng tranh chấp / seller hủy sau xác nhận / admin)
+   * 7 = DisputeResolved (seller thắng tranh chấp, cọc seller, không sold)
    */
   status: { type: Number, default: 0, index: true },
 
   // Thời điểm seller đồng ý giữ hàng.
   sellerConfirmedAt: { type: Date, default: null },
+  // Đã gửi thông báo nhắc trước giờ nhận 15 phút.
+  pickupReminderSentAt: { type: Date, default: null, index: true },
   // Hạn báo cáo = pickupTime + 24h (legacy, đồng bộ với autoReleaseAt).
   reviewDeadlineAt: { type: Date, default: null, index: true },
   // Thời điểm hệ thống được phép auto-release cọc (= pickupTime + 24h).
@@ -52,10 +56,26 @@ const ReservationSchema = new mongoose.Schema({
 
   // Thời điểm hoàn thành đơn (QR / admin / auto).
   completedAt: { type: Date, default: null },
+  /**
+   * Buyer đã từng gửi đánh giá cho đơn này (kể cả khi đã gỡ đánh giá).
+   * false = chưa đánh giá; true = không cho đánh giá lại.
+   */
+  hasReviewed: { type: Boolean, default: false, index: true },
   // Thời điểm hủy đơn.
   cancelledAt: Date,
-  // Lý do hủy (nếu có).
+  // Mã lý do hủy/kết thúc (RESERVATION_CANCEL_REASON).
   cancelReason: String,
+  // Ghi chú chi tiết khi seller/admin nhập lý do tự do.
+  cancelNote: { type: String, default: "" },
+  /**
+   * Ai hủy đơn:
+   * "" | buyer | seller_reject | seller_after_accept | admin | system
+   */
+  cancelledBy: { type: String, default: "" },
+  // true = seller hủy sau khi đã đồng ý giữ hàng (có lý do + ảnh).
+  cancelledBySellerAfterAccept: { type: Boolean, default: false, index: true },
+  // Ảnh chứng minh khi seller hủy sau xác nhận (URL, tối đa 5).
+  sellerCancelImages: { type: [String], default: [] },
   // true nếu đã giữ tồn kho (trừ Quantity biến thể).
   inventoryHeld: { type: Boolean, default: false },
 
@@ -85,6 +105,11 @@ const ReservationSchema = new mongoose.Schema({
   disputeDescription: { type: String, default: "" },
   // Thời điểm mở tranh chấp lần đầu.
   disputedAt: { type: Date, default: null },
+  // Bên báo cáo đầu tiên: buyer | seller.
+  disputeFirstBy: { type: String, default: "" },
+  // Thời điểm từng bên gửi báo cáo (để sắp xếp hiển thị).
+  buyerDisputedAt: { type: Date, default: null },
+  sellerDisputedAt: { type: Date, default: null },
 
   // Thời điểm tạo đơn.
   CreatedAt: { type: Date, default: Date.now },

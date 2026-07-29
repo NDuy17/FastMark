@@ -15,6 +15,7 @@ import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import { fetchReviewsFromNode } from '../../api/storeNodeApi';
 import { submitReportOnBackend } from '../../api/reportApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import StarRating from '../store/components/StarRating';
 import AvatarBadge from '../shared/components/AvatarBadge';
@@ -45,7 +46,6 @@ export default function SellerReviewsManageScreen({ onBack }) {
   const [shopName, setShopName] = useState('');
   const [shopId, setShopId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
   const [reportVisible, setReportVisible] = useState(false);
   const [composeVisible, setComposeVisible] = useState(false);
   const [reportReason, setReportReason] = useState('');
@@ -53,7 +53,6 @@ export default function SellerReviewsManageScreen({ onBack }) {
 
   const loadReviews = useCallback(async () => {
     setIsLoading(true);
-    setError('');
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
@@ -73,7 +72,7 @@ export default function SellerReviewsManageScreen({ onBack }) {
       const data = await fetchReviewsFromNode(nextShopId);
       setReviews(Array.isArray(data) ? data : []);
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được đánh giá.');
+      showErrorAlert(loadError.message || 'Không tải được đánh giá.');
       setReviews([]);
     } finally {
       setIsLoading(false);
@@ -134,23 +133,18 @@ export default function SellerReviewsManageScreen({ onBack }) {
   }
 
   return (
-    <ProfileSubScreen title="Quản lý đánh giá" onBack={onBack}>
+    <ProfileSubScreen title="Quản lý đánh giá" onBack={onBack} scroll={false}>
       {isLoading ? (
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" size="large" />
         </View>
-      ) : error ? (
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>{error}</Text>
-          <Pressable onPress={loadReviews} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Thử lại</Text>
-          </Pressable>
-        </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={reviews}
           keyExtractor={(item, index) => String(item.id || item._id || index)}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>Chưa có đánh giá</Text>
@@ -245,8 +239,9 @@ export default function SellerReviewsManageScreen({ onBack }) {
 }
 
 const styles = StyleSheet.create({
-  centered: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48 },
-  listContent: { paddingBottom: 8, gap: 10 },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 48 },
+  list: { flex: 1 },
+  listContent: { paddingBottom: 24, gap: 10, flexGrow: 1 },
   emptyCard: {
     backgroundColor: '#ffffff',
     borderRadius: 14,

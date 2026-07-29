@@ -13,7 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { getMyProductsOnBackend, setProductPinOnBackend } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
-import { formatPriceRange } from '../../core/utils/productFormat';
+import { showErrorAlert } from '../../core/utils/appAlert';
+import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import {
   getProductImageOverlayLabel,
   resolveIsOutOfStock,
@@ -51,6 +52,12 @@ function mapApiProductToManageCard(product) {
     status: product.status,
     isUnavailable: Boolean(product.isUnavailable),
     pinProduct: Math.max(0, Math.min(2, Number(product.pinProduct) || 0)),
+    isPromotion: Boolean(product.isPromotion) && Number(product.discountPercent) > 0,
+    discountPercent: Number(product.discountPercent) || 0,
+    promotionMinPrice: product.promotionMinPrice ?? product.promotionPrice ?? null,
+    promotionMaxPrice: product.promotionMaxPrice ?? null,
+    originalPrice: Number(product.originalPrice ?? product.minPrice ?? 0),
+    originalMaxPrice: Number(product.originalMaxPrice ?? product.maxPrice ?? product.minPrice ?? 0),
   };
 
   // Chỉ hết hàng khi tổng tồn tất cả biến thể = 0 (giống người mua xem shop).
@@ -61,6 +68,8 @@ function mapApiProductToManageCard(product) {
 function ProductManageCard({ product, onPress, onPinPress, pinningId }) {
   const overlayLabel = getProductImageOverlayLabel(product);
   const pin = Number(product.pinProduct) || 0;
+  const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
+  const promoLabels = isPromotion ? getProductPromoPriceLabels(product) : null;
   const metaLine = [
     `${product.variantCount} thẻ`,
     `${product.viewCount} view`,
@@ -99,9 +108,19 @@ function ProductManageCard({ product, onPress, onPinPress, pinningId }) {
         <Text style={styles.productName} numberOfLines={2}>
           {product.name}
         </Text>
-        <Text style={styles.priceRange}>
-          {formatPriceRange(product.minPrice, product.maxPrice)}
-        </Text>
+        {isPromotion && promoLabels ? (
+          <View style={styles.priceBlock}>
+            <View style={styles.promoPriceRow}>
+              <Text style={styles.originalPrice}>{promoLabels.originalLabel}</Text>
+              <Text style={styles.discountBadge}>−{product.discountPercent}%</Text>
+            </View>
+            <Text style={styles.salePrice}>{promoLabels.saleLabel}</Text>
+          </View>
+        ) : (
+          <Text style={styles.priceRange}>
+            {formatPriceRange(product.minPrice, product.maxPrice)}
+          </Text>
+        )}
         <Text style={styles.metaLine} numberOfLines={2}>
           {metaLine}
         </Text>
@@ -144,7 +163,6 @@ export default function SellerProductsTabScreen({
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
   const [productDetailId, setProductDetailId] = useState(null);
   const [showBulkPromo, setShowBulkPromo] = useState(false);
   const [bulkPromoTab, setBulkPromoTab] = useState('bulk');
@@ -152,7 +170,6 @@ export default function SellerProductsTabScreen({
 
   const loadProducts = useCallback(async () => {
     setIsLoading(true);
-    setError('');
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
@@ -161,7 +178,7 @@ export default function SellerProductsTabScreen({
       const data = await getMyProductsOnBackend(idToken);
       setProducts(data.map(mapApiProductToManageCard));
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được sản phẩm.');
+      showErrorAlert(loadError.message || 'Không tải được sản phẩm.');
       setProducts([]);
     } finally {
       setIsLoading(false);
@@ -305,13 +322,7 @@ export default function SellerProductsTabScreen({
 
   return (
     <View style={styles.screen}>
-      {onBack ? (
-        <SubScreenHeader title="Quản lý sản phẩm" onBack={onBack} />
-      ) : (
-        <View style={styles.header}>
-          <Text style={styles.title}>Quản lý sản phẩm</Text>
-        </View>
-      )}
+      <SubScreenHeader title="Quản lý sản phẩm" onBack={onBack} />
 
       <View style={styles.actionRow}>
         <Pressable
@@ -347,13 +358,6 @@ export default function SellerProductsTabScreen({
       {isLoading ? (
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" size="large" />
-        </View>
-      ) : error && products.length === 0 ? (
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>{error}</Text>
-          <Pressable onPress={loadProducts} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Thử lại</Text>
-          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -427,11 +431,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
   },
   actionChip: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
     borderRadius: 20,
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -529,6 +535,32 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#076F32',
     marginBottom: 6,
+  },
+  priceBlock: {
+    marginBottom: 6,
+  },
+  promoPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  originalPrice: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+  },
+  discountBadge: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#b45309',
+  },
+  salePrice: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#076F32',
   },
   metaLine: {
     fontSize: 11,

@@ -1,6 +1,5 @@
 const shopSettingsService = require("../services/shopSettingsService");
 const reservationService = require("../services/reservationService");
-const messageService = require("../services/messageService");
 const sellerStatsService = require("../services/sellerStatsService");
 const { success, fail } = require("../utils/apiResponse");
 
@@ -48,8 +47,69 @@ exports.checkShopUsernameAvailability = async (req, res) => {
   });
 };
 
+function readShopAvatarPayload(req) {
+  if (req.file?.buffer?.length) {
+    return {
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      originalName: req.file.originalname,
+    };
+  }
+
+  const imageBase64 = pickBodyValue(req.body, ["imageBase64", "base64"]);
+  const mimeType = pickBodyValue(req.body, ["mimeType", "contentType"]) || "image/jpeg";
+
+  if (!imageBase64) {
+    return null;
+  }
+
+  const normalizedBase64 = String(imageBase64).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
+  const buffer = Buffer.from(normalizedBase64, "base64");
+
+  if (!buffer.length) {
+    const error = new Error("Dữ liệu ảnh base64 không hợp lệ.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const maxBytes = 5 * 1024 * 1024;
+  if (buffer.length > maxBytes) {
+    const error = new Error("Ảnh không được lớn hơn 5MB.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    buffer,
+    mimeType,
+    originalName: "",
+  };
+}
+
+exports.uploadShopAvatar = async (req, res) => {
+  const avatarPayload = readShopAvatarPayload(req);
+
+  if (!avatarPayload) {
+    return fail(res, {
+      status: 400,
+      message: "Thiếu file ảnh đại diện gian hàng.",
+    });
+  }
+
+  const shop = await shopSettingsService.uploadShopAvatar(req.currentUser, avatarPayload);
+
+  return success(res, {
+    message: "Upload ảnh gian hàng thành công.",
+    data: {
+      shop,
+      shopAvatar: shop.shopAvatar || "",
+      avatarUrl: shop.shopAvatar || "",
+    },
+  });
+};
+
 exports.listOrders = async (req, res) => {
-  const tab = req.query.tab || "holding";
+  const tab = req.query.tab || "pending";
   const reservations = await reservationService.listSellerReservations(req.currentUser, { tab });
   return success(res, { data: { reservations, tab } });
 };
@@ -83,70 +143,30 @@ exports.rejectReservation = async (req, res) => {
 
 exports.cancelReservation = async (req, res) => {
   const reason = pickBodyValue(req.body, ["reason", "note"]);
+  const images = Array.isArray(req.body?.images) ? req.body.images : [];
   const reservation = await reservationService.cancelReservationBySeller(
     req.currentUser,
     req.params.id,
-    { reason }
+    { reason, images }
   );
+  const afterAccept = Boolean(reservation?.cancelledBySellerAfterAccept);
   return success(res, {
-    message: "Đã hủy đơn giữ hàng.",
+    message: afterAccept
+      ? "Đã hủy đơn sau xác nhận. Tiền cọc đã hoàn cho người mua."
+      : "Đã hủy đơn giữ hàng.",
     data: { reservation },
   });
 };
 
-exports.listConversations = async (req, res) => {
-  const conversations = await messageService.listSellerConversations(req.currentUser);
-  return success(res, { data: { conversations } });
-};
-
-exports.listMessages = async (req, res) => {
-  const result = await messageService.listConversationMessages(
+exports.refundDisputeDeposit = async (req, res) => {
+  const reservation = await reservationService.refundDisputeDepositBySeller(
     req.currentUser,
     req.params.id
   );
-  return success(res, { data: result });
-};
-
-exports.sendMessage = async (req, res) => {
-  const content = pickBodyValue(req.body, ["content", "message"]);
-  const imageContent = pickBodyValue(req.body, ["imageContent", "imageUri"]);
-  const messageType = req.body.messageType;
-
-  if (!content && !imageContent && Number(messageType) !== 1) {
-    return fail(res, { status: 400, message: "Thiếu nội dung tin nhắn." });
-  }
-
-  const message = await messageService.sendSellerMessage(req.currentUser, req.params.id, {
-    content,
-    messageType,
-    imageContent,
-  });
   return success(res, {
-    message: "Đã gửi tin nhắn.",
-    data: { message },
+    message: "Đã hoàn cọc cho người mua. Đơn đã kết thúc tranh chấp.",
+    data: { reservation },
   });
-};
-
-exports.deleteMessage = async (req, res) => {
-  const message = await messageService.deleteMessage(
-    req.currentUser,
-    req.params.id,
-    req.params.messageId,
-    { asSeller: true }
-  );
-
-  return success(res, {
-    message: "Đã gỡ tin nhắn.",
-    data: {
-      message,
-      lastMessage: message.conversationLastMessage || "",
-    },
-  });
-};
-
-exports.getConversationPeer = async (req, res) => {
-  const peer = await messageService.getSellerConversationPeer(req.currentUser, req.params.id);
-  return success(res, { data: { peer } });
 };
 
 exports.getStats = async (req, res) => {

@@ -14,49 +14,59 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { Ionicons } from '@expo/vector-icons';
 import {
   confirmSellerReservationOnBackend,
+  cancelSellerReservationOnBackend,
   getReservationDisputeReportsOnBackend,
   getSellerReservationDetailOnBackend,
+  refundSellerDisputeDepositOnBackend,
   rejectSellerReservationOnBackend,
   reportBuyerNoShowOnBackend,
 } from '../../api/sellerOpsApi';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import {
-  RESERVATION_DISPUTE_REASON_LABELS,
   RESERVATION_STATUS,
   RESERVATION_STATUS_LABELS,
   getCancelledReservationReason,
+  getSellerCancelNote,
+  hasAdminDisputeResolution,
+  hasDisputeReportHistory,
+  isActiveDisputeOrder,
+  isCancelledReservationStatus,
+  VIEWER_ROLE,
 } from '../../constants/sellerOrders';
 import { formatPrice } from '../../core/utils/productFormat';
-import { formatOrderCode } from '../../core/utils/orderCode';
+import { getOrderCodeValue } from '../../core/utils/orderCode';
 import AvatarBadge from '../shared/components/AvatarBadge';
-import DisputeLocationMeta from '../shared/components/DisputeLocationMeta';
 import ReservationDisputeModal from '../shared/components/ReservationDisputeModal';
-import ProfileSubScreen from '../profile/ProfileSubScreen';
+import ReservationDisputeSection from '../shared/components/ReservationDisputeSection';
+import ReservationAdminResolutionSection from '../shared/components/ReservationAdminResolutionSection';
+import SellerCancelAcceptedModal from '../shared/components/SellerCancelAcceptedModal';
+import SellerOrderReviewSection from '../shared/components/SellerOrderReviewSection';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
+import { useOrderSocket } from '../../hooks/useOrderSocket';
 
-function formatDepositLine(reservation) {
-  const amount = Number(reservation.depositAmount) || 0;
-  if (amount <= 0) {
-    return null;
-  }
-  const settleTo = Number(reservation.depositSettleTo);
-  if (
-    settleTo === 2 ||
-    reservation.depositReleasedAt ||
-    reservation.depositReleasedToSellerAt
-  ) {
-    return `Đã nhận cọc ${formatPrice(amount)}`;
-  }
-  if (settleTo === 1 || reservation.depositRefundedAt) {
-    return `Đã hoàn cọc ${formatPrice(amount)}`;
-  }
-  if (Number(reservation.status) === RESERVATION_STATUS.DISPUTED) {
-    return `Cọc đang giữ chờ admin ${formatPrice(amount)}`;
-  }
-  return `Cọc đang giữ ${formatPrice(amount)}`;
+function formatPickupSchedule(iso) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return {
+    time: `${hours}:${minutes}`,
+    date: `${day}/${month}/${year}`,
+  };
 }
 
-function formatDateTime(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('vi-VN');
+function PaymentRow({ label, value, valueStyle }) {
+  return (
+    <View style={styles.paymentRow}>
+      <Text style={styles.paymentLabel}>{label}</Text>
+      <Text style={[styles.paymentValue, valueStyle]}>{value}</Text>
+    </View>
+  );
 }
 
 function isPastPickup(item, now) {
@@ -65,43 +75,146 @@ function isPastPickup(item, now) {
   return Number.isFinite(pickup.getTime()) && now >= pickup.getTime();
 }
 
-export default function SellerOrderDetailScreen({ reservationId, onBack, onChanged }) {
-  const [reservation, setReservation] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+function isWithinDepositDecisionWindow(item, now = Date.now()) {
+  if (item?.withinDepositDecisionWindow === true) return true;
+  if (item?.withinDepositDecisionWindow === false) return false;
+  const deadlineRaw = item?.depositDecisionDeadline || item?.autoReleaseAt || item?.reviewDeadlineAt;
+  if (deadlineRaw) {
+    const deadline = new Date(deadlineRaw);
+    return Number.isFinite(deadline.getTime()) && now < deadline.getTime();
+  }
+  if (!item?.pickupTime) return false;
+  const pickup = new Date(item.pickupTime);
+  if (!Number.isFinite(pickup.getTime())) return false;
+  return now < pickup.getTime() + 24 * 60 * 60 * 1000;
+}
+
+function OrderDetailLayout({ onBack, children }) {
+  const insets = useScreenInsets();
+
+  return (
+    <View style={styles.screen}>
+      <SubScreenHeader title="Chi tiết đơn hàng" onBack={onBack} />
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={[
+          styles.bodyContent,
+          { paddingBottom: insets.nestedScrollPaddingBottom },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {children}
+      </ScrollView>
+    </View>
+  );
+}
+
+function mergeLoadedItem(previous, next) {
+  if (!next) {
+    return previous;
+  }
+  const prev = previous || {};
+  const merged = {
+    ...prev,
+    ...next,
+    id: next.id || prev.id,
+    product: next.product || prev.product || null,
+    variant: next.variant || prev.variant || null,
+    buyer: next.buyer ? { ...(prev.buyer || {}), ...next.buyer } : prev.buyer || null,
+  };
+
+  const prevReason = getCancelledReservationReason(prev, VIEWER_ROLE.SELLER);
+  const nextReason = getCancelledReservationReason(merged, VIEWER_ROLE.SELLER);
+  if (prevReason && !nextReason) {
+    merged.cancelReason = prev.cancelReason || merged.cancelReason;
+    merged.reasonCode = prev.reasonCode || merged.reasonCode;
+    merged.reasonLabelBuyer = prev.reasonLabelBuyer || merged.reasonLabelBuyer;
+    merged.reasonLabelSeller = prev.reasonLabelSeller || merged.reasonLabelSeller;
+    merged.cancelledBy = prev.cancelledBy || merged.cancelledBy;
+    merged.cancelledAt = prev.cancelledAt || merged.cancelledAt;
+    merged.depositSettleTo =
+      prev.depositSettleTo != null ? prev.depositSettleTo : merged.depositSettleTo;
+    merged.cancelNote = prev.cancelNote || merged.cancelNote;
+    merged.sellerCancelImages =
+      Array.isArray(prev.sellerCancelImages) && prev.sellerCancelImages.length
+        ? prev.sellerCancelImages
+        : merged.sellerCancelImages;
+    merged.cancelledBySellerAfterAccept =
+      prev.cancelledBySellerAfterAccept ?? merged.cancelledBySellerAfterAccept;
+  }
+
+  return merged;
+}
+
+export default function SellerOrderDetailScreen({
+  reservationId,
+  initialItem = null,
+  listCancelReasonText = '',
+  onBack,
+  onChanged,
+}) {
+  const resolvedId = String(reservationId || initialItem?.id || '').trim();
+  const [reservation, setReservation] = useState(initialItem);
+  const [isLoading, setIsLoading] = useState(!initialItem);
   const [isActing, setIsActing] = useState(false);
-  const [error, setError] = useState('');
   const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [showCancelAcceptedModal, setShowCancelAcceptedModal] = useState(false);
   const [disputeReports, setDisputeReports] = useState([]);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   const loadDisputeReports = useCallback(async () => {
+    if (!resolvedId) {
+      setDisputeReports([]);
+      return;
+    }
     try {
       const idToken = await getCurrentUserIdToken();
-      const reports = await getReservationDisputeReportsOnBackend(idToken, reservationId);
+      const reports = await getReservationDisputeReportsOnBackend(idToken, resolvedId);
       setDisputeReports(Array.isArray(reports) ? reports : []);
     } catch {
       setDisputeReports([]);
     }
-  }, [reservationId]);
+  }, [resolvedId]);
 
   const loadDetail = useCallback(async () => {
+    if (!resolvedId) {
+      showErrorAlert('Thiếu mã đơn hàng.');
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
-    setError('');
     try {
       const idToken = await getCurrentUserIdToken();
-      const data = await getSellerReservationDetailOnBackend(idToken, reservationId);
-      setReservation(data);
+      const data = await getSellerReservationDetailOnBackend(idToken, resolvedId);
+      setReservation((prev) => mergeLoadedItem(prev, data));
       await loadDisputeReports();
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được chi tiết đơn.');
+      showErrorAlert(loadError.message || 'Không tải được chi tiết đơn.');
+      setReservation((prev) => prev || initialItem);
     } finally {
       setIsLoading(false);
     }
-  }, [reservationId, loadDisputeReports]);
+  }, [resolvedId, initialItem, loadDisputeReports]);
 
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
+
+  const handleOrderUpdated = useCallback(
+    (payload) => {
+      if (!payload?.reservationId || String(payload.reservationId) !== String(resolvedId)) {
+        return;
+      }
+      loadDetail();
+    },
+    [loadDetail, resolvedId]
+  );
+
+  useOrderSocket({
+    enabled: Boolean(resolvedId),
+    onOrderUpdated: handleOrderUpdated,
+  });
 
   useEffect(() => {
     const pickupAt = new Date(reservation?.pickupTime).getTime();
@@ -160,6 +273,59 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
     ]);
   }
 
+  function handleOpenCancelAccepted() {
+    setShowCancelAcceptedModal(true);
+  }
+
+  async function handleSubmitCancelAccepted(payload) {
+    setIsActing(true);
+    try {
+      const idToken = await getCurrentUserIdToken();
+      const updated = await cancelSellerReservationOnBackend({
+        idToken,
+        reservationId: resolvedId,
+        reason: payload.reason,
+        images: payload.images,
+      });
+      setReservation((prev) => mergeLoadedItem(prev, updated));
+      setShowCancelAcceptedModal(false);
+      onChanged?.();
+      Alert.alert('Đã hủy đơn', 'Đã thông báo người mua và hoàn tiền cọc.');
+    } catch (actionError) {
+      Alert.alert('Lỗi', actionError.message || 'Không hủy được đơn.');
+      throw actionError;
+    } finally {
+      setIsActing(false);
+    }
+  }
+
+  function handleRefundDisputeDeposit() {
+    Alert.alert(
+      'Hoàn cọc cho người mua?',
+      'Tiền cọc sẽ được hoàn về ví người mua và đơn sẽ kết thúc tranh chấp.',
+      [
+        { text: 'Huỷ', style: 'cancel' },
+        {
+          text: 'Hoàn cọc',
+          onPress: async () => {
+            setIsActing(true);
+            try {
+              const idToken = await getCurrentUserIdToken();
+              const updated = await refundSellerDisputeDepositOnBackend(idToken, resolvedId);
+              setReservation((prev) => mergeLoadedItem(prev, updated));
+              onChanged?.();
+              Alert.alert('Đã hoàn cọc', 'Tiền cọc đã được hoàn cho người mua.');
+            } catch (actionError) {
+              Alert.alert('Lỗi', actionError.message || 'Không hoàn cọc được.');
+            } finally {
+              setIsActing(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
   function handleCallBuyer() {
     const phone = reservation?.buyer?.phone;
     if (!phone) {
@@ -197,51 +363,129 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
     }
   }
 
-  if (isLoading) {
+  if (isLoading && !reservation) {
     return (
-      <ProfileSubScreen title="Chi tiết đơn giữ hàng" onBack={onBack}>
+      <OrderDetailLayout onBack={onBack}>
         <View style={styles.centered}>
           <ActivityIndicator color="#076F32" size="large" />
         </View>
-      </ProfileSubScreen>
+      </OrderDetailLayout>
     );
   }
 
   if (!reservation) {
     return (
-      <ProfileSubScreen title="Chi tiết đơn giữ hàng" onBack={onBack}>
-        <Text style={styles.errorText}>{error || 'Không tìm thấy đơn.'}</Text>
-      </ProfileSubScreen>
+      <OrderDetailLayout onBack={onBack}>
+        <View style={styles.centered}>
+          <Text style={styles.emptyText}>Không tìm thấy đơn hàng.</Text>
+        </View>
+      </OrderDetailLayout>
     );
   }
 
   const canConfirm = reservation.status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION;
   const pastPickup = isPastPickup(reservation, currentTime);
+  const withinDecision = isWithinDepositDecisionWindow(reservation, currentTime);
+  const holdingAccepted =
+    reservation.status === RESERVATION_STATUS.WAITING_PICKUP &&
+    !reservation.disputeByBuyer &&
+    !reservation.disputeBySeller;
+  const canCancelAccepted =
+    reservation.canCancelAccepted === true || holdingAccepted;
   const canReportBuyer =
     reservation.canReportBuyer === true ||
     ((reservation.status === RESERVATION_STATUS.WAITING_PICKUP ||
       reservation.status === RESERVATION_STATUS.DISPUTED) &&
       pastPickup &&
       !reservation.disputeBySeller);
+  const canRefundDisputeDeposit =
+    !reservation.disputeBySeller &&
+    (reservation.canRefundDisputeDeposit === true ||
+      (reservation.status === RESERVATION_STATUS.DISPUTED &&
+        Number(reservation.depositSettleTo || 0) === 0 &&
+        !reservation.depositSettledAt &&
+        !reservation.depositReleasedAt &&
+        !reservation.depositRefundedAt));
+  const showDisputeActions =
+    reservation.status === RESERVATION_STATUS.DISPUTED &&
+    (canRefundDisputeDeposit || canReportBuyer);
+  const showConfirmedNotice =
+    reservation.status === RESERVATION_STATUS.WAITING_PICKUP && !pastPickup;
+  const showPastPickupNotice =
+    reservation.status === RESERVATION_STATUS.WAITING_PICKUP && pastPickup;
+  const showPastPickupActions =
+    showPastPickupNotice && (canCancelAccepted || canReportBuyer);
+  const showCancelBeforePickup = canCancelAccepted && !pastPickup;
   const buyerName = reservation.buyer?.fullName || 'Khách';
   const statusLabel = RESERVATION_STATUS_LABELS[reservation.status] || 'Không rõ';
-  const depositLine = formatDepositLine(reservation);
-  const cashDue = Math.max(
-    0,
-    (Number(reservation.totalAmount) || 0) - (Number(reservation.depositAmount) || 0)
-  );
+  const statusChipStyle =
+    isCancelledReservationStatus(reservation.status) ||
+    reservation.status === RESERVATION_STATUS.DISPUTED
+      ? styles.statusChipCancelled
+      : reservation.status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION ||
+          reservation.status === RESERVATION_STATUS.WAITING_PICKUP
+        ? styles.statusChipPending
+        : styles.statusChip;
+  const pickupDisplay = formatPickupSchedule(reservation.pickupTime);
+  const cancelReasonText =
+    String(listCancelReasonText || '').trim() ||
+    getCancelledReservationReason(reservation, VIEWER_ROLE.SELLER);
+  const sellerCancelNote = getSellerCancelNote(reservation);
+  const sellerCancelImages = Array.isArray(reservation.sellerCancelImages)
+    ? reservation.sellerCancelImages.filter(Boolean)
+    : [];
+  const hideSellerCancelDetails =
+    hasDisputeReportHistory(reservation) && !isActiveDisputeOrder(reservation);
+  const showAdminResolutionSection = hasAdminDisputeResolution(reservation, disputeReports);
+  const showCancelReasonSection =
+    !isActiveDisputeOrder(reservation) &&
+    !showAdminResolutionSection &&
+    (Boolean(cancelReasonText) ||
+      (!hideSellerCancelDetails && Boolean(sellerCancelNote)) ||
+      (!hideSellerCancelDetails && sellerCancelImages.length > 0));
+  const totalAmount = Number(reservation.totalAmount) || 0;
+  const depositAmount = Number(reservation.depositAmount) || 0;
+  const depositPercent = Math.max(0, Math.min(100, Number(reservation.depositPercent) || 0));
+  const cashDue = Math.max(0, totalAmount - depositAmount);
+  const qty = Number(reservation.quantity) || 0;
+  const unitPrice =
+    reservation.agreedPrice != null
+      ? Number(reservation.agreedPrice)
+      : reservation.variant?.price != null
+        ? Number(reservation.variant.price)
+        : qty > 0
+          ? Math.round(totalAmount / qty)
+          : 0;
   const buyerReport = disputeReports.find((report) => report.reporterSide === 'buyer');
   const sellerReport = disputeReports.find((report) => report.reporterSide === 'seller');
+  const isCompletedOrder =
+    reservation.status === RESERVATION_STATUS.COMPLETED ||
+    reservation.status === RESERVATION_STATUS.AUTO_COMPLETED;
+  const buyerReview =
+    isCompletedOrder && reservation.buyerReview?.id ? reservation.buyerReview : null;
 
   return (
-    <ProfileSubScreen title="Chi tiết đơn giữ hàng" onBack={onBack}>
+    <OrderDetailLayout onBack={onBack}>
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Khách hàng</Text>
-        <View style={styles.buyerRow}>
-          <AvatarBadge name={buyerName} uri={reservation.buyer?.avatar || ''} size={48} />
-          <Text style={styles.buyerName} numberOfLines={1}>
-            {buyerName}
+        <View style={styles.orderMetaRow}>
+          <Text style={styles.orderCode} numberOfLines={1}>
+            Đơn hàng: {getOrderCodeValue(reservation.id || reservationId)}
           </Text>
+          <Text style={statusChipStyle} numberOfLines={2}>
+            {statusLabel}
+          </Text>
+        </View>
+
+        <View style={styles.divider} />
+
+        <Text style={styles.sectionHeading}>THÔNG TIN KHÁCH HÀNG</Text>
+        <View style={styles.buyerRow}>
+          <AvatarBadge name={buyerName} uri={reservation.buyer?.avatar || ''} size={52} />
+          <View style={styles.buyerInfo}>
+            <Text style={styles.buyerName} numberOfLines={1}>
+              {buyerName}
+            </Text>
+          </View>
           <Pressable
             onPress={handleCallBuyer}
             style={({ pressed }) => [styles.callIconBtn, pressed && styles.callIconBtnPressed]}
@@ -255,15 +499,7 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
 
         <View style={styles.divider} />
 
-        <View style={styles.orderMetaRow}>
-          <Text style={styles.orderCode} numberOfLines={1}>
-            {formatOrderCode(reservation.id || reservationId)}
-          </Text>
-          <Text style={styles.statusChip} numberOfLines={2}>
-            {statusLabel}
-          </Text>
-        </View>
-
+        <Text style={styles.sectionHeading}>THÔNG TIN SẢN PHẨM</Text>
         <View style={styles.productRow}>
           <View style={styles.productThumbWrap}>
             {reservation.product?.thumbnail ? (
@@ -276,121 +512,129 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
             )}
           </View>
           <View style={styles.productInfo}>
-            <Text style={styles.value} numberOfLines={2}>
+            <Text style={styles.productName} numberOfLines={2}>
               {reservation.product?.productName || 'Sản phẩm'}
             </Text>
             {reservation.variant?.variantName ? (
-              <Text style={styles.meta}>{reservation.variant.variantName}</Text>
+              <Text style={styles.productMeta}>
+                Loại: {reservation.variant.variantName}
+              </Text>
             ) : null}
-            <Text style={styles.meta}>Số lượng: {reservation.quantity}</Text>
-            <Text style={styles.price}>Tổng tiền: {formatPrice(reservation.totalAmount)}</Text>
-            {depositLine ? <Text style={styles.depositBadge}>{depositLine}</Text> : null}
-            {Number(reservation.depositAmount) > 0 ? (
-              <Text style={styles.cashDue}>Còn: {formatPrice(cashDue)}</Text>
-            ) : null}
+            <View style={styles.productPriceRow}>
+              <Text style={styles.productMeta}>Giá: {formatPrice(unitPrice)}</Text>
+              <Text style={styles.productQtyMark}>x{qty || 1}</Text>
+            </View>
           </View>
         </View>
-        {reservation.pickupTime ? (
-          <Text style={styles.meta}>
-            Giờ lấy hàng: {new Date(reservation.pickupTime).toLocaleString('vi-VN')}
-          </Text>
+
+        <View style={styles.divider} />
+
+        <Text style={styles.sectionHeading}>CHI TIẾT THANH TOÁN</Text>
+        <PaymentRow label="Tổng tiền hàng:" value={formatPrice(totalAmount)} />
+        <PaymentRow label={`Đặt cọc ${depositPercent}%:`} value={formatPrice(depositAmount)} />
+        <PaymentRow
+          label="Thanh toán khi nhận hàng:"
+          value={formatPrice(cashDue)}
+          valueStyle={styles.paymentValueDanger}
+        />
+
+        <View style={styles.divider} />
+
+        <Text style={styles.sectionHeading}>THỜI GIAN NHẬN HÀNG</Text>
+        <View style={styles.pickupTimeRow}>
+          <Ionicons name="time-outline" size={18} color="#64748b" />
+          {pickupDisplay ? (
+            <Text style={styles.pickupTimeText}>
+              Giờ: <Text style={styles.pickupTimeValue}>{pickupDisplay.time}</Text>
+              {' · '}
+              Ngày: <Text style={styles.pickupTimeValue}>{pickupDisplay.date}</Text>
+            </Text>
+          ) : (
+            <Text style={styles.pickupTimeText}>Giờ: — · Ngày: —</Text>
+          )}
+        </View>
+
+        {reservation.note ? <Text style={styles.noteLine}>Ghi chú: {reservation.note}</Text> : null}
+
+        {showConfirmedNotice ? (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.pickupNoticeBlock}>
+              <Text style={styles.pickupNoticeTitle}>ĐÃ XÁC NHẬN ĐƠN</Text>
+              <Text style={styles.pickupNoticeBody}>
+                Đưa QR gian hàng cho khách quét trên đơn của họ để hoàn tất.
+              </Text>
+            </View>
+          </>
         ) : null}
-        {reservation.note ? <Text style={styles.meta}>Ghi chú: {reservation.note}</Text> : null}
-        {getCancelledReservationReason(reservation) ? (
-          <Text style={styles.meta}>
-            Lý do hủy: {getCancelledReservationReason(reservation)}
-          </Text>
+
+        {showPastPickupNotice ? (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.pickupNoticeBlock}>
+              <Text style={styles.pickupOverdueTitle}>ĐÃ QUÁ GIỜ NHẬN HÀNG</Text>
+              <Text style={styles.pickupNoticeBody}>
+                {withinDecision
+                  ? 'Trong 24h bạn có thể khiếu nại và chờ admin xử lý hoặc hoàn cọc cho người mua.'
+                  : 'Đã quá 24 giờ sau giờ nhận. Cọc mặc định đã chuyển cho bạn.'}
+              </Text>
+            </View>
+          </>
         ) : null}
-        {canConfirm ? (
-          <Text style={styles.lockHint}>
-            Sau khi đồng ý, đưa QR gian hàng cho khách quét khi nhận hàng để hoàn tất đơn
-            {Number(reservation.depositAmount) > 0
-              ? ` — khi đó bạn nhận cọc ${formatPrice(reservation.depositAmount)}`
-              : ''}
-            .
-          </Text>
+
+        {buyerReview ? (
+          <SellerOrderReviewSection
+            review={buyerReview}
+            shopId={reservation.shopId ? String(reservation.shopId) : ''}
+            shopName={reservation.storeName || reservation.shop?.shopName || ''}
+            buyerName={buyerName}
+            disabled={isActing}
+          />
         ) : null}
-        {reservation.status === RESERVATION_STATUS.WAITING_PICKUP ? (
-          <Text style={styles.waitHint}>
-            Đã xác nhận. Đưa QR gian hàng cho khách quét trên đơn của họ để hoàn tất.
-          </Text>
+
+        <ReservationDisputeSection
+          reservation={reservation}
+          buyerReport={buyerReport}
+          sellerReport={sellerReport}
+          viewerRole={VIEWER_ROLE.SELLER}
+        />
+
+        <ReservationAdminResolutionSection
+          reservation={reservation}
+          reports={disputeReports}
+          viewerRole={VIEWER_ROLE.SELLER}
+        />
+
+        {showCancelReasonSection ? (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.cancelReasonHeading}>LÝ DO</Text>
+            {cancelReasonText ? (
+              <Text style={styles.cancelReasonBody}>{cancelReasonText}</Text>
+            ) : null}
+            {!hideSellerCancelDetails && sellerCancelNote ? (
+              <View style={styles.cancelDetailBlock}>
+                <Text style={styles.cancelDetailLabel}>Lý do hủy hàng:</Text>
+                <Text style={styles.cancelDetailBody}>{sellerCancelNote}</Text>
+              </View>
+            ) : null}
+            {!hideSellerCancelDetails && sellerCancelImages.length ? (
+              <View style={styles.cancelEvidenceBlock}>
+                <Text style={styles.cancelDetailLabel}>Ảnh chứng minh khi hủy:</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {sellerCancelImages.map((uri) => (
+                    <Image key={uri} source={{ uri }} style={styles.evidencePhoto} />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+          </>
         ) : null}
       </View>
 
-      {buyerReport ? (
-        <View style={styles.evidenceCard}>
-          <Text style={styles.evidenceTitle}>Người mua đã tố cáo bạn không có mặt</Text>
-          <Text style={styles.evidenceBody}>
-            {buyerReport.reasonLabel ||
-              RESERVATION_DISPUTE_REASON_LABELS[buyerReport.reason] ||
-              buyerReport.title ||
-              'Đã gửi báo cáo'}
-          </Text>
-          {buyerReport.content ? (
-            <Text style={styles.evidenceBody}>{buyerReport.content}</Text>
-          ) : null}
-          {(buyerReport.latitude != null || buyerReport.address) ? (
-            <DisputeLocationMeta
-              latitude={buyerReport.latitude}
-              longitude={buyerReport.longitude}
-              address={buyerReport.address || ''}
-              style={styles.evidenceMeta}
-            />
-          ) : null}
-          <Text style={styles.evidenceMeta}>
-            Lúc: {formatDateTime(buyerReport.createdAt)} · Cọc đang giữ chờ admin
-          </Text>
-          {Array.isArray(buyerReport.images) && buyerReport.images.length ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {buyerReport.images.map((image) => (
-                <Image
-                  key={image.id || image.imageUrl}
-                  source={{ uri: image.imageUrl }}
-                  style={styles.evidencePhoto}
-                />
-              ))}
-            </ScrollView>
-          ) : null}
-        </View>
-      ) : null}
-
-      {sellerReport ? (
-        <View style={styles.evidenceCardSelf}>
-          <Text style={styles.evidenceTitle}>Báo cáo của bạn</Text>
-          <Text style={styles.evidenceBody}>
-            {sellerReport.sellerContent || sellerReport.content || 'Đã gửi báo cáo'}
-          </Text>
-          {(sellerReport.sellerLatitude != null ||
-            sellerReport.latitude != null ||
-            sellerReport.sellerAddress ||
-            sellerReport.address) ? (
-            <DisputeLocationMeta
-              latitude={sellerReport.sellerLatitude ?? sellerReport.latitude}
-              longitude={sellerReport.sellerLongitude ?? sellerReport.longitude}
-              address={sellerReport.sellerAddress || sellerReport.address || ''}
-              style={styles.evidenceMeta}
-            />
-          ) : null}
-          <Text style={styles.evidenceMeta}>
-            Lúc: {formatDateTime(sellerReport.createdAt)}
-          </Text>
-          {Array.isArray(sellerReport.images) && sellerReport.images.length ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {sellerReport.images.map((image) => (
-                <Image
-                  key={image.id || image.imageUrl}
-                  source={{ uri: image.imageUrl }}
-                  style={styles.evidencePhoto}
-                />
-              ))}
-            </ScrollView>
-          ) : null}
-        </View>
-      ) : null}
-
       <View style={styles.actionRow}>
         {canConfirm ? (
-          <>
+          <View style={styles.confirmActionRow}>
             <Pressable
               disabled={isActing}
               onPress={handleConfirm}
@@ -401,13 +645,66 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
             <Pressable
               disabled={isActing}
               onPress={handleReject}
-              style={styles.dangerBtn}
+              style={styles.outlineDangerBtn}
             >
-              <Text style={styles.dangerBtnText}>Từ chối</Text>
+              <Text style={styles.outlineDangerBtnText}>Từ chối</Text>
             </Pressable>
-          </>
+          </View>
         ) : null}
-        {canReportBuyer ? (
+        {showDisputeActions ? (
+          <View style={styles.pastPickupActionCol}>
+            {canRefundDisputeDeposit ? (
+              <Pressable
+                disabled={isActing}
+                onPress={handleRefundDisputeDeposit}
+                style={styles.refundBtn}
+              >
+                <Text style={styles.refundBtnText}>Hoàn cọc cho người mua</Text>
+              </Pressable>
+            ) : null}
+            {canReportBuyer ? (
+              <Pressable
+                disabled={isActing}
+                onPress={() => setShowDisputeModal(true)}
+                style={styles.reportBtn}
+              >
+                <Text style={styles.reportBtnText}>Báo cáo người mua không đến</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+        {showPastPickupActions ? (
+          <View style={styles.pastPickupActionCol}>
+            {canCancelAccepted ? (
+              <Pressable
+                disabled={isActing}
+                onPress={handleOpenCancelAccepted}
+                style={styles.refundBtn}
+              >
+                <Text style={styles.refundBtnText}>Hoàn cọc cho người mua</Text>
+              </Pressable>
+            ) : null}
+            {canReportBuyer ? (
+              <Pressable
+                disabled={isActing}
+                onPress={() => setShowDisputeModal(true)}
+                style={styles.reportBtn}
+              >
+                <Text style={styles.reportBtnText}>Báo cáo người mua không đến</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+        {showCancelBeforePickup ? (
+          <Pressable
+            disabled={isActing}
+            onPress={handleOpenCancelAccepted}
+            style={styles.dangerBtn}
+          >
+            <Text style={styles.dangerBtnText}>Hủy đơn (hoàn cọc)</Text>
+          </Pressable>
+        ) : null}
+        {!showPastPickupActions && !showDisputeActions && canReportBuyer ? (
           <Pressable
             disabled={isActing}
             onPress={() => setShowDisputeModal(true)}
@@ -424,11 +721,26 @@ export default function SellerOrderDetailScreen({ reservationId, onBack, onChang
         onClose={() => setShowDisputeModal(false)}
         onSubmit={handleSubmitBuyerNoShow}
       />
-    </ProfileSubScreen>
+      <SellerCancelAcceptedModal
+        visible={showCancelAcceptedModal}
+        onClose={() => setShowCancelAcceptedModal(false)}
+        onSubmit={handleSubmitCancelAccepted}
+      />
+    </OrderDetailLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+  },
+  body: {
+    flex: 1,
+  },
+  bodyContent: {
+    padding: 16,
+  },
   centered: { alignItems: 'center', paddingVertical: 40 },
   card: {
     backgroundColor: '#ffffff',
@@ -437,44 +749,82 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    gap: 4,
   },
-  sectionTitle: { fontSize: 14, fontWeight: '800', color: '#0f172a', marginBottom: 8 },
+  sectionHeading: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0f172a',
+    letterSpacing: 0.3,
+    marginBottom: 10,
+  },
+  pickupTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pickupTimeText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 20,
+  },
+  pickupTimeValue: {
+    fontWeight: '800',
+    color: '#0f172a',
+  },
   orderMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 12,
   },
   orderCode: {
-    flexShrink: 0,
+    flex: 1,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
     color: '#0f172a',
   },
   statusChip: {
-    flex: 1,
+    flexShrink: 0,
     textAlign: 'right',
     fontSize: 13,
     fontWeight: '800',
     color: '#076F32',
+  },
+  statusChipPending: {
+    flexShrink: 0,
+    textAlign: 'right',
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#b45309',
+  },
+  statusChipCancelled: {
+    flexShrink: 0,
+    textAlign: 'right',
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#dc2626',
   },
   buyerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  buyerName: {
+  buyerInfo: {
     flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  buyerName: {
     fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
   callIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#E6F4EC',
     alignItems: 'center',
     justifyContent: 'center',
@@ -485,12 +835,12 @@ const styles = StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: '#e2e8f0',
-    marginVertical: 12,
+    marginVertical: 14,
   },
-  productRow: { flexDirection: 'row', gap: 12, marginTop: 4 },
+  productRow: { flexDirection: 'row', gap: 12 },
   productThumbWrap: {
-    width: 64,
-    height: 64,
+    width: 80,
+    height: 80,
     borderRadius: 12,
     backgroundColor: '#f1f5f9',
     alignItems: 'center',
@@ -499,35 +849,142 @@ const styles = StyleSheet.create({
   },
   productThumb: { width: '100%', height: '100%' },
   productThumbEmoji: { fontSize: 28 },
-  productInfo: { flex: 1, gap: 2 },
-  value: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
-  meta: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  price: { fontSize: 15, fontWeight: '800', color: '#076F32', marginTop: 4 },
-  depositBadge: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#b45309',
+  productInfo: { flex: 1, gap: 4, paddingTop: 2 },
+  productName: { fontSize: 15, fontWeight: '800', color: '#0f172a', lineHeight: 20 },
+  productMeta: { fontSize: 14, color: '#334155', fontWeight: '600' },
+  productPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  cashDue: {
-    marginTop: 2,
-    fontSize: 13,
+  productQtyMark: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  paymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
+  },
+  paymentLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  paymentValue: {
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
-  lockHint: { color: '#b45309', fontSize: 12, fontWeight: '700', marginTop: 8 },
-  waitHint: { color: '#076F32', fontSize: 12, fontWeight: '700', marginTop: 8 },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  paymentValueDanger: {
+    color: '#dc2626',
+  },
+  noteLine: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  noteLineDanger: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#b91c1c',
+    fontWeight: '700',
+    lineHeight: 22,
+  },
+  cancelReasonHeading: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#b91c1c',
+    letterSpacing: 0.3,
+    marginBottom: 8,
+  },
+  cancelReasonBody: {
+    fontSize: 13,
+    color: '#b91c1c',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  cancelDetailBlock: {
+    marginTop: 10,
+    gap: 4,
+  },
+  cancelDetailLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    lineHeight: 20,
+  },
+  cancelDetailBody: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  cancelEvidenceBlock: { marginTop: 10, gap: 6 },
+  pickupNoticeBlock: {
+    gap: 8,
+  },
+  pickupNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0f172a',
+    letterSpacing: 0.2,
+  },
+  pickupOverdueTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#b91c1c',
+    letterSpacing: 0.2,
+  },
+  pickupNoticeBody: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  actionRow: { gap: 10, marginTop: 4 },
+  pastPickupActionCol: {
+    gap: 10,
+  },
+  confirmActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
   primaryBtn: {
     flex: 1,
-    minWidth: '40%',
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: 12,
     backgroundColor: '#076F32',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryBtnText: { color: '#ffffff', fontWeight: '800' },
+  primaryBtnText: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 14,
+    letterSpacing: 0.4,
+  },
+  outlineDangerBtn: {
+    flex: 1,
+    minHeight: 50,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#fca5a5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  outlineDangerBtnText: {
+    color: '#b91c1c',
+    fontWeight: '800',
+    fontSize: 14,
+  },
   dangerBtn: {
     flex: 1,
     minWidth: '40%',
@@ -538,6 +995,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   dangerBtnText: { color: '#b91c1c', fontWeight: '800' },
+  refundBtn: {
+    width: '100%',
+    minHeight: 48,
+    borderRadius: 12,
+    backgroundColor: '#076F32',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  refundBtnText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
   reportBtn: {
     width: '100%',
     minHeight: 48,
@@ -549,7 +1022,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  reportBtnText: { color: '#c2410c', fontWeight: '800', textAlign: 'center' },
+  reportBtnText: {
+    color: '#c2410c',
+    fontWeight: '800',
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 18,
+  },
   evidenceCard: {
     backgroundColor: '#fef2f2',
     borderRadius: 14,
@@ -578,5 +1057,10 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: '#e2e8f0',
   },
-  errorText: { color: '#b91c1c', fontWeight: '700', padding: 16 },
+  emptyText: {
+    padding: 24,
+    textAlign: 'center',
+    color: '#64748b',
+    fontWeight: '600',
+  },
 });

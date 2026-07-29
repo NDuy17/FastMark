@@ -106,7 +106,7 @@ export function usePushNotifications({ enabled = true } = {}) {
       });
     }
 
-    syncToken();
+    syncToken().catch(() => {});
 
     const tokenSubscription = Notifications.addPushTokenListener((tokenResult) => {
       const nextToken = extractDevicePushToken(tokenResult);

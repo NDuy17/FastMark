@@ -69,7 +69,6 @@ async function createUserRecord(payload) {
 }
 
 async function updateUserActivity(user) {
-  user.DangHoatDong = true;
   user.LanHoatDongCuoi = new Date();
   await user.save();
   return user;

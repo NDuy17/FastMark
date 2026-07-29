@@ -29,8 +29,10 @@ import {
   mapShopSettingsToProfilePatch,
   mergeProfile,
   normalizeRole,
+  isAdminRole,
 } from '../../model/profileModel';
 import { getMySellerVerificationOnBackend } from '../../api/sellerApi';
+import { markAllPresenceOfflineOnBackend } from '../../api/presenceApi';
 import { getFirebaseInitConfigError } from '../../core/config/firebaseApp';
 import {
   makeProfileFromAuthUser,
@@ -347,6 +349,10 @@ export const loginUser = createAsyncThunk(
         password: payload.password,
       });
 
+      if (isAdminRole(loginData.user?.role)) {
+        throw new Error('Tài khoản này là admin');
+      }
+
       const user = await signInWithCustomTokenFromBackend(loginData.tokens.customToken);
       // Dùng idToken backend ngay — khỏi chờ Firebase refresh thêm vòng.
       if (loginData.tokens?.idToken) {
@@ -369,6 +375,7 @@ export const logoutUser = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       log.info('logoutUser:start');
+      await markAllPresenceOfflineOnBackend();
       await clearGoogleSignInSession();
       await logoutCurrentUser();
       log.ok('logoutUser:success');
@@ -538,6 +545,10 @@ export const socialLogin = createAsyncThunk(
         };
       }
 
+      if (isAdminRole(data.user?.role)) {
+        throw new Error('Tài khoản này là admin');
+      }
+
       const user = await signInWithCustomTokenFromBackend(data.customToken);
       const profile = mapBackendUserToProfile(data.user, user);
       const syncedUser = {
@@ -584,6 +595,10 @@ export const completeGoogleProfile = createAsyncThunk(
 
       if (data?.needsUsername) {
         throw new Error('Không thể hoàn tất đăng ký Google. Thử lại.');
+      }
+
+      if (isAdminRole(data.user?.role)) {
+        throw new Error('Tài khoản này là admin');
       }
 
       const user = await signInWithCustomTokenFromBackend(data.customToken);

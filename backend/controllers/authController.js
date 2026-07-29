@@ -272,6 +272,58 @@ exports.getMe = async (req, res) => {
   });
 };
 
+exports.getLockAppealStatus = async (req, res) => {
+  const reportService = require("../services/reportService");
+  const status = await reportService.getAccountLockAppealStatus(req.currentUser);
+  return success(res, { data: status });
+};
+
+exports.createLockAppeal = async (req, res) => {
+  const reportService = require("../services/reportService");
+  const content = pickBodyValue(req.body, ["content", "message", "note"]);
+  const title = pickBodyValue(req.body, ["title", "reason"]);
+  if (!content) {
+    return fail(res, { status: 400, message: "Vui lòng nhập nội dung khiếu nại." });
+  }
+
+  const report = await reportService.createAccountLockAppeal(req.currentUser, {
+    title,
+    content,
+    images: req.body.images || req.body.imageUrls || [],
+  });
+
+  return success(res, {
+    message: "Đã gửi khiếu nại. Đang chờ admin xử lý.",
+    data: { report },
+  });
+};
+
+exports.getShopLockAppealStatus = async (req, res) => {
+  const reportService = require("../services/reportService");
+  const status = await reportService.getShopLockAppealStatus(req.currentUser);
+  return success(res, { data: status });
+};
+
+exports.createShopLockAppeal = async (req, res) => {
+  const reportService = require("../services/reportService");
+  const content = pickBodyValue(req.body, ["content", "message", "note"]);
+  const title = pickBodyValue(req.body, ["title", "reason"]);
+  if (!content) {
+    return fail(res, { status: 400, message: "Vui lòng nhập nội dung khiếu nại." });
+  }
+
+  const report = await reportService.createShopLockAppeal(req.currentUser, {
+    title,
+    content,
+    images: req.body.images || req.body.imageUrls || [],
+  });
+
+  return success(res, {
+    message: "Đã gửi khiếu nại. Đang chờ admin xử lý.",
+    data: { report },
+  });
+};
+
 exports.updateMe = async (req, res) => {
   const fullName = pickBodyValue(req.body, ["fullName", "FullName"]);
   const userName = pickBodyValue(req.body, ["userName", "UserName"]);

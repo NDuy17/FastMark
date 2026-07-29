@@ -6,6 +6,8 @@ import {
   selectAuthProfile,
   selectCanSwitchToSeller,
   selectIsSeller,
+  selectIsShopLocked,
+  selectSellerVerification,
 } from '../../viewmodel/auth/authSelectors';
 import {
   applyShopSettingsToProfile,
@@ -17,6 +19,7 @@ import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import { getMyNotificationsOnBackend } from '../../api/notificationApi';
 import { notificationMatchesAudience } from '../../core/utils/notificationRealtime';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
 import SellerPhoneSetupScreen from './SellerPhoneSetupScreen';
 import SellerRegistrationScreen from './SellerRegistrationScreen';
 import SellerVerificationStatusScreen from './SellerVerificationStatusScreen';
@@ -39,9 +42,21 @@ import WalletTransactionsScreen from '../wallet/WalletTransactionsScreen';
 import WithdrawScreen from '../wallet/WithdrawScreen';
 import { getSellerRegistrationStep } from './sellerRegistrationFlow';
 import { SELLER_VERIFICATION_STATUS } from '../../constants/sellerVerification';
+import { RESERVATION_TAB } from '../../constants/sellerOrders';
 import ShopTabHomeScreen from './ShopTabHomeScreen';
+import ShopLockedScreen from './ShopLockedScreen';
 import { resolveTopupReturnViewModel } from '../../viewmodel/wallet/walletViewModel';
 import { subscribeTopupDeepLink } from '../../viewmodel/wallet/topupSession';
+
+function resolveTopUpBackLabel(returnNav) {
+  if (returnNav === 'banner' || returnNav === 'seller-banner') {
+    return 'Quay lại banner';
+  }
+  if (returnNav === 'subscription' || returnNav === 'seller-subscription') {
+    return 'Quay lại gói bán';
+  }
+  return 'Về ví FastMark';
+}
 
 export default function ShopTabPanel({
   isVisible = false,
@@ -54,12 +69,15 @@ export default function ShopTabPanel({
   const profile = useSelector(selectAuthProfile);
   const isSeller = useSelector(selectIsSeller);
   const canSwitchToSeller = useSelector(selectCanSwitchToSeller);
+  const shopLocked = useSelector(selectIsShopLocked);
+  const reduxVerification = useSelector(selectSellerVerification);
 
   const [shopNav, setShopNav] = useState(null);
   const [sellerStep, setSellerStep] = useState(null);
   const [sellerVerification, setSellerVerification] = useState(null);
-  const [selectedReservationId, setSelectedReservationId] = useState(null);
+  const [orderDetailTarget, setOrderDetailTarget] = useState(null);
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
+  const [sellerOrdersTab, setSellerOrdersTab] = useState(RESERVATION_TAB.PENDING);
   const [phoneChangeReturn, setPhoneChangeReturn] = useState(null);
   const [shopSettings, setShopSettings] = useState(null);
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
@@ -115,9 +133,40 @@ export default function ShopTabPanel({
     []
   );
 
+  const handleSellerNotificationRead = useCallback((payload) => {
+    const audience = String(payload?.audience || '').trim().toLowerCase();
+    if (audience && audience !== 'seller' && audience !== 'system') {
+      return;
+    }
+
+    if (Number.isFinite(Number(payload?.unreadCount))) {
+      setUnreadNotificationsCount(Math.max(0, Number(payload.unreadCount)));
+      return;
+    }
+
+    setUnreadNotificationsCount((current) => Math.max(0, current - 1));
+  }, []);
+
   useNotificationSocket({
     enabled: Boolean(isVisible && isSeller),
     onNotificationNew: handleRealtimeSellerNotification,
+    onNotificationRead: handleSellerNotificationRead,
+  });
+
+  useResourceSocket({
+    enabled: Boolean(isVisible && isSeller),
+    onResourceUpdated: (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type === 'order') {
+        setOrdersRefreshKey((current) => current + 1);
+      }
+      if (type === 'wallet' || type === 'withdraw') {
+        dispatch(loadUserProfile()).catch(() => {});
+      }
+      if (type === 'banner' || type === 'subscription') {
+        loadShopSettings();
+      }
+    },
   });
 
   useEffect(() => {
@@ -139,12 +188,46 @@ export default function ShopTabPanel({
       // Về hub khi rời tab → bottom nav hiện lại đúng khi quay lại.
       setShopNav(null);
       setSellerStep(null);
-      setSelectedReservationId(null);
+      setOrderDetailTarget(null);
       setPhoneChangeReturn(null);
       return;
     }
     dispatch(syncSellerAccess()).catch(() => {});
   }, [dispatch, isVisible]);
+
+  useEffect(() => {
+    if (!sellerStep || sellerStep === 'phone' || sellerStep === 'verify' || !reduxVerification) {
+      return;
+    }
+
+    setSellerVerification(reduxVerification);
+
+    if (
+      sellerStep === 'pending' &&
+      reduxVerification.status === SELLER_VERIFICATION_STATUS.APPROVED
+    ) {
+      setSellerStep(null);
+      dispatch(loadUserProfile()).catch(() => {});
+      dispatch(syncSellerAccess()).catch(() => {});
+      (async () => {
+        try {
+          const idToken = await getCurrentUserIdToken();
+          if (!idToken) {
+            return;
+          }
+          const shop = await getSellerShopSettingsOnBackend(idToken);
+          setShopSettings(shop);
+          dispatch(applyShopSettingsToProfile(shop));
+        } catch {
+          // Profile sync above will retry shop settings on next visit.
+        }
+      })();
+      Alert.alert(
+        'Đã duyệt hồ sơ',
+        'Gian hàng của bạn đã được phê duyệt. Bạn có thể bắt đầu đăng sản phẩm và nhận đơn.'
+      );
+    }
+  }, [dispatch, reduxVerification, sellerStep]);
 
   async function startSellerRegistration() {
     if (canSwitchToSeller) {
@@ -338,6 +421,10 @@ export default function ShopTabPanel({
     );
   }
 
+  if (isSeller && shopLocked) {
+    return <ShopLockedScreen />;
+  }
+
   if (shopNav === 'post') {
     return (
       <SellerPostTabScreen
@@ -396,21 +483,30 @@ export default function ShopTabPanel({
   if (shopNav === 'orders') {
     return (
       <SellerOrdersScreen
+        activeTab={sellerOrdersTab}
+        onActiveTabChange={setSellerOrdersTab}
         onRefreshKey={ordersRefreshKey}
         onBack={() => setShopNav(null)}
-        onOpenReservation={(reservationId) => {
-          setSelectedReservationId(reservationId);
+        onOpenReservation={(target) => {
+          setOrderDetailTarget(target);
           setShopNav('order-detail');
         }}
       />
     );
   }
 
-  if (shopNav === 'order-detail' && selectedReservationId) {
+  if (shopNav === 'order-detail' && orderDetailTarget) {
     return (
       <SellerOrderDetailScreen
-        reservationId={selectedReservationId}
-        onBack={() => setShopNav('orders')}
+        reservationId={String(orderDetailTarget.item?.id || '')}
+        initialItem={orderDetailTarget.item || null}
+        listCancelReasonText={orderDetailTarget.listCancelReasonText || ''}
+        onBack={() => {
+          if (orderDetailTarget.fromTab) {
+            setSellerOrdersTab(orderDetailTarget.fromTab);
+          }
+          setShopNav('orders');
+        }}
         onChanged={() => setOrdersRefreshKey((value) => value + 1)}
       />
     );
@@ -486,13 +582,18 @@ export default function ShopTabPanel({
       <TopUpSuccessScreen
         amount={topUpResult?.amount || 0}
         orderCode={topUpResult?.orderCode}
+        backLabel={resolveTopUpBackLabel(topUpReturnNav)}
         onBackHome={() => {
           setTopUpResult(null);
           setShopNav(topUpReturnNav || 'subscription');
         }}
         onViewHistory={() => {
           setTopUpResult(null);
-          setShopNav(topUpReturnNav || 'subscription');
+          if (topUpReturnNav === 'wallet') {
+            setShopNav('wallet-transactions');
+          } else {
+            setShopNav(topUpReturnNav || 'subscription');
+          }
         }}
       />
     );
@@ -544,10 +645,15 @@ export default function ShopTabPanel({
     <ShopTabHomeScreen
       shopSettings={shopSettings}
       unreadNotificationsCount={unreadNotificationsCount}
+      isVisible={isVisible}
       onStartRegister={startSellerRegistration}
       onOpenHub={handleOpenHub}
       onOpenWallet={() => setShopNav('wallet')}
       onOpenWalletTopUp={() => openTopUp('wallet')}
+      onShopSettingsUpdated={(updated) => {
+        setShopSettings(updated);
+        dispatch(applyShopSettingsToProfile(updated));
+      }}
     />
   );
 }

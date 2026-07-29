@@ -7,21 +7,37 @@ const WithdrawRequest = require("../models/WithdrawRequest");
 const SystemWallet = require("../models/SystemWallet");
 const Reservation = require("../models/Reservation");
 const ReservationAuditLog = require("../models/ReservationAuditLog");
+const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
 const Report = require("../models/Report");
 const Review = require("../models/Review");
+const SellerSubscription = require("../models/SellerSubscription");
+const SellerBannerPlan = require("../models/SellerBannerPlan");
 const {
   USER_ROLE,
+  RESERVATION_STATUS,
   RESERVATION_STATUS_LABEL,
   REPORT_TYPE_LABELS,
+  REPORT_STATUS,
   REPORT_STATUS_LABELS,
   REPORT_REPORTER_ROLE_LABELS,
+  PRODUCT_STATUS,
   WALLET_TX_TYPE,
   WALLET_TX_STATUS,
   WALLET_TX_TYPE_LABEL,
   WALLET_TX_STATUS_LABEL,
   WITHDRAW_STATUS,
   WITHDRAW_STATUS_LABEL,
+  SELLER_SUBSCRIPTION_STATUS,
+  SELLER_SUBSCRIPTION_STATUS_LABEL,
+  SELLER_BANNER_STATUS,
+  SELLER_BANNER_STATUS_LABEL,
+  BANNER_TARGET_TYPE_LABEL,
 } = require("../constants");
+const {
+  resolveShopDisplayName,
+  resolveShopUsername,
+} = require("../utils/shopIdentity");
+const { buildAdminProductPriceFields } = require("./productPromotionService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -42,6 +58,98 @@ function buildPagination(page, limit, total) {
     total,
     totalPages: Math.max(1, Math.ceil(total / limit)),
   };
+}
+
+function resolveHistoryStatusGroup(query = {}) {
+  const group = String(query.status || query.statusGroup || "").trim();
+  return group && group !== "all" ? group : "";
+}
+
+function applyHistoryStatusFilter(baseFilter, tab, statusGroup) {
+  const group = String(statusGroup || "").trim();
+  if (!group || group === "all") {
+    return baseFilter;
+  }
+
+  if (tab === "reservations" || tab === "shop-reservations") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    const statuses =
+      code === RESERVATION_STATUS.REFUNDED
+        ? [RESERVATION_STATUS.REFUNDED, RESERVATION_STATUS.DISPUTE_RESOLVED]
+        : [code];
+    return { ...baseFilter, status: { $in: statuses } };
+  }
+
+  if (tab === "reports-filed" || tab === "reports-received" || tab === "reports") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    return { ...baseFilter, status: code };
+  }
+
+  if (tab === "wallet") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    return { ...baseFilter, status: code };
+  }
+
+  if (tab === "withdrawals") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    return { ...baseFilter, status: code };
+  }
+
+  if (tab === "products") {
+    if (group === "active") {
+      return { ...baseFilter, Status: PRODUCT_STATUS.ACTIVE, IsDeleted: { $ne: true } };
+    }
+    if (group === "hidden") {
+      return { ...baseFilter, Status: PRODUCT_STATUS.HIDDEN, IsDeleted: { $ne: true } };
+    }
+    if (group === "removed") {
+      return { ...baseFilter, IsDeleted: true };
+    }
+    return baseFilter;
+  }
+
+  if (tab === "reviews" || tab === "shop-reviews") {
+    if (group === "visible") {
+      return { ...baseFilter, isHidden: false, isDeleted: { $ne: true } };
+    }
+    if (group === "hidden") {
+      return { ...baseFilter, isHidden: true, isDeleted: { $ne: true } };
+    }
+    if (group === "deleted") {
+      return { ...baseFilter, isDeleted: true };
+    }
+    return baseFilter;
+  }
+
+  if (tab === "seller-subscriptions") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    return { ...baseFilter, status: code };
+  }
+
+  if (tab === "seller-banners") {
+    const code = Number(group);
+    if (!Number.isFinite(code)) {
+      return baseFilter;
+    }
+    return { ...baseFilter, status: code };
+  }
+
+  return baseFilter;
 }
 
 function toWalletTxItem(tx) {
@@ -110,12 +218,8 @@ function toReservationItem(reservation) {
     shop: shop
       ? {
           id: String(shop._id),
-          shopName:
-            shopOwner?.FullName ||
-            shopOwner?.UserName ||
-            shop.shopName ||
-            "",
-          shopUsername: shopOwner?.UserName || shop.shopUsername || "",
+          shopName: resolveShopDisplayName(shop, shopOwner),
+          shopUsername: resolveShopUsername(shop, shopOwner),
         }
       : null,
     buyer: buyer
@@ -146,6 +250,45 @@ function toReportItem(report) {
   };
 }
 
+function toSellerSubscriptionHistoryItem(subscription) {
+  const amount = Number(subscription.amount) || 0;
+  return {
+    id: String(subscription._id),
+    planName: subscription.planName || "",
+    amount,
+    amountLabel: `${amount.toLocaleString("vi-VN")} đ`,
+    status: subscription.status,
+    statusLabel: SELLER_SUBSCRIPTION_STATUS_LABEL[subscription.status] || "Không rõ",
+    startDate: subscription.startDate || null,
+    endDate: subscription.endDate || null,
+    ngayMua: subscription.ngayMua || subscription.CreatedAt || null,
+    createdAt: subscription.CreatedAt || null,
+    orderCode: subscription.orderCode || null,
+  };
+}
+
+function toSellerBannerHistoryItem(banner) {
+  const amount = Number(banner.amount) || 0;
+  return {
+    id: String(banner._id),
+    planName: banner.planName || "",
+    amount,
+    amountLabel: `${amount.toLocaleString("vi-VN")} đ`,
+    status: banner.status,
+    statusLabel: SELLER_BANNER_STATUS_LABEL[banner.status] || "Không rõ",
+    image: banner.image || "",
+    targetType: banner.targetType,
+    targetTypeLabel: BANNER_TARGET_TYPE_LABEL[banner.targetType] || "",
+    targetId: banner.targetId || "",
+    startDate: banner.startDate || null,
+    endDate: banner.endDate || null,
+    ngayMua: banner.ngayMua || banner.CreatedAt || null,
+    createdAt: banner.CreatedAt || null,
+    violationReason: banner.violationReason || "",
+    clickCount: Number(banner.clickCount) || 0,
+  };
+}
+
 function toReviewItem(review) {
   const product = review.productId || null;
   const shop = review.shopId || null;
@@ -166,13 +309,45 @@ function toReviewItem(review) {
     shop: shop
       ? {
           id: String(shop._id),
-          shopName:
-            shopOwner?.FullName ||
-            shopOwner?.UserName ||
-            shop.shopName ||
-            "",
+          shopName: resolveShopDisplayName(shop, shopOwner),
         }
       : null,
+  };
+}
+
+function toProductHistoryItem(product, shopId, imagesByProduct) {
+  const { toPublicProductImages } = require("./productService");
+  const category = product.CategoryId || null;
+  const thumbs = toPublicProductImages(imagesByProduct.get(String(product._id)) || []).map(
+    (image) => image.imageUrl
+  );
+  const legacy = Array.isArray(product.Thumbnail)
+    ? product.Thumbnail.filter(Boolean)
+    : product.Thumbnail
+      ? [String(product.Thumbnail)]
+      : [];
+
+  return {
+    id: String(product._id),
+    productName: product.ProductName || "",
+    thumbnail: thumbs[0] || legacy[0] || "",
+    categoryName: category?.name || category?.categoryName || "",
+    donVi: product.DonVi || "",
+    ...buildAdminProductPriceFields(product),
+    isDeleted: Boolean(product.IsDeleted),
+    adminRemovalReason: product.AdminRemovalReason || "",
+    adminRemovedAt: product.AdminRemovedAt || null,
+    status: product.Status,
+    statusLabel: product.IsDeleted
+      ? "Đã gỡ"
+      : product.Status === 1
+        ? "Đang hiện"
+        : "Đã ẩn",
+    viewCount: Number(product.ViewCount) || 0,
+    likeCount: Number(product.LikeCount) || 0,
+    soldCount: Number(product.SoldCount) || 0,
+    shopId: String(shopId),
+    createdAt: product.CreatedAt || null,
   };
 }
 
@@ -189,9 +364,10 @@ async function getAccountHistory(userId, query = {}) {
 
   const tab = String(query.tab || "wallet");
   const { page, limit, skip } = parsePagination(query);
+  const statusGroup = resolveHistoryStatusGroup(query);
 
   if (tab === "wallet") {
-    const filter = { userId: user._id };
+    const filter = applyHistoryStatusFilter({ userId: user._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       WalletTransaction.countDocuments(filter),
       WalletTransaction.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
@@ -200,7 +376,7 @@ async function getAccountHistory(userId, query = {}) {
   }
 
   if (tab === "withdrawals") {
-    const filter = { userId: user._id };
+    const filter = applyHistoryStatusFilter({ userId: user._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       WithdrawRequest.countDocuments(filter),
       WithdrawRequest.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
@@ -209,7 +385,7 @@ async function getAccountHistory(userId, query = {}) {
   }
 
   if (tab === "reservations") {
-    const filter = { userId: user._id };
+    const filter = applyHistoryStatusFilter({ userId: user._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       Reservation.countDocuments(filter),
       Reservation.find(filter)
@@ -232,7 +408,7 @@ async function getAccountHistory(userId, query = {}) {
     if (!shop) {
       return { tab, items: [], pagination: buildPagination(page, limit, 0) };
     }
-    const filter = { shopId: shop._id };
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       Reservation.countDocuments(filter),
       Reservation.find(filter)
@@ -247,8 +423,9 @@ async function getAccountHistory(userId, query = {}) {
   }
 
   if (tab === "reports-filed" || tab === "reports-received") {
-    const filter =
+    const baseFilter =
       tab === "reports-filed" ? { userId: user._id } : { targetUserId: user._id };
+    const filter = applyHistoryStatusFilter(baseFilter, tab, statusGroup);
     const [total, rows] = await Promise.all([
       Report.countDocuments(filter),
       Report.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
@@ -257,7 +434,7 @@ async function getAccountHistory(userId, query = {}) {
   }
 
   if (tab === "reviews") {
-    const filter = { userId: user._id };
+    const filter = applyHistoryStatusFilter({ userId: user._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       Review.countDocuments(filter),
       Review.find(filter)
@@ -281,7 +458,7 @@ async function getAccountHistory(userId, query = {}) {
       return { tab, items: [], pagination: buildPagination(page, limit, 0) };
     }
 
-    const filter = { ShopId: shop._id };
+    const filter = applyHistoryStatusFilter({ ShopId: shop._id }, tab, statusGroup);
     const [total, rows] = await Promise.all([
       Product.countDocuments(filter),
       Product.find(filter)
@@ -292,47 +469,233 @@ async function getAccountHistory(userId, query = {}) {
         .lean(),
     ]);
 
-    const { loadProductImagesByProductIds, toPublicProductImages } = require("./productService");
+    const { loadProductImagesByProductIds } = require("./productService");
     const imagesByProduct = await loadProductImagesByProductIds(rows.map((item) => item._id));
 
-    const items = rows.map((product) => {
-      const category = product.CategoryId || null;
-      const thumbs = toPublicProductImages(imagesByProduct.get(String(product._id)) || []).map(
-        (image) => image.imageUrl
-      );
-      const legacy = Array.isArray(product.Thumbnail)
-        ? product.Thumbnail.filter(Boolean)
-        : product.Thumbnail
-          ? [String(product.Thumbnail)]
-          : [];
-      const minPrice = Number(product.MinPrice) || 0;
-      const maxPrice = Number(product.MaxPrice) || 0;
-      return {
-        id: String(product._id),
-        productName: product.ProductName || "",
-        thumbnail: thumbs[0] || legacy[0] || "",
-        categoryName: category?.name || category?.categoryName || "",
-        donVi: product.DonVi || "",
-        minPrice,
-        maxPrice,
-        priceLabel:
-          minPrice === maxPrice
-            ? `${minPrice.toLocaleString("vi-VN")} đ`
-            : `${minPrice.toLocaleString("vi-VN")} đ - ${maxPrice.toLocaleString("vi-VN")} đ`,
-        status: product.Status,
-        statusLabel: product.Status === 1 ? "Đang hiện" : "Đã ẩn",
-        soldCount: Number(product.SoldCount) || 0,
-        viewCount: Number(product.ViewCount) || 0,
-        likeCount: Number(product.LikeCount) || 0,
-        shopId: String(shop._id),
-        createdAt: product.CreatedAt || null,
-      };
-    });
+    const items = rows.map((product) =>
+      toProductHistoryItem(product, shop._id, imagesByProduct)
+    );
 
     return { tab, items, pagination: buildPagination(page, limit, total) };
   }
 
+  if (tab === "shop-reviews") {
+    const shop = await ShopProfile.findOne({ userId: user._id }).select("_id").lean();
+    if (!shop) {
+      return { tab, items: [], pagination: buildPagination(page, limit, 0) };
+    }
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Review.countDocuments(filter),
+      Review.find(filter)
+        .sort({ CreatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("productId", "ProductName")
+        .populate("userId", "FullName UserName")
+        .lean(),
+    ]);
+    return {
+      tab,
+      items: rows.map(toShopReviewItem),
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
   throw createServiceError(`Tab lịch sử không hợp lệ: ${tab}`);
+}
+
+function toShopReviewItem(review) {
+  const product = review.productId || null;
+  const reviewer = review.userId || null;
+  return {
+    id: String(review._id),
+    rating: review.rating || 0,
+    comment: review.comment || "",
+    isHidden: Boolean(review.isHidden),
+    isDeleted: Boolean(review.isDeleted),
+    createdAt: review.CreatedAt || null,
+    product: product
+      ? {
+          id: String(product._id),
+          name: product.ProductName || "",
+        }
+      : null,
+    reviewer: reviewer
+      ? {
+          id: String(reviewer._id),
+          fullName: reviewer.FullName || "",
+          userName: reviewer.UserName || "",
+        }
+      : null,
+  };
+}
+
+async function listShopProductsHistory(shopId, { page, limit, skip, statusGroup = "" }) {
+  const filter = applyHistoryStatusFilter({ ShopId: shopId }, "products", statusGroup);
+  const [total, rows] = await Promise.all([
+    Product.countDocuments(filter),
+    Product.find(filter)
+      .sort({ CreatedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("CategoryId", "name categoryName")
+      .lean(),
+  ]);
+
+  const { loadProductImagesByProductIds } = require("./productService");
+  const imagesByProduct = await loadProductImagesByProductIds(rows.map((item) => item._id));
+
+  const items = rows.map((product) => toProductHistoryItem(product, shopId, imagesByProduct));
+
+  return { items, pagination: buildPagination(page, limit, total) };
+}
+
+/**
+ * Lịch sử hoạt động theo gian hàng (trang chi tiết shop admin).
+ * tab: products | shop-reservations | reports-filed | reports-received | shop-reviews |
+ *      seller-subscriptions | seller-banners | wallet
+ */
+async function getShopHistory(shopId, query = {}) {
+  const shop = await ShopProfile.findById(shopId).select("_id userId").lean();
+  if (!shop) {
+    throw createServiceError("Không tìm thấy gian hàng.", 404);
+  }
+
+  const tab = String(query.tab || "products");
+  const { page, limit, skip } = parsePagination(query);
+  const statusGroup = resolveHistoryStatusGroup(query);
+  const ownerId = shop.userId;
+
+  if (tab === "products") {
+    const result = await listShopProductsHistory(shop._id, { page, limit, skip, statusGroup });
+    return { tab, ...result };
+  }
+
+  if (tab === "wallet") {
+    if (!ownerId) {
+      return { tab, items: [], pagination: buildPagination(page, limit, 0) };
+    }
+    const filter = applyHistoryStatusFilter({ userId: ownerId }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      WalletTransaction.countDocuments(filter),
+      WalletTransaction.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+    return { tab, items: rows.map(toWalletTxItem), pagination: buildPagination(page, limit, total) };
+  }
+
+  if (tab === "shop-reservations") {
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Reservation.countDocuments(filter),
+      Reservation.find(filter)
+        .sort({ CreatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("productId", "ProductName")
+        .populate("userId", "UserName FullName Email")
+        .lean(),
+    ]);
+    return { tab, items: rows.map(toReservationItem), pagination: buildPagination(page, limit, total) };
+  }
+
+  if (tab === "reports-filed") {
+    if (!ownerId) {
+      return { tab, items: [], pagination: buildPagination(page, limit, 0) };
+    }
+    const filter = applyHistoryStatusFilter({ userId: ownerId }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Report.countDocuments(filter),
+      Report.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+    return { tab, items: rows.map(toReportItem), pagination: buildPagination(page, limit, total) };
+  }
+
+  if (tab === "reports-received") {
+    const baseFilter = ownerId
+      ? {
+          userId: { $ne: ownerId },
+          $or: [{ shopId: shop._id }, { targetUserId: ownerId }],
+        }
+      : { shopId: shop._id };
+    const filter = applyHistoryStatusFilter(baseFilter, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Report.countDocuments(filter),
+      Report.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+    return { tab, items: rows.map(toReportItem), pagination: buildPagination(page, limit, total) };
+  }
+
+  // Alias cũ: gộp báo cáo bị nhận (tương thích client cũ nếu còn gọi tab=reports).
+  if (tab === "reports") {
+    const baseFilter = ownerId
+      ? {
+          userId: { $ne: ownerId },
+          $or: [{ shopId: shop._id }, { targetUserId: ownerId }],
+        }
+      : { shopId: shop._id };
+    const filter = applyHistoryStatusFilter(baseFilter, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Report.countDocuments(filter),
+      Report.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+    return { tab, items: rows.map(toReportItem), pagination: buildPagination(page, limit, total) };
+  }
+
+  if (tab === "shop-reviews") {
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      Review.countDocuments(filter),
+      Review.find(filter)
+        .sort({ CreatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("productId", "ProductName")
+        .populate("userId", "FullName UserName")
+        .lean(),
+    ]);
+    return {
+      tab,
+      items: rows.map(toShopReviewItem),
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
+  if (tab === "seller-subscriptions") {
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      SellerSubscription.countDocuments(filter),
+      SellerSubscription.find(filter)
+        .sort({ ngayMua: -1, CreatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+    return {
+      tab,
+      items: rows.map(toSellerSubscriptionHistoryItem),
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
+  if (tab === "seller-banners") {
+    const filter = applyHistoryStatusFilter({ shopId: shop._id }, tab, statusGroup);
+    const [total, rows] = await Promise.all([
+      SellerBannerPlan.countDocuments(filter),
+      SellerBannerPlan.find(filter)
+        .sort({ ngayMua: -1, CreatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+    return {
+      tab,
+      items: rows.map(toSellerBannerHistoryItem),
+      pagination: buildPagination(page, limit, total),
+    };
+  }
+
+  throw createServiceError(`Tab lịch sử shop không hợp lệ: ${tab}`);
 }
 
 async function sumTransactions(userId, type) {
@@ -367,7 +730,7 @@ async function getAccountFinanceSummary(userId) {
     depositHold,
     depositRefund,
     depositRelease,
-    pendingWithdraws,
+    pendingWithdrawAgg,
   ] = await Promise.all([
     Wallet.findOne({ userId: user._id }).lean(),
     sumTransactions(user._id, WALLET_TX_TYPE.TOPUP),
@@ -377,8 +740,13 @@ async function getAccountFinanceSummary(userId) {
     sumTransactions(user._id, WALLET_TX_TYPE.DEPOSIT_HOLD),
     sumTransactions(user._id, WALLET_TX_TYPE.DEPOSIT_REFUND),
     sumTransactions(user._id, WALLET_TX_TYPE.DEPOSIT_RELEASE),
-    WithdrawRequest.countDocuments({ userId: user._id, status: WITHDRAW_STATUS.PENDING }),
+    WithdrawRequest.aggregate([
+      { $match: { userId: user._id, status: WITHDRAW_STATUS.PENDING } },
+      { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+    ]),
   ]);
+
+  const pendingWithdraw = pendingWithdrawAgg[0] || { total: 0, count: 0 };
 
   return {
     walletBalance: wallet?.balance || 0,
@@ -396,7 +764,8 @@ async function getAccountFinanceSummary(userId) {
     depositRefundCount: depositRefund.count,
     totalDepositRelease: depositRelease.total,
     depositReleaseCount: depositRelease.count,
-    pendingWithdrawCount: pendingWithdraws,
+    pendingWithdrawTotal: pendingWithdraw.total || 0,
+    pendingWithdrawCount: pendingWithdraw.count || 0,
   };
 }
 
@@ -513,8 +882,8 @@ async function listEscrowReservations() {
     .populate("userId", "FullName UserName Phone Email")
     .populate({
       path: "shopId",
-      select: "userId shopName",
-      populate: { path: "userId", select: "FullName UserName" },
+      select: "userId shopName shopUsername avatar",
+      populate: { path: "userId", select: "FullName UserName Avatar" },
     })
     .populate("productId", "ProductName")
     .select(
@@ -535,8 +904,7 @@ async function listEscrowReservations() {
       statusLabel: RESERVATION_STATUS_LABEL[row.status] || String(row.status),
       buyerName: row.userId?.FullName || row.userId?.UserName || "—",
       buyerPhone: row.userId?.Phone || "",
-      shopName:
-        shopOwner?.FullName || shopOwner?.UserName || shop?.shopName || "—",
+      shopName: resolveShopDisplayName(shop, shopOwner),
       quantity: Number(row.quantity) || 0,
       reservedPrice: Number(row.reservedPrice) || 0,
     };
@@ -735,6 +1103,8 @@ async function listAuditLogs(query = {}) {
     filter.reservationId = query.reservationId;
   }
 
+  applyCreatedAtRange(filter, query);
+
   const [total, rows] = await Promise.all([
     ReservationAuditLog.countDocuments(filter),
     ReservationAuditLog.find(filter)
@@ -767,6 +1137,7 @@ async function listAuditLogs(query = {}) {
 
 module.exports = {
   getAccountHistory,
+  getShopHistory,
   getAccountFinanceSummary,
   getFinanceOverview,
   listAuditLogs,

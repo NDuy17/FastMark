@@ -11,13 +11,23 @@ function pickQueryValue(query, keys) {
   return "";
 }
 
+function pickDateRangeQuery(query) {
+  return {
+    from: pickQueryValue(query, ["from", "dateFrom"]),
+    to: pickQueryValue(query, ["to", "dateTo"]),
+  };
+}
+
 exports.listReports = async (req, res) => {
   const data = await adminReportService.listReports({
     search: pickQueryValue(req.query, ["search", "q"]),
     reportType: pickQueryValue(req.query, ["reportType", "type"]),
     status: pickQueryValue(req.query, ["status"]),
+    scope: pickQueryValue(req.query, ["scope"]),
+    productId: pickQueryValue(req.query, ["productId"]),
     page: req.query.page,
     limit: req.query.limit,
+    ...pickDateRangeQuery(req.query),
   });
 
   return success(res, { data });

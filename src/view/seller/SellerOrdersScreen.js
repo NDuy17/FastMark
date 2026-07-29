@@ -15,28 +15,33 @@ import {
   rejectSellerReservationOnBackend,
   reportBuyerNoShowOnBackend,
 } from '../../api/sellerOpsApi';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import {
   RESERVATION_TAB,
   RESERVATION_STATUS,
   RESERVATION_STATUS_LABELS,
+  ORDER_STATUS_TABS,
   getCancelledReservationReason,
+  isActiveDisputeOrder,
+  VIEWER_ROLE,
 } from '../../constants/sellerOrders';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import OrderItemHeader from '../shared/components/OrderItemHeader';
+import OrderStatusTabBar from '../shared/components/OrderStatusTabBar';
+import OrderTabEmptyState, {
+  ORDER_TAB_EMPTY_MESSAGE,
+  ORDER_TAB_SEARCH_EMPTY_MESSAGE,
+} from '../shared/components/OrderTabEmptyState';
+import OrderDisputeListHints from '../shared/components/OrderDisputeListHints';
 import ReservationDisputeModal from '../shared/components/ReservationDisputeModal';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { formatPrice } from '../../core/utils/productFormat';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
-
-const TABS = [
-  { key: RESERVATION_TAB.HOLDING, label: 'Giữ hàng' },
-  { key: RESERVATION_TAB.COMPLETED, label: 'Hoàn thành' },
-  { key: RESERVATION_TAB.CANCELLED, label: 'Đã hủy' },
-];
+import { useOrderSocket } from '../../hooks/useOrderSocket';
 
 function getReservationStatusStyle(status) {
   if (status === RESERVATION_STATUS.WAITING_PICKUP) {
-    return { badge: styles.statusBadgeSuccess, text: styles.statusBadgeTextSuccess };
+    return { badge: styles.statusBadgePending, text: styles.statusBadgeTextPending };
   }
   if (
     status === RESERVATION_STATUS.COMPLETED ||
@@ -59,6 +64,20 @@ function isPastPickup(item, now) {
   if (!item?.pickupTime) return false;
   const pickup = new Date(item.pickupTime);
   return Number.isFinite(pickup.getTime()) && now >= pickup.getTime();
+}
+
+function isWithinDepositDecisionWindow(item, now = Date.now()) {
+  if (item?.withinDepositDecisionWindow === true) return true;
+  if (item?.withinDepositDecisionWindow === false) return false;
+  const deadlineRaw = item?.depositDecisionDeadline || item?.autoReleaseAt || item?.reviewDeadlineAt;
+  if (deadlineRaw) {
+    const deadline = new Date(deadlineRaw);
+    return Number.isFinite(deadline.getTime()) && now < deadline.getTime();
+  }
+  if (!item?.pickupTime) return false;
+  const pickup = new Date(item.pickupTime);
+  if (!Number.isFinite(pickup.getTime())) return false;
+  return now < pickup.getTime() + 24 * 60 * 60 * 1000;
 }
 
 function canReportBuyerNoShow(item, now) {
@@ -92,25 +111,36 @@ export default function SellerOrdersScreen({
   onOpenReservation,
   onRefreshKey = 0,
   embedded = false,
+  activeTab: controlledActiveTab,
+  onActiveTabChange,
 }) {
   const insets = useScreenInsets();
-  const [activeTab, setActiveTab] = useState(RESERVATION_TAB.HOLDING);
+  const [internalActiveTab, setInternalActiveTab] = useState(RESERVATION_TAB.PENDING);
+  const activeTab = controlledActiveTab ?? internalActiveTab;
+  const setActiveTab = useCallback(
+    (next) => {
+      const resolved = typeof next === 'function' ? next(activeTab) : next;
+      if (controlledActiveTab === undefined) {
+        setInternalActiveTab(resolved);
+      }
+      onActiveTabChange?.(resolved);
+    },
+    [activeTab, controlledActiveTab, onActiveTabChange]
+  );
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
   const [disputeTarget, setDisputeTarget] = useState(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   const loadOrders = useCallback(async () => {
     setIsLoading(true);
-    setError('');
     try {
       const idToken = await getCurrentUserIdToken();
       const data = await getSellerOrdersOnBackend({ idToken, tab: activeTab });
       setItems(data.reservations || []);
     } catch (loadError) {
-      setError(loadError.message || 'Không tải được đơn hàng.');
+      showErrorAlert(loadError.message || 'Không tải được đơn hàng.');
       setItems([]);
     } finally {
       setIsLoading(false);
@@ -121,6 +151,15 @@ export default function SellerOrdersScreen({
     setSearch('');
     loadOrders();
   }, [loadOrders, onRefreshKey]);
+
+  const handleOrderUpdated = useCallback(() => {
+    loadOrders();
+  }, [loadOrders]);
+
+  useOrderSocket({
+    enabled: true,
+    onOrderUpdated: handleOrderUpdated,
+  });
 
   useEffect(() => {
     const nextPickupAt = items.reduce((nearest, item) => {
@@ -248,11 +287,18 @@ export default function SellerOrdersScreen({
     const productName = item.product?.productName || 'Sản phẩm';
     const thumb = item.product?.thumbnail || '';
     const qty = Number(item.quantity) || 0;
-    const buyerName = item.buyer?.fullName || 'Khách';
     const canConfirm = item.status === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION;
+    const pastPickup = isPastPickup(item, currentTime);
+    const useBlackOrderCode =
+      canConfirm ||
+      activeTab === RESERVATION_TAB.HOLDING ||
+      activeTab === RESERVATION_TAB.COMPLETED ||
+      activeTab === RESERVATION_TAB.CANCELLED;
+    const useBlackUnitPrice =
+      canConfirm || activeTab === RESERVATION_TAB.HOLDING;
     const canReportBuyer = canReportBuyerNoShow(item, currentTime);
-    const cancelReasonText = getCancelledReservationReason(item);
-    const showActiveDisputeHint = item.status === RESERVATION_STATUS.DISPUTED;
+    const cancelReasonText = getCancelledReservationReason(item, VIEWER_ROLE.SELLER);
+    const showActiveDisputeHint = isActiveDisputeOrder(item);
     const unitPrice =
       item.agreedPrice != null
         ? Number(item.agreedPrice)
@@ -264,53 +310,49 @@ export default function SellerOrdersScreen({
 
     return (
       <View style={styles.card}>
-        <Pressable onPress={() => onOpenReservation?.(item.id)}>
+        <Pressable
+          onPress={() =>
+            onOpenReservation?.({
+              item,
+              listCancelReasonText: cancelReasonText,
+              fromTab: activeTab,
+            })
+          }
+        >
           <OrderItemHeader
             id={item.id}
             statusLabel={statusLabel}
             statusBadgeStyle={statusStyle.badge}
             statusTextStyle={statusStyle.text}
+            orderCodeStyle={useBlackOrderCode ? styles.orderCodeBlack : undefined}
+            unitPriceStyle={useBlackUnitPrice ? styles.unitPriceBlack : undefined}
             thumbnail={thumb}
             productName={productName}
             variantName={item.variant?.variantName || ''}
             quantity={qty}
             unitPriceText={formatPrice(unitPrice)}
-            partyLine={`Khách: ${buyerName}`}
+            lineTotalText={formatPrice(item.totalAmount)}
+            priceRowMeta
           >
-            <Text style={styles.infoLineStrong}>
-              Tổng tiền: {formatPrice(item.totalAmount)}
-            </Text>
-            {Number(item.depositAmount) > 0 ? (
-              <Text style={styles.infoLineDeposit}>
-                Đã cọc {formatPrice(item.depositAmount)}
-                {item.depositPaidAt ? '' : ' (chưa trừ ví)'}
-              </Text>
-            ) : null}
             {item.pickupTime ? (
-              <Text style={styles.infoLineMuted}>
-                Giờ lấy: {formatOrderTime(item.pickupTime)}
+              <Text style={styles.infoLinePickup}>
+                Giờ nhận hàng: {formatOrderTime(item.pickupTime)}
               </Text>
             ) : (
-              <Text style={styles.infoLineMuted}>Giữ: {formatOrderTime(item.createdAt)}</Text>
+              <Text style={styles.infoLinePickup}>Giữ: {formatOrderTime(item.createdAt)}</Text>
             )}
-            {item.status === RESERVATION_STATUS.WAITING_PICKUP ? (
-              <Text style={styles.infoLineMuted}>
-                Đưa QR gian hàng cho khách quét để hoàn tất.
-              </Text>
-            ) : null}
-            {showActiveDisputeHint ? (
+            {item.status === RESERVATION_STATUS.WAITING_PICKUP &&
+            pastPickup &&
+            !showActiveDisputeHint ? (
               <Text style={styles.infoLineDanger}>
-                {item.disputeByBuyer && item.disputeBySeller
-                  ? 'Đang tranh chấp — cả hai bên đã báo cáo. Cọc đang giữ chờ admin.'
-                  : item.disputeByBuyer
-                    ? 'Người mua đã báo cáo. Cọc đang giữ chờ admin xử lý.'
-                    : item.disputeBySeller
-                      ? 'Bạn đã báo cáo người mua. Cọc đang giữ chờ admin xử lý.'
-                      : 'Đang tranh chấp. Cọc đang giữ chờ admin xử lý.'}
+                {isWithinDepositDecisionWindow(item, currentTime)
+                  ? 'Trong 24h bạn có thể khiếu nại và chờ admin xử lý hoặc hoàn cọc cho người mua.'
+                  : 'Đã quá 24 giờ sau giờ nhận. Cọc mặc định đã chuyển cho bạn.'}
               </Text>
             ) : null}
-            {cancelReasonText ? (
-              <Text style={styles.infoLineDanger}>Lý do: {cancelReasonText}</Text>
+            <OrderDisputeListHints item={item} viewerRole={VIEWER_ROLE.SELLER} />
+            {!showActiveDisputeHint && cancelReasonText ? (
+              <Text style={styles.infoLineDanger}>{cancelReasonText}</Text>
             ) : null}
           </OrderItemHeader>
         </Pressable>
@@ -346,32 +388,13 @@ export default function SellerOrdersScreen({
 
   return (
     <View style={styles.screen}>
-      {embedded ? (
-        <View style={styles.header}>
-          <Text style={styles.title}>Đơn hàng</Text>
-        </View>
-      ) : (
-        <SubScreenHeader title="Đơn hàng" onBack={onBack} />
-      )}
+      <SubScreenHeader title="Đơn hàng" onBack={onBack} />
 
-      <View style={styles.tabRow}>
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.key;
-          return (
-            <Pressable
-              key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
-              style={[styles.tabItem, isActive && styles.tabItemActive]}
-            >
-              <Text style={[styles.tabText, isActive && styles.tabTextActive]} numberOfLines={1}>
-                {tab.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      <OrderStatusTabBar
+        tabs={ORDER_STATUS_TABS}
+        activeTab={activeTab}
+        onChangeTab={setActiveTab}
+      />
 
       <View style={styles.searchBar}>
         <ClearableSearchField
@@ -397,11 +420,11 @@ export default function SellerOrdersScreen({
           keyboardDismissMode="on-drag"
           renderItem={renderReservationItem}
           ListEmptyComponent={
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyText}>
-                {search.trim() ? 'Không tìm thấy đơn phù hợp.' : 'Chưa có đơn trong mục này.'}
-              </Text>
-            </View>
+            <OrderTabEmptyState
+              message={
+                search.trim() ? ORDER_TAB_SEARCH_EMPTY_MESSAGE : ORDER_TAB_EMPTY_MESSAGE
+              }
+            />
           }
         />
       )}
@@ -434,46 +457,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0f172a',
   },
-  tabRow: {
-    flexDirection: 'row',
-    width: '100%',
-    alignItems: 'stretch',
-    paddingHorizontal: 8,
-    paddingVertical: 10,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  tabItem: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    minHeight: 38,
-    marginHorizontal: 3,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-    paddingVertical: 8,
-    backgroundColor: '#ffffff',
-  },
-  tabItemActive: {
-    borderColor: '#076F32',
-    backgroundColor: '#E6F4EC',
-  },
-  tabText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  tabTextActive: {
-    color: '#076F32',
-    fontWeight: '800',
-  },
-  listContent: { padding: 16 },
+  listContent: { padding: 16, flexGrow: 1 },
   searchBar: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -487,6 +471,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     marginBottom: 12,
+  },
+  orderCodeBlack: {
+    color: '#0f172a',
+  },
+  unitPriceBlack: {
+    color: '#0f172a',
   },
   statusBadgePending: {
     backgroundColor: '#fef3c7',
@@ -516,25 +506,38 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '800',
-    marginTop: 2,
+    marginTop: 4,
   },
   infoLineDeposit: {
     color: '#055528',
-    fontSize: 12,
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  infoLinePickup: {
+    color: '#0f172a',
+    fontSize: 14,
     fontWeight: '700',
-    marginTop: 2,
+    marginTop: 4,
   },
   infoLineMuted: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 2,
+    color: '#64748b',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 4,
   },
   infoLineDanger: {
     color: '#b91c1c',
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '700',
-    marginTop: 2,
+    marginTop: 4,
+  },
+  sectionHeading: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: 0.4,
   },
   actionRow: {
     flexDirection: 'row',
@@ -585,8 +588,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   centered: { alignItems: 'center', paddingVertical: 40 },
-  emptyBox: { alignItems: 'center', paddingVertical: 40 },
-  emptyText: { color: '#64748b', fontWeight: '600' },
   errorText: {
     color: '#b91c1c',
     paddingHorizontal: 16,

@@ -1,3 +1,10 @@
+import {
+  RESERVATION_CANCEL_REASON,
+  VIEWER_ROLE,
+  getReservationReasonLabel,
+  inferCancelReasonCode,
+} from './reservationOrderFlow';
+
 export const RESERVATION_STATUS = {
   PENDING_SELLER_CONFIRMATION: 0,
   REJECTED: 1,
@@ -10,33 +17,48 @@ export const RESERVATION_STATUS = {
 };
 
 export const RESERVATION_STATUS_LABELS = {
-  [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION]: 'Chờ shop xác nhận',
-  [RESERVATION_STATUS.REJECTED]: 'Đã từ chối',
-  [RESERVATION_STATUS.WAITING_PICKUP]: 'Chờ nhận hàng',
+  [RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION]: 'Chờ xác nhận',
+  [RESERVATION_STATUS.REJECTED]: 'Đã hủy',
+  [RESERVATION_STATUS.WAITING_PICKUP]: 'Giữ hàng',
   [RESERVATION_STATUS.COMPLETED]: 'Hoàn thành',
   [RESERVATION_STATUS.DISPUTED]: 'Tranh chấp',
-  [RESERVATION_STATUS.AUTO_COMPLETED]: 'Tự hoàn thành',
+  [RESERVATION_STATUS.AUTO_COMPLETED]: 'Hoàn thành',
   [RESERVATION_STATUS.REFUNDED]: 'Đã hủy',
   [RESERVATION_STATUS.DISPUTE_RESOLVED]: 'Đã hủy',
 };
 
 export const RESERVATION_TAB = {
+  ALL: 'all',
+  PENDING: 'pending',
   HOLDING: 'holding',
-  CANCELLED: 'cancelled',
+  DISPUTE: 'dispute',
   COMPLETED: 'completed',
+  CANCELLED: 'cancelled',
 };
 
 export const RESERVATION_TAB_LABELS = {
+  all: 'Tất cả',
+  pending: 'Chờ xác nhận',
   holding: 'Giữ hàng',
-  cancelled: 'Đã hủy',
+  dispute: 'Tranh chấp',
   completed: 'Hoàn thành',
+  cancelled: 'Đã hủy',
 };
+
+export const ORDER_STATUS_TABS = [
+  { key: RESERVATION_TAB.PENDING, label: RESERVATION_TAB_LABELS.pending },
+  { key: RESERVATION_TAB.HOLDING, label: RESERVATION_TAB_LABELS.holding },
+  { key: RESERVATION_TAB.DISPUTE, label: RESERVATION_TAB_LABELS.dispute },
+  { key: RESERVATION_TAB.COMPLETED, label: RESERVATION_TAB_LABELS.completed },
+  { key: RESERVATION_TAB.CANCELLED, label: RESERVATION_TAB_LABELS.cancelled },
+];
+
+export { RESERVATION_CANCEL_REASON, VIEWER_ROLE, getReservationReasonLabel, inferCancelReasonCode };
 
 export const RESERVATION_DISPUTE_REASON = {
   SELLER_ABSENT: 'seller_absent',
   SHOP_CLOSED: 'shop_closed',
   SELLER_NO_DELIVERY: 'seller_no_delivery',
-  /** Legacy */
   SHOP_NO_DELIVERY: 'shop_no_delivery',
   SHOP_OUT_OF_STOCK: 'shop_out_of_stock',
   OTHER: 'other',
@@ -72,66 +94,401 @@ const CANCELLED_RESERVATION_STATUSES = new Set([
   RESERVATION_STATUS.DISPUTE_RESOLVED,
 ]);
 
+const COMPLETED_RESERVATION_STATUSES = new Set([
+  RESERVATION_STATUS.COMPLETED,
+  RESERVATION_STATUS.AUTO_COMPLETED,
+]);
+
+const DISPUTE_RELATED_CANCEL_REASONS = new Set([
+  RESERVATION_CANCEL_REASON.BUYER_REPORT_SELLER_ABSENT,
+  RESERVATION_CANCEL_REASON.SELLER_REPORT_BUYER_NO_SHOW,
+  RESERVATION_CANCEL_REASON.DISPUTE_BOTH_REPORTED,
+  RESERVATION_CANCEL_REASON.ADMIN_BUYER_WIN,
+  RESERVATION_CANCEL_REASON.ADMIN_SELLER_WIN,
+  RESERVATION_CANCEL_REASON.AUTO_BUYER_WIN,
+  RESERVATION_CANCEL_REASON.AUTO_SELLER_WIN,
+]);
+
+export function isDisputeRelatedCancellation(item) {
+  if (!item) {
+    return false;
+  }
+  return DISPUTE_RELATED_CANCEL_REASONS.has(inferCancelReasonCode(item));
+}
+
+/** Lý do cụ thể shop nhập khi hủy đơn đã xác nhận (kèm ảnh chứng minh). */
+export function getSellerCancelNote(item) {
+  if (!item) {
+    return '';
+  }
+  const note = String(item.cancelNote || '').trim();
+  if (!note) {
+    return '';
+  }
+  const isSellerCancelAfterAccept =
+    Boolean(item.cancelledBySellerAfterAccept) ||
+    item.cancelledBy === 'seller_after_accept';
+  return isSellerCancelAfterAccept ? note : '';
+}
+
+function getBuyerDisputeReasonLabel(item) {
+  return (
+    String(item?.disputeReasonLabel || '').trim() ||
+    RESERVATION_DISPUTE_REASON_LABELS[item?.disputeReason] ||
+    ''
+  );
+}
+
+function getSellerDisputeReasonLabel() {
+  return (
+    RESERVATION_DISPUTE_REASON_LABELS[RESERVATION_DISPUTE_REASON.BUYER_NO_SHOW] ||
+    'Người mua không đến nhận hàng'
+  );
+}
+
+function resolveDisputeSideSortAt(item, side) {
+  const direct = side === 'buyer' ? item?.buyerDisputedAt : item?.sellerDisputedAt;
+  if (direct) {
+    return direct;
+  }
+  const firstBy = String(item?.disputeFirstBy || '').trim();
+  if (firstBy === side && item?.disputedAt) {
+    return item.disputedAt;
+  }
+  return null;
+}
+
+export function buildDisputeReportOrder(item) {
+  const entries = [];
+  if (item?.disputeByBuyer) {
+    entries.push({
+      side: 'buyer',
+      sortAt: resolveDisputeSideSortAt(item, 'buyer'),
+    });
+  }
+  if (item?.disputeBySeller) {
+    entries.push({
+      side: 'seller',
+      sortAt: resolveDisputeSideSortAt(item, 'seller'),
+    });
+  }
+
+  if (entries.length <= 1) {
+    return entries;
+  }
+
+  return entries.sort((left, right) => {
+    const leftTime = left.sortAt ? new Date(left.sortAt).getTime() : Number.POSITIVE_INFINITY;
+    const rightTime = right.sortAt ? new Date(right.sortAt).getTime() : Number.POSITIVE_INFINITY;
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    const firstBy = String(item?.disputeFirstBy || '').trim();
+    if (firstBy === 'seller') {
+      return left.side === 'seller' ? -1 : 1;
+    }
+    if (firstBy === 'buyer') {
+      return left.side === 'buyer' ? -1 : 1;
+    }
+    return left.side === 'buyer' ? -1 : 1;
+  });
+}
+
+export function isActiveDisputeOrder(item) {
+  return Number(item?.status) === RESERVATION_STATUS.DISPUTED;
+}
+
+export function hasDisputeReportHistory(item) {
+  if (!item) {
+    return false;
+  }
+  return (
+    Boolean(item.disputeByBuyer) ||
+    Boolean(item.disputeBySeller) ||
+    Boolean(item.disputedAt) ||
+    Boolean(item.disputeReason)
+  );
+}
+
+export function shouldShowDisputeListHints(item) {
+  return isActiveDisputeOrder(item);
+}
+
+export const DISPUTE_ADMIN_PENDING_FOOTER =
+  'Admin sẽ xử lý sau 24 giờ kể từ thời gian nhận hàng.';
+
+/** Dòng hiển thị tranh chấp trên thẻ đơn (danh sách). */
+export function buildDisputeOrderListDisplay(item, viewerRole = VIEWER_ROLE.BUYER) {
+  if (!shouldShowDisputeListHints(item)) {
+    return null;
+  }
+  if (!item.disputeByBuyer && !item.disputeBySeller) {
+    return null;
+  }
+
+  const isViewerBuyer = viewerRole === VIEWER_ROLE.BUYER;
+  const buyerReason = getBuyerDisputeReasonLabel(item) || '—';
+  const sellerReason = getSellerDisputeReasonLabel();
+  const lines = buildDisputeReportOrder(item).map(({ side }) => {
+    if (side === 'buyer') {
+      return isViewerBuyer
+        ? `Bạn đã báo cáo: ${buyerReason}`
+        : `Người mua đã báo cáo: ${buyerReason}`;
+    }
+    return isViewerBuyer
+      ? `Shop đã báo cáo: ${sellerReason}`
+      : `Bạn đã báo cáo: ${sellerReason}`;
+  });
+
+  return {
+    lines,
+    footer: isActiveDisputeOrder(item) ? DISPUTE_ADMIN_PENDING_FOOTER : '',
+  };
+}
+
 export function isCancelledReservationStatus(status) {
   return CANCELLED_RESERVATION_STATUSES.has(Number(status));
 }
 
+export function isCompletedReservationStatus(status) {
+  return COMPLETED_RESERVATION_STATUSES.has(Number(status));
+}
+
 /**
- * Lý do hiển thị trên item đơn đã hủy (buyer + seller).
- * Đơn từng tranh chấp: đọc depositSettleTo để biết cọc về ai (không dùng lý do admin).
+ * Lý do hiển thị theo góc nhìn buyer/seller.
  */
-export function getCancelledReservationReason(item) {
+export function getCancelledReservationReason(item, viewerRole = VIEWER_ROLE.BUYER) {
+  if (!item) {
+    return '';
+  }
   const status = Number(item?.status);
-  if (!isCancelledReservationStatus(status)) {
+  if (status === RESERVATION_STATUS.DISPUTED) {
+    return getReservationReasonLabel(item, viewerRole);
+  }
+  if (isCancelledReservationStatus(status)) {
+    if (hasAdminDisputeResolution(item, [])) {
+      return getAdminDisputeOutcomeLabel(item, [], viewerRole);
+    }
+    const label = getReservationReasonLabel(item, viewerRole);
+    if (label) {
+      return label;
+    }
+    const apiLabel =
+      viewerRole === VIEWER_ROLE.SELLER ? item?.reasonLabelSeller : item?.reasonLabelBuyer;
+    return String(apiLabel || '').trim();
+  }
+  return '';
+}
+
+export function reservationHasDisputeContext(
+  reservation,
+  { buyerReport, sellerReport } = {}
+) {
+  if (!reservation) {
+    return false;
+  }
+  const status = Number(reservation.status);
+  const hasReports = Boolean(buyerReport) || Boolean(sellerReport);
+  const hasDisputeFlags =
+    Boolean(reservation.disputeByBuyer) ||
+    Boolean(reservation.disputeBySeller) ||
+    Boolean(reservation.disputedAt) ||
+    Boolean(reservation.disputeReason);
+
+  if (status === RESERVATION_STATUS.DISPUTED) {
+    return true;
+  }
+
+  if (hasReports || hasDisputeFlags) {
+    return true;
+  }
+
+  if (
+    status === RESERVATION_STATUS.DISPUTE_RESOLVED ||
+    status === RESERVATION_STATUS.REFUNDED
+  ) {
+    return isDisputeRelatedCancellation(reservation);
+  }
+
+  return false;
+}
+
+const ADMIN_DISPUTE_DECISIONS = new Set(['approve_buyer', 'approve_seller']);
+
+const GENERIC_ADMIN_RESOLUTION_NOTES = new Set([
+  'Admin hoàn cọc cho người mua.',
+  'Admin xử lý tranh chấp: đền cọc cho người bán.',
+  'Shop tự hoàn cọc trong tranh chấp.',
+  'Shop tự hoàn cọc cho người mua.',
+  'Buyer đồng ý mất cọc.',
+]);
+
+export function getProcessedAdminDisputeReport(reports = []) {
+  const list = Array.isArray(reports) ? reports.filter(Boolean) : [];
+  return (
+    list.find((report) => {
+      if (!report?.processedAt) {
+        return false;
+      }
+      const decision = String(report.adminDecision || '').trim();
+      return ADMIN_DISPUTE_DECISIONS.has(decision);
+    }) || null
+  );
+}
+
+function isSelfSettledDispute(reservation) {
+  if (!reservation) {
+    return false;
+  }
+  const code = inferCancelReasonCode(reservation);
+  if (
+    code === RESERVATION_CANCEL_REASON.SELLER_REFUND_AFTER_PICKUP ||
+    code === RESERVATION_CANCEL_REASON.BUYER_FORFEIT
+  ) {
+    return true;
+  }
+  if (
+    reservation.cancelledBySellerAfterAccept ||
+    reservation.cancelledBy === 'seller_after_accept'
+  ) {
+    return true;
+  }
+  if (
+    String(reservation.cancelledBy || '').trim() === 'buyer' &&
+    Number(reservation.depositSettleTo) === DEPOSIT_SETTLE_TO.SELLER &&
+    hasDisputeReportHistory(reservation)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Admin đã xử lý tranh chấp (không tính hai bên tự thỏa thuận hoàn/mất cọc). */
+export function hasAdminDisputeResolution(reservation, reports = []) {
+  if (!reservation || isSelfSettledDispute(reservation)) {
+    return false;
+  }
+
+  const code = inferCancelReasonCode(reservation);
+  if (
+    code === RESERVATION_CANCEL_REASON.ADMIN_BUYER_WIN ||
+    code === RESERVATION_CANCEL_REASON.ADMIN_SELLER_WIN
+  ) {
+    return true;
+  }
+
+  if (String(reservation.cancelledBy || '').trim() === 'admin') {
+    return true;
+  }
+
+  if (getProcessedAdminDisputeReport(reports)) {
+    return true;
+  }
+
+  if (!hasDisputeReportHistory(reservation) || isActiveDisputeOrder(reservation)) {
+    return false;
+  }
+
+  const status = Number(reservation.status);
+  if (
+    status === RESERVATION_STATUS.REFUNDED &&
+    (reservation.disputeByBuyer || reservation.disputeBySeller)
+  ) {
+    return true;
+  }
+  if (
+    status === RESERVATION_STATUS.DISPUTE_RESOLVED &&
+    Number(reservation.depositSettleTo) === DEPOSIT_SETTLE_TO.SELLER &&
+    (reservation.disputeByBuyer || reservation.disputeBySeller)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function getAdminDisputeOutcomeLabel(
+  reservation,
+  reports = [],
+  viewerRole = VIEWER_ROLE.BUYER
+) {
+  if (!hasAdminDisputeResolution(reservation, reports)) {
     return '';
   }
 
-  const settleTo = Number(item?.depositSettleTo);
-  const hadDispute =
-    Boolean(item?.disputeByBuyer) ||
-    Boolean(item?.disputeBySeller) ||
-    Boolean(item?.disputedAt) ||
-    Boolean(item?.disputeReason) ||
-    status === RESERVATION_STATUS.DISPUTE_RESOLVED;
-
-  if (hadDispute) {
-    if (settleTo === DEPOSIT_SETTLE_TO.BUYER) {
-      return 'Có tranh chấp, đã hoàn tiền cho người mua';
-    }
-    if (settleTo === DEPOSIT_SETTLE_TO.SELLER) {
-      return 'Có tranh chấp, đã giải ngân cọc';
-    }
-    // Fallback theo status nếu settle chưa rõ trên bản ghi cũ
-    if (status === RESERVATION_STATUS.REFUNDED) {
-      return 'Có tranh chấp, đã hoàn tiền cho người mua';
-    }
-    if (status === RESERVATION_STATUS.DISPUTE_RESOLVED) {
-      return 'Có tranh chấp, đã giải ngân cọc';
-    }
+  const isViewerBuyer = viewerRole === VIEWER_ROLE.BUYER;
+  const processed = getProcessedAdminDisputeReport(reports);
+  if (processed?.adminDecision === 'approve_buyer') {
+    return isViewerBuyer
+      ? 'Admin hoàn cọc cho bạn'
+      : 'Admin hoàn cọc cho người mua';
+  }
+  if (processed?.adminDecision === 'approve_seller') {
+    return isViewerBuyer
+      ? 'Admin hoàn cọc cho người bán'
+      : 'Admin hoàn cọc cho bạn';
   }
 
-  const cancelReason = String(item?.cancelReason || '').trim();
-  if (cancelReason) {
+  const code = inferCancelReasonCode(reservation);
+  const settleTo = Number(reservation.depositSettleTo);
+  const buyerWins =
+    code === RESERVATION_CANCEL_REASON.ADMIN_BUYER_WIN ||
+    settleTo === DEPOSIT_SETTLE_TO.BUYER ||
+    Number(reservation.status) === RESERVATION_STATUS.REFUNDED;
+
+  if (buyerWins) {
+    return isViewerBuyer
+      ? 'Admin hoàn cọc cho bạn'
+      : 'Admin hoàn cọc cho người mua';
+  }
+
+  return isViewerBuyer
+    ? 'Admin hoàn cọc cho người bán'
+    : 'Admin hoàn cọc cho bạn';
+}
+
+export function getAdminDisputeResolutionNote(reservation, reports = []) {
+  if (!hasAdminDisputeResolution(reservation, reports)) {
+    return '';
+  }
+
+  const fromReport = String(getProcessedAdminDisputeReport(reports)?.adminNote || '').trim();
+  if (fromReport && !GENERIC_ADMIN_RESOLUTION_NOTES.has(fromReport)) {
+    return fromReport;
+  }
+
+  const cancelReason = String(reservation?.cancelReason || '').trim();
+  if (cancelReason && !GENERIC_ADMIN_RESOLUTION_NOTES.has(cancelReason)) {
     return cancelReason;
   }
 
-  if (status === RESERVATION_STATUS.REJECTED) {
-    return 'Shop từ chối hoặc quá giờ chưa xác nhận đơn.';
-  }
+  return fromReport || cancelReason || '';
+}
 
-  if (settleTo === DEPOSIT_SETTLE_TO.BUYER) {
-    return 'Đã hoàn tiền cọc cho người mua';
-  }
-  if (settleTo === DEPOSIT_SETTLE_TO.SELLER) {
-    return 'Đã giải ngân cọc cho người bán';
-  }
+export function isAdminDisputeResolved(reservation, reports = []) {
+  return hasAdminDisputeResolution(reservation, reports);
+}
 
-  if (status === RESERVATION_STATUS.REFUNDED) {
-    return 'Đã hoàn tiền cọc cho người mua';
-  }
-  if (status === RESERVATION_STATUS.DISPUTE_RESOLVED) {
-    return 'Đã giải ngân cọc cho người bán';
-  }
+export function getAdminDisputeResolutionLabel(reservation, reports = []) {
+  return getAdminDisputeOutcomeLabel(reservation, reports, VIEWER_ROLE.BUYER);
+}
 
-  return '';
+export function getReservationTabForStatus(status) {
+  const code = Number(status);
+  if (code === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION) {
+    return RESERVATION_TAB.PENDING;
+  }
+  if (code === RESERVATION_STATUS.WAITING_PICKUP) {
+    return RESERVATION_TAB.HOLDING;
+  }
+  if (code === RESERVATION_STATUS.DISPUTED) {
+    return RESERVATION_TAB.DISPUTE;
+  }
+  if (isCompletedReservationStatus(code)) {
+    return RESERVATION_TAB.COMPLETED;
+  }
+  if (isCancelledReservationStatus(code)) {
+    return RESERVATION_TAB.CANCELLED;
+  }
+  return RESERVATION_TAB.ALL;
 }

@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Check, Eye, X } from 'lucide-react';
 
 import {
   approveAdminWithdraw,
   listAdminWithdraws,
   rejectAdminWithdraw,
 } from '../api/bankApi';
+import AdminDateFilter from '../components/admin/AdminDateFilter';
+import AdminFilterPanel from '../components/admin/AdminFilterPanel';
+import AdminPagination from '../components/admin/AdminPagination';
+import { TableSttCell, TableSttHeader } from '../components/admin/TableStt';
+import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { formatDate, formatPrice } from '../utils/format';
 
 const TABS = [
   { id: 'pending', label: 'Chờ duyệt', status: '0' },
@@ -17,23 +27,7 @@ const HISTORY_STATUS_FILTERS = [
   { value: '', label: 'Tất cả trạng thái' },
   { value: '1', label: 'Đã duyệt' },
   { value: '2', label: 'Từ chối' },
-  { value: '0', label: 'Chờ duyệt' },
 ];
-
-const PAGE_SIZE = 30;
-
-function formatPrice(value) {
-  return `${Number(value || 0).toLocaleString('vi-VN')}đ`;
-}
-
-function formatTime(value) {
-  if (!value) return '';
-  try {
-    return new Date(value).toLocaleString('vi-VN');
-  } catch {
-    return '';
-  }
-}
 
 function DetailField({ label, children }) {
   return (
@@ -78,8 +72,8 @@ function WithdrawDetailDialog({ item, onClose }) {
           </DetailField>
           <DetailField label="Trạng thái">{item.statusLabel || ''}</DetailField>
           <DetailField label="Ghi chú admin">{item.adminNote || ''}</DetailField>
-          <DetailField label="Tạo lúc">{formatTime(item.createdAt)}</DetailField>
-          <DetailField label="Xử lý lúc">{formatTime(item.processedAt)}</DetailField>
+          <DetailField label="Tạo lúc">{formatDate(item.createdAt)}</DetailField>
+          <DetailField label="Xử lý lúc">{formatDate(item.processedAt)}</DetailField>
         </dl>
         {item.userId ? (
           <div className="dialog-actions" style={{ justifyContent: 'flex-start' }}>
@@ -97,11 +91,12 @@ export default function WithdrawalsPage() {
   const { getIdToken } = useAuth();
   const [tab, setTab] = useState('pending');
   const [historyStatus, setHistoryStatus] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const { input: searchInput, debounced: search, setInput: setSearchInput } = useDebouncedSearch();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [datePreset, setDatePreset] = useState('all');
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -112,10 +107,11 @@ export default function WithdrawalsPage() {
 
   const statusParam = useMemo(() => {
     if (tab === 'pending') return '0';
+    if (historyStatus === '') return '1,2';
     return historyStatus;
   }, [tab, historyStatus]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -128,7 +124,7 @@ export default function WithdrawalsPage() {
         from: from || undefined,
         to: to || undefined,
         page,
-        limit: PAGE_SIZE,
+        limit,
       });
       setItems(payload.data?.items || []);
       setTotal(Number(payload.data?.total) || 0);
@@ -139,34 +135,28 @@ export default function WithdrawalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [from, getIdToken, page, search, statusParam, to]);
+  }, [from, getIdToken, limit, page, search, statusParam, to]);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
+  useAdminRealtimeRefresh('withdraw', loadItems);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
   function switchTab(nextTab) {
     setTab(nextTab);
     setPage(1);
     setSuccessMessage('');
-    if (nextTab === 'history' && historyStatus === '0') {
-      setHistoryStatus('');
-    }
-  }
-
-  function applyFilters(event) {
-    event?.preventDefault?.();
-    setSearch(searchInput.trim());
-    setPage(1);
-  }
-
-  function clearFilters() {
-    setSearchInput('');
-    setSearch('');
     setFrom('');
     setTo('');
-    setHistoryStatus('');
-    setPage(1);
+    setDatePreset('all');
+    if (nextTab === 'history') {
+      setHistoryStatus('');
+    }
   }
 
   async function handleApprove(item) {
@@ -203,86 +193,71 @@ export default function WithdrawalsPage() {
   }
 
   return (
-    <div className="page">
-      <div className="page-header-row">
-        <div>
-          <h2>Rút tiền / Lịch sử</h2>
-          <p className="muted">
-            Duyệt yêu cầu đang chờ và tra cứu lịch sử đã xử lý.
-          </p>
-        </div>
-      </div>
-
+    <div className="page withdrawals-page">
       {error ? <p className="error-banner">{error}</p> : null}
       {successMessage ? <p className="success-banner">{successMessage}</p> : null}
 
-      <div className="admin-tabs">
-        {TABS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`admin-tab${tab === item.id ? ' active' : ''}`}
-            onClick={() => switchTab(item.id)}
+      <section className="table-card">
+        <div
+          className={`withdrawals-table-head withdrawals-table-head--with-filters${
+            tab === 'history' ? ' is-history' : ''
+          }`}
+        >
+          <strong>
+            {tab === 'pending' ? 'Yêu cầu chờ duyệt' : 'Lịch sử rút tiền'} · {total} phiếu
+          </strong>
+          <AdminFilterPanel
+            layout="inline"
+            searchValue={searchInput}
+            onSearchChange={setSearchInput}
+            searchPlaceholder="Tên, SĐT, email, STK, ngân hàng..."
           >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      <section className="filter-card">
-        <form className="filter-grid" onSubmit={applyFilters}>
-          <label>
-            Tìm kiếm
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Tên, SĐT, email, STK, ngân hàng..."
-            />
-          </label>
-          {tab === 'history' ? (
             <label>
-              Trạng thái
-              <select
-                value={historyStatus}
-                onChange={(event) => {
-                  setHistoryStatus(event.target.value);
-                  setPage(1);
-                }}
-              >
-                {HISTORY_STATUS_FILTERS.map((item) => (
-                  <option key={item.value || 'all'} value={item.value}>
+              Loại xem
+              <select value={tab} onChange={(event) => switchTab(event.target.value)}>
+                {TABS.map((item) => (
+                  <option key={item.id} value={item.id}>
                     {item.label}
                   </option>
                 ))}
               </select>
             </label>
-          ) : null}
-          <label>
-            Từ ngày
-            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-          </label>
-          <label>
-            Đến ngày
-            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-          </label>
-          <div className="action-row" style={{ alignItems: 'flex-end' }}>
-            <button type="submit">Lọc</button>
-            <button type="button" className="ghost-btn" onClick={clearFilters}>
-              Xóa lọc
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="table-card">
-        <div className="table-toolbar" style={{ marginBottom: 10 }}>
-          <strong>
-            {tab === 'pending' ? 'Yêu cầu chờ duyệt' : 'Lịch sử rút tiền'} · {total} phiếu
-          </strong>
+            {tab === 'history' ? (
+              <label>
+                Trạng thái
+                <select
+                  value={historyStatus}
+                  onChange={(event) => {
+                    setHistoryStatus(event.target.value);
+                    setPage(1);
+                  }}
+                >
+                  {HISTORY_STATUS_FILTERS.map((item) => (
+                    <option key={item.value || 'all'} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <AdminDateFilter
+              from={from}
+              to={to}
+              preset={datePreset}
+              onApply={(range) => {
+                setFrom(range.from || '');
+                setTo(range.to || '');
+                setDatePreset(range.preset || (!range.from && !range.to ? 'all' : 'custom'));
+                setPage(1);
+              }}
+            />
+          </AdminFilterPanel>
         </div>
-        <table className="data-table">
+        <div className="table-scroll">
+          <table className="data-table admin-data-table withdrawals-table">
           <thead>
             <tr>
+              <TableSttHeader />
               <th>Thời gian</th>
               <th>User</th>
               <th>Ngân hàng</th>
@@ -296,20 +271,21 @@ export default function WithdrawalsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8}>Đang tải...</td>
+                <td colSpan={9}>Đang tải...</td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={9}>
                   {tab === 'pending'
                     ? 'Không có yêu cầu chờ duyệt.'
                     : 'Không có lịch sử rút tiền theo bộ lọc.'}
                 </td>
               </tr>
             ) : (
-              items.map((item) => (
+              items.map((item, index) => (
                 <tr key={item.id}>
-                  <td>{formatTime(item.createdAt)}</td>
+                  <TableSttCell page={page} limit={limit} index={index} />
+                  <td>{formatDate(item.createdAt)}</td>
                   <td>
                     <strong>{item.userName || item.userId}</strong>
                     <div className="muted">{item.userPhone || item.userEmail || ''}</div>
@@ -339,66 +315,58 @@ export default function WithdrawalsPage() {
                     </span>
                     {item.adminNote ? <div className="muted">{item.adminNote}</div> : null}
                   </td>
-                  <td>{formatTime(item.processedAt)}</td>
-                  <td>
-                    <div className="action-row">
-                      <button
-                        type="button"
-                        className="detail-btn"
-                        onClick={() => setSelected(item)}
-                      >
-                        Chi tiết
-                      </button>
-                      {item.status === 0 ? (
-                        <>
-                          <button
-                            type="button"
-                            disabled={actionId === item.id}
-                            onClick={() => handleApprove(item)}
-                          >
-                            Duyệt
-                          </button>
-                          <button
-                            type="button"
-                            className="danger-btn"
-                            disabled={actionId === item.id}
-                            onClick={() => handleReject(item)}
-                          >
-                            Từ chối
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
+                  <td>{formatDate(item.processedAt)}</td>
+                  <td className="col-actions">
+                    <TableIconActions
+                      actions={[
+                        {
+                          icon: Eye,
+                          label: 'Chi tiết rút tiền',
+                          onClick: () => setSelected(item),
+                        },
+                        ...(item.status === 0
+                          ? [
+                              {
+                                icon: Check,
+                                label: 'Duyệt rút tiền',
+                                variant: 'primary',
+                                disabled: actionId === item.id,
+                                onClick: () => handleApprove(item),
+                              },
+                              {
+                                icon: X,
+                                label: 'Từ chối rút tiền',
+                                variant: 'danger',
+                                disabled: actionId === item.id,
+                                onClick: () => handleReject(item),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
                   </td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
+        </div>
 
-        {totalPages > 1 ? (
-          <div className="action-row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              className="ghost-btn"
-              disabled={page <= 1 || loading}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
-            >
-              Trước
-            </button>
-            <span className="muted">
-              Trang {page}/{totalPages}
-            </span>
-            <button
-              type="button"
-              className="ghost-btn"
-              disabled={page >= totalPages || loading}
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-            >
-              Sau
-            </button>
-          </div>
-        ) : null}
+        <div className="admin-pagination withdrawals-pagination">
+          <AdminPagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            label="phiếu"
+            limit={limit}
+            onLimitChange={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+            loading={loading}
+            onPageChange={setPage}
+          />
+        </div>
       </section>
 
       {selected ? <WithdrawDetailDialog item={selected} onClose={() => setSelected(null)} /> : null}

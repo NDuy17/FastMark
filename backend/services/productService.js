@@ -536,6 +536,18 @@ async function createProduct(user, payload) {
 
   await syncShopProductStats(shop);
 
+  const { emitAdminUpdated, emitUserResourceUpdated, emitPublicUpdated } = require("./realtimeService");
+  emitAdminUpdated("product", {
+    productId: String(product._id),
+    shopId: String(shop._id),
+    created: true,
+  });
+  emitUserResourceUpdated(user._id, "product", {
+    productId: String(product._id),
+    created: true,
+  });
+  emitPublicUpdated("product", { productId: String(product._id), shopId: String(shop._id) });
+
   return {
     product,
     variants: savedVariants,

@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { callStore } from '../../../core/utils/storeContact';
 
-export default function ContactActions({ phone, onMessage, compact = false }) {
+export default function ContactActions({ phone, compact = false }) {
   return (
     <View style={[styles.row, compact && styles.rowCompact]}>
       <Pressable
@@ -13,16 +13,6 @@ export default function ContactActions({ phone, onMessage, compact = false }) {
         <Text style={styles.btnIcon}>📞</Text>
         {!compact && <Text style={styles.btnText}>Gọi điện</Text>}
       </Pressable>
-      {onMessage ? (
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.btn, styles.messageBtn, pressed && styles.pressed]}
-          onPress={onMessage}
-        >
-          <Text style={styles.btnIcon}>💬</Text>
-          {!compact && <Text style={styles.btnText}>Nhắn tin</Text>}
-        </Pressable>
-      ) : null}
     </View>
   );
 }
@@ -46,9 +36,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   callBtn: {
-    backgroundColor: '#076F32',
-  },
-  messageBtn: {
     backgroundColor: '#076F32',
   },
   pressed: {

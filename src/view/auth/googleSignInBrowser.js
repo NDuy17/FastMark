@@ -7,7 +7,7 @@ import {
   describeGoogleOAuthError,
   getGoogleBrowserAuthRequestConfig,
 } from '../../viewmodel/auth/googleAuthConfig';
-import { socialLogin } from '../../viewmodel/auth/authSlice';
+import { clearAuthFeedback, socialLogin } from '../../viewmodel/auth/authSlice';
 import { GoogleSignInPressable } from './googleSignInShared';
 
 export default function GoogleSignInBrowserButton({ disabled, onError }) {
@@ -49,8 +49,8 @@ export default function GoogleSignInBrowserButton({ disabled, onError }) {
   }, [googleResponse, dispatch, onError]);
 
   function handlePress() {
-    onError?.('');
     log.info('browserSignIn:pressed');
+    dispatch(clearAuthFeedback());
 
     if (!request) {
       log.warn('browserSignIn:request-not-ready');

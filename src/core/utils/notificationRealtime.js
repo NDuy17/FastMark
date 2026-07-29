@@ -1,3 +1,5 @@
+import { resolveNotificationIndex } from '../../constants/notifications';
+
 export function normalizeSocketNotification(payload) {
   if (!payload) {
     return null;
@@ -14,6 +16,8 @@ export function normalizeSocketNotification(payload) {
     content: String(payload.content || payload.body || '').trim(),
     body: String(payload.content || payload.body || '').trim(),
     audience: String(payload.audience || 'system').trim().toLowerCase() || 'system',
+    index: resolveNotificationIndex(payload),
+    isAdminBroadcast: Boolean(payload.isAdminBroadcast),
     isRead: Number(payload.isRead) === 1 || payload.isRead === true,
     createdAt: payload.createdAt || new Date().toISOString(),
   };

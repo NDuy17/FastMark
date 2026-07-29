@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 function toDateInput(date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
@@ -138,7 +139,9 @@ export default function DashboardDateRange({
   allowAll = false,
 }) {
   const rootRef = useRef(null);
+  const popoverRef = useRef(null);
   const [open, setOpen] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState(null);
   const [draftFrom, setDraftFrom] = useState(from);
   const [draftTo, setDraftTo] = useState(to);
   const [draftPreset, setDraftPreset] = useState(preset);
@@ -149,19 +152,55 @@ export default function DashboardDateRange({
 
   const presets = allowAll ? [ALL_PRESET, ...DATE_PRESETS] : DATE_PRESETS;
 
+  function updatePopoverPosition() {
+    const trigger = rootRef.current?.querySelector('.dashboard-date-trigger');
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(760, window.innerWidth - 24);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 12) {
+      left = window.innerWidth - width - 12;
+    }
+    setPopoverStyle({
+      position: 'fixed',
+      top: rect.bottom + 8,
+      left: Math.max(12, left),
+      width,
+      zIndex: 1000,
+    });
+  }
+
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) {
+      setPopoverStyle(null);
+      return undefined;
+    }
+
+    updatePopoverPosition();
+
     const closeOnOutsideClick = (event) => {
-      if (!rootRef.current?.contains(event.target)) setOpen(false);
+      if (
+        rootRef.current?.contains(event.target) ||
+        popoverRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setOpen(false);
     };
     const closeOnEscape = (event) => {
       if (event.key === 'Escape') setOpen(false);
     };
+
     document.addEventListener('mousedown', closeOnOutsideClick);
     document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('scroll', updatePopoverPosition, true);
+    window.addEventListener('resize', updatePopoverPosition);
+
     return () => {
       document.removeEventListener('mousedown', closeOnOutsideClick);
       document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('scroll', updatePopoverPosition, true);
+      window.removeEventListener('resize', updatePopoverPosition);
     };
   }, [open]);
 
@@ -225,72 +264,79 @@ export default function DashboardDateRange({
         <span aria-hidden="true">▣</span>
       </button>
 
-      {open ? (
-        <div className="dashboard-date-popover">
-          <aside className="date-preset-list">
-            <strong>Chọn nhanh</strong>
-            {presets.map(([key, presetLabel]) => (
-              <button
-                key={key}
-                type="button"
-                className={draftPreset === key ? 'active' : ''}
-                onClick={() => choosePreset(key)}
-              >
-                {presetLabel}
-              </button>
-            ))}
-          </aside>
+      {open && popoverStyle
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              className="dashboard-date-popover dashboard-date-popover-portal"
+              style={popoverStyle}
+            >
+              <aside className="date-preset-list">
+                <strong>Chọn nhanh</strong>
+                {presets.map(([key, presetLabel]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={draftPreset === key ? 'active' : ''}
+                    onClick={() => choosePreset(key)}
+                  >
+                    {presetLabel}
+                  </button>
+                ))}
+              </aside>
 
-          <div className="date-calendar-panel">
-            <div className="date-calendar-toolbar">
-              <button type="button" onClick={() => setCalendarMonth((date) => shiftMonth(date, -1))}>
-                ‹
-              </button>
-              <span>
-                {draftFrom
-                  ? `${formatDateDisplay(draftFrom)}${
-                      draftFrom !== draftTo ? ` → ${formatDateDisplay(draftTo)}` : ''
-                    }`
-                  : 'Chọn khoảng ngày'}
-              </span>
-              <button type="button" onClick={() => setCalendarMonth((date) => shiftMonth(date, 1))}>
-                ›
-              </button>
-            </div>
-            <div className="date-calendar-months">
-              <CalendarMonth
-                monthDate={calendarMonth}
-                rangeFrom={draftFrom}
-                rangeTo={draftTo}
-                onSelect={chooseDate}
-              />
-              <CalendarMonth
-                monthDate={shiftMonth(calendarMonth, 1)}
-                rangeFrom={draftFrom}
-                rangeTo={draftTo}
-                onSelect={chooseDate}
-              />
-            </div>
-            <div className="date-picker-actions">
-              <span>{selectingEnd ? 'Chọn ngày kết thúc' : 'Khoảng thời gian đã chọn'}</span>
-              <button type="button" className="date-picker-cancel" onClick={() => setOpen(false)}>
-                Hủy
-              </button>
-              <button
-                type="button"
-                className="date-picker-apply"
-                disabled={!draftFrom || !draftTo}
-                onClick={() => {
-                  onApply({ from: draftFrom, to: draftTo, preset: draftPreset });
-                  setOpen(false);
-                }}
-              >
-                Áp dụng
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+              <div className="date-calendar-panel">
+                <div className="date-calendar-toolbar">
+                  <button type="button" onClick={() => setCalendarMonth((date) => shiftMonth(date, -1))}>
+                    ‹
+                  </button>
+                  <span>
+                    {draftFrom
+                      ? `${formatDateDisplay(draftFrom)}${
+                          draftFrom !== draftTo ? ` → ${formatDateDisplay(draftTo)}` : ''
+                        }`
+                      : 'Chọn khoảng ngày'}
+                  </span>
+                  <button type="button" onClick={() => setCalendarMonth((date) => shiftMonth(date, 1))}>
+                    ›
+                  </button>
+                </div>
+                <div className="date-calendar-months">
+                  <CalendarMonth
+                    monthDate={calendarMonth}
+                    rangeFrom={draftFrom}
+                    rangeTo={draftTo}
+                    onSelect={chooseDate}
+                  />
+                  <CalendarMonth
+                    monthDate={shiftMonth(calendarMonth, 1)}
+                    rangeFrom={draftFrom}
+                    rangeTo={draftTo}
+                    onSelect={chooseDate}
+                  />
+                </div>
+                <div className="date-picker-actions">
+                  <span>{selectingEnd ? 'Chọn ngày kết thúc' : 'Khoảng thời gian đã chọn'}</span>
+                  <button type="button" className="date-picker-cancel" onClick={() => setOpen(false)}>
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    className="date-picker-apply"
+                    disabled={!draftFrom || !draftTo}
+                    onClick={() => {
+                      onApply({ from: draftFrom, to: draftTo, preset: draftPreset });
+                      setOpen(false);
+                    }}
+                  >
+                    Áp dụng
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

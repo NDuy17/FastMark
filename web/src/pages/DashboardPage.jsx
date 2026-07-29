@@ -1,10 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  AlertTriangle,
+  Banknote,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Flag,
+  Image,
+  Minus,
+  Package,
+  ShoppingCart,
+  Store,
+  TrendingDown,
+  TrendingUp,
+  UserCheck,
+  Users,
+  Wallet,
+} from 'lucide-react';
 
-import { getProductDetail } from '../api/catalogApi';
 import { getAdminDashboard } from '../api/dashboardApi';
 import DashboardDateRange, { presetDates } from '../components/DashboardDateRange';
 import { useAuth } from '../context/AuthContext';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
@@ -26,18 +44,35 @@ function TrendBadge({ current, previous }) {
   // Kỳ trước = 0: quy ước tăng 100% nếu có phát sinh mới.
   const percent = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
   if (percent > 0) {
-    return <small className="trend-badge trend-up">+{formatPercent(percent)}</small>;
+    return (
+      <small className="trend-badge trend-up">
+        <TrendingUp size={12} strokeWidth={2.5} aria-hidden="true" />
+        +{formatPercent(percent)}
+      </small>
+    );
   }
   if (percent < 0) {
-    return <small className="trend-badge trend-down">-{formatPercent(percent)}</small>;
+    return (
+      <small className="trend-badge trend-down">
+        <TrendingDown size={12} strokeWidth={2.5} aria-hidden="true" />
+        -{formatPercent(percent)}
+      </small>
+    );
   }
-  return <small className="trend-badge trend-flat">0%</small>;
+  return (
+    <small className="trend-badge trend-flat">
+      <Minus size={12} strokeWidth={2.5} aria-hidden="true" />
+      0%
+    </small>
+  );
 }
 
 function MetricCard({
   label,
   value,
   detail,
+  icon: Icon,
+  tone = 'green',
   current,
   previous,
   hasTrend = false,
@@ -45,18 +80,31 @@ function MetricCard({
   onClick,
 }) {
   const Tag = onClick ? 'button' : 'article';
+  function handleClick(event) {
+    onClick?.(event);
+    if (onClick) {
+      event.currentTarget.blur();
+    }
+  }
   return (
     <Tag
       type={onClick ? 'button' : undefined}
-      onClick={onClick}
-      className={`dashboard-metric${onClick ? ' clickable' : ''}${active ? ' active' : ''}`}
+      onClick={onClick ? handleClick : undefined}
+      className={`dashboard-metric tone-${tone}${onClick ? ' clickable' : ''}${active ? ' active' : ''}`}
     >
-      <span>{label}</span>
-      <div className="dashboard-metric-value">
-        <strong>{value}</strong>
-        {hasTrend ? <TrendBadge current={current} previous={previous} /> : null}
+      <div className="dashboard-metric-head">
+        <div className={`dashboard-metric-icon tone-${tone}`}>
+          {Icon ? <Icon size={18} strokeWidth={2} aria-hidden="true" /> : null}
+        </div>
+        <div className="dashboard-metric-body">
+          <span className="dashboard-metric-label">{label}</span>
+          <div className="dashboard-metric-value">
+            <strong>{value}</strong>
+            {hasTrend ? <TrendBadge current={current} previous={previous} /> : null}
+          </div>
+          {detail ? <small className="dashboard-metric-detail">{detail}</small> : null}
+        </div>
       </div>
-      {detail ? <small>{detail}</small> : null}
     </Tag>
   );
 }
@@ -200,48 +248,64 @@ const METRIC_DEFS = [
   {
     key: 'newUsers',
     label: 'Người dùng mới',
+    icon: Users,
+    tone: 'green',
     isCurrency: false,
     seriesKey: 'usersOverTime',
   },
   {
     key: 'newSellers',
-    label: 'Seller mới',
+    label: 'Gian hàng mới',
+    icon: Store,
+    tone: 'green',
     isCurrency: false,
     seriesKey: 'sellersOverTime',
   },
   {
     key: 'newProducts',
     label: 'Sản phẩm mới',
+    icon: Package,
+    tone: 'green',
     isCurrency: false,
     seriesKey: 'productsOverTime',
   },
   {
     key: 'newReservations',
     label: 'Đơn giữ hàng mới',
+    icon: ShoppingCart,
+    tone: 'orange',
     isCurrency: false,
     seriesKey: 'reservationsOverTime',
   },
   {
     key: 'completedReservations',
     label: 'Đơn hoàn thành',
+    icon: CircleCheck,
+    tone: 'green',
     isCurrency: false,
     seriesKey: 'completedOverTime',
   },
   {
     key: 'cancelledReservations',
     label: 'Đơn hủy',
+    icon: CircleX,
+    tone: 'red',
     isCurrency: false,
     seriesKey: 'cancelledOverTime',
   },
   {
     key: 'disputedReservations',
     label: 'Đơn tranh chấp',
+    icon: AlertTriangle,
+    tone: 'orange',
     isCurrency: false,
     seriesKey: 'disputedOverTime',
   },
   {
     key: 'sellerPlanRevenue',
     label: 'Doanh thu gói Seller',
+    icon: Wallet,
+    tone: 'green',
     isCurrency: true,
     seriesKey: 'sellerPlanRevenueOverTime',
     detail: (metrics) => `${formatNumber(metrics.sellerPlansSold)} lượt mua`,
@@ -249,6 +313,8 @@ const METRIC_DEFS = [
   {
     key: 'bannerPlanRevenue',
     label: 'Doanh thu Banner',
+    icon: Flag,
+    tone: 'purple',
     isCurrency: true,
     seriesKey: 'bannerPlanRevenueOverTime',
     detail: (metrics) => `${formatNumber(metrics.bannerPlansSold)} lượt mua`,
@@ -256,6 +322,8 @@ const METRIC_DEFS = [
   {
     key: 'depositAmount',
     label: 'Tiền cọc phát sinh',
+    icon: Banknote,
+    tone: 'blue',
     isCurrency: true,
     seriesKey: 'depositOverTime',
     detail: (metrics) => `${formatNumber(metrics.depositCount)} lượt cọc`,
@@ -263,20 +331,26 @@ const METRIC_DEFS = [
   {
     key: 'topupAmount',
     label: 'Tổng tiền nạp',
+    icon: Wallet,
+    tone: 'green',
     isCurrency: true,
     seriesKey: 'topupOverTime',
     detail: (metrics) => `${formatNumber(metrics.topupCount)} lượt nạp thành công`,
   },
   {
     key: 'withdrawAmount',
-    label: 'Tiền chờ rút',
+    label: 'Tiền rút thành công',
+    icon: Wallet,
+    tone: 'orange',
     isCurrency: true,
     seriesKey: 'withdrawOverTime',
-    detail: (metrics) => `${formatNumber(metrics.withdrawCount)} yêu cầu rút`,
+    detail: (metrics) => `${formatNumber(metrics.withdrawCount)} lượt rút thành công`,
   },
   {
     key: 'escrowAmount',
     label: 'Tiền đang treo',
+    icon: Banknote,
+    tone: 'blue',
     isCurrency: true,
     seriesKey: 'escrowOverTime',
     detail: (metrics) => `${formatNumber(metrics.escrowCount)} đơn chưa quyết toán`,
@@ -284,24 +358,32 @@ const METRIC_DEFS = [
   {
     key: 'sellerVerificationRequests',
     label: 'Seller chờ duyệt',
+    icon: UserCheck,
+    tone: 'orange',
     isCurrency: false,
     seriesKey: 'sellerVerificationsOverTime',
   },
   {
     key: 'newReports',
     label: 'Khiếu nại chờ xử lý',
+    icon: AlertTriangle,
+    tone: 'red',
     isCurrency: false,
     seriesKey: 'reportsOverTime',
   },
   {
     key: 'reportedShops',
     label: 'Shop bị báo cáo',
+    icon: Store,
+    tone: 'red',
     isCurrency: false,
     seriesKey: 'reportedShopsOverTime',
   },
   {
     key: 'newBanners',
     label: 'Banner đang chạy',
+    icon: Image,
+    tone: 'purple',
     isCurrency: false,
     seriesKey: 'bannersOverTime',
   },
@@ -477,6 +559,8 @@ export default function DashboardPage() {
     loadDashboard();
   }, [loadDashboard]);
 
+  useAdminRealtimeRefresh('*', loadDashboard);
+
   const cards = dashboard?.cards || {};
   const charts = dashboard?.charts || {};
   const metrics = dashboard?.metrics || {};
@@ -489,22 +573,6 @@ export default function DashboardPage() {
     ? METRIC_DEFS.find((def) => def.key === selectedMetric) || null
     : null;
 
-  const [productDetail, setProductDetail] = useState(null);
-  const [productDetailLoading, setProductDetailLoading] = useState(false);
-
-  const openProductDetail = async (productId) => {
-    setProductDetailLoading(true);
-    try {
-      const token = await getIdToken();
-      const payload = await getProductDetail(token, productId);
-      setProductDetail(payload.data?.product || null);
-    } catch (detailError) {
-      setError(detailError.message || 'Không tải được chi tiết sản phẩm.');
-    } finally {
-      setProductDetailLoading(false);
-    }
-  };
-
   const renderMetricCard = (key) => {
     const def = METRIC_DEFS.find((item) => item.key === key);
     if (!def) return null;
@@ -512,6 +580,8 @@ export default function DashboardPage() {
       <MetricCard
         key={def.key}
         label={def.label}
+        icon={def.icon}
+        tone={def.tone}
         value={
           def.isCurrency
             ? formatCurrency(metrics[def.key])
@@ -632,7 +702,7 @@ export default function DashboardPage() {
                   key={product.productId}
                   className="rank-item rank-item-click"
                   title="Xem chi tiết sản phẩm"
-                  onClick={() => openProductDetail(product.productId)}
+                  onClick={() => navigate(`/products/${product.productId}`)}
                 >
                   <span className={rankBadgeClass(index)}>{index + 1}</span>
                   <RankAvatar
@@ -656,95 +726,6 @@ export default function DashboardPage() {
             />
           </div>
         </>
-      ) : null}
-
-      {productDetailLoading ? (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <p>Đang tải chi tiết sản phẩm...</p>
-          </div>
-        </div>
-      ) : null}
-
-      {productDetail ? (
-        <div className="modal-backdrop" onClick={() => setProductDetail(null)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <header className="page-header">
-              <div>
-                <h2>{productDetail.productName}</h2>
-                <p>
-                  {productDetail.shopName} · {productDetail.categoryName || ''}
-                </p>
-              </div>
-              <button type="button" onClick={() => setProductDetail(null)}>
-                Đóng
-              </button>
-            </header>
-            <dl className="detail-list">
-              <div>
-                <dt>Trạng thái</dt>
-                <dd>{productDetail.status === 1 ? 'Đang hiện' : 'Đã ẩn'}</dd>
-              </div>
-              <div>
-                <dt>Đơn vị</dt>
-                <dd>{productDetail.donVi || ''}</dd>
-              </div>
-              <div>
-                <dt>Lượt xem</dt>
-                <dd>{productDetail.viewCount}</dd>
-              </div>
-              <div>
-                <dt>Lượt thích</dt>
-                <dd>{productDetail.likeCount}</dd>
-              </div>
-              <div>
-                <dt>Đã bán</dt>
-                <dd>{productDetail.soldCount}</dd>
-              </div>
-              <div>
-                <dt>Đơn giữ hàng</dt>
-                <dd>
-                  {productDetail.reservationCount ?? 0} (hoàn thành{' '}
-                  {productDetail.completedReservations ?? 0})
-                </dd>
-              </div>
-              <div>
-                <dt>Tỉ lệ chuyển đổi</dt>
-                <dd>{productDetail.conversionRate ?? 0}% (xem → giữ hàng)</dd>
-              </div>
-              <div>
-                <dt>Ngày tạo</dt>
-                <dd>
-                  {productDetail.createdAt
-                    ? new Date(productDetail.createdAt).toLocaleString('vi-VN')
-                    : ''}
-                </dd>
-              </div>
-            </dl>
-            {(productDetail.thumbnails || []).length > 0 ? (
-              <div className="image-grid" style={{ marginTop: 12 }}>
-                {productDetail.thumbnails.slice(0, 6).map((url) => (
-                  <a key={url} href={url} target="_blank" rel="noreferrer">
-                    <img src={url} alt="Ảnh sản phẩm" />
-                  </a>
-                ))}
-              </div>
-            ) : null}
-            <p>{productDetail.description || 'Chưa có mô tả.'}</p>
-            <h3>Phân loại</h3>
-            <ul className="report-list">
-              {(productDetail.variants || []).map((variant) => (
-                <li key={variant.id} className="report-item">
-                  <strong>{variant.variantName}</strong>
-                  <p>
-                    {Number(variant.price || 0).toLocaleString('vi-VN')}đ · Tồn{' '}
-                    {variant.quantity} · Đã bán {variant.soldCount}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
       ) : null}
     </div>
   );

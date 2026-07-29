@@ -10,7 +10,6 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
-import { Ionicons } from '@expo/vector-icons';
 
 import {
   getFavoriteProductsOnBackend,
@@ -18,8 +17,10 @@ import {
 } from '../../api/favoriteApi';
 import { hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import ProductCard from '../shared/components/ProductCard';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_DEBOUNCE_MS = 400;
@@ -58,7 +59,7 @@ function mapFavoriteToProduct(item) {
 export default function FavoriteProductsScreen({
   onOpenProduct,
   onBack = null,
-  title = 'Quản lý sản phẩm yêu thích',
+  title = 'Sản phẩm yêu thích',
 }) {
   const insets = useScreenInsets();
   const searchTimerRef = useRef(null);
@@ -71,7 +72,6 @@ export default function FavoriteProductsScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [error, setError] = useState('');
 
   const loadLocation = useCallback(async () => {
     try {
@@ -98,13 +98,11 @@ export default function FavoriteProductsScreen({
       } else {
         setIsLoading(true);
       }
-      setError('');
-
       try {
         const idToken = await getCurrentUserIdToken();
         if (!idToken) {
           setFavorites([]);
-          setError('Đăng nhập để xem sản phẩm yêu thích.');
+          showErrorAlert('Đăng nhập để xem sản phẩm yêu thích.');
           return;
         }
 
@@ -129,7 +127,7 @@ export default function FavoriteProductsScreen({
         if (nextPage === 1) {
           setFavorites([]);
         }
-        setError(loadError.message || 'Không tải được danh sách yêu thích.');
+        showErrorAlert(loadError.message || 'Không tải được danh sách yêu thích.');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -188,20 +186,9 @@ export default function FavoriteProductsScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        {onBack ? (
-          <Pressable onPress={onBack} style={styles.backButton} hitSlop={8}>
-            <Ionicons name="chevron-back" size={24} color="#0f172a" />
-          </Pressable>
-        ) : null}
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
-        <View style={styles.countBadge}>
-          <Text style={styles.countText}>{pagination.total || favorites.length}</Text>
-        </View>
-      </View>
+      <SubScreenHeader title={title} onBack={onBack} />
 
+      <View style={styles.content}>
       <ClearableSearchField
         value={search}
         onChangeText={setSearch}
@@ -217,10 +204,6 @@ export default function FavoriteProductsScreen({
               <View key={index} style={styles.skeletonCard} />
             ))}
           </View>
-        </View>
-      ) : error ? (
-        <View style={styles.centerState}>
-          <Text style={styles.emptyTitle}>{error}</Text>
         </View>
       ) : (
         <FlatList
@@ -275,6 +258,7 @@ export default function FavoriteProductsScreen({
           }}
         />
       )}
+      </View>
     </View>
   );
 }
@@ -283,44 +267,11 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f5f8f7',
+  },
+  content: {
+    flex: 1,
     paddingHorizontal: 16,
     paddingTop: 12,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  title: {
-    flex: 1,
-    color: '#102a2a',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  countBadge: {
-    minWidth: 38,
-    height: 38,
-    paddingHorizontal: 10,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#e6f2ef',
-  },
-  countText: {
-    color: '#277068',
-    fontSize: 15,
-    fontWeight: '900',
   },
   searchField: {
     marginBottom: 12,

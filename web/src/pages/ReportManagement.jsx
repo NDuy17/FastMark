@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CheckCircle, Clock, Eye, MessageSquareWarning } from 'lucide-react';
 
 import {
   approveReport,
@@ -7,8 +8,19 @@ import {
   getReportDetail,
   listReports,
 } from '../api/reportApi';
+import AdminFilterPanel from '../components/admin/AdminFilterPanel';
+import AdminDateFilter from '../components/admin/AdminDateFilter';
+import AdminPageShell from '../components/admin/AdminPageShell';
+import AdminPagination from '../components/admin/AdminPagination';
+import DataTableShell from '../components/admin/DataTableShell';
+import TableIconActions from '../components/ui/TableIconActions';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
+import { formatDate } from '../utils/format';
 
 const REPORT_TYPE_OPTIONS = [
   { value: '', label: 'Tất cả' },
@@ -18,6 +30,8 @@ const REPORT_TYPE_OPTIONS = [
   { value: '4', label: 'Sản phẩm' },
   { value: '8', label: 'Hệ thống lỗi' },
   { value: '9', label: 'Khác' },
+  { value: '10', label: 'Khiếu nại khóa tài khoản' },
+  { value: '11', label: 'Khiếu nại khóa gian hàng' },
 ];
 
 const STATUS_FILTER_OPTIONS = [
@@ -32,12 +46,45 @@ const REPORT_TYPE = {
   PRODUCT: 4,
   SYSTEM: 8,
   OTHER: 9,
+  ACCOUNT_LOCK_APPEAL: 10,
+  SHOP_LOCK_APPEAL: 11,
 };
+
+const SHOP_LOCK_APPEAL_TITLE_PATTERN = /khóa gian hàng|khiếu nại.*gian hàng|yêu cầu xem xét lại.*gian/i;
+
+function isAccountLockAppealReport(detail) {
+  return Number(detail?.reportType) === REPORT_TYPE.ACCOUNT_LOCK_APPEAL;
+}
+
+function isShopLockAppealReport(detail) {
+  if (Number(detail?.reportType) === REPORT_TYPE.SHOP_LOCK_APPEAL) {
+    return true;
+  }
+  if (Number(detail?.reportType) !== REPORT_TYPE.OTHER) {
+    return false;
+  }
+  const title = String(detail?.title || detail?.reasonLabel || '');
+  return Boolean(detail?.shop?.id) && SHOP_LOCK_APPEAL_TITLE_PATTERN.test(title);
+}
+
+function isLockAppealReport(detail) {
+  return isAccountLockAppealReport(detail) || isShopLockAppealReport(detail);
+}
 
 const APPROVE_REPLY_TEMPLATES = [
   'Cảm ơn bạn đã báo cáo. Chúng tôi đã tiếp nhận và sẽ xem xét lại nội dung này.',
   'Cảm ơn bạn đã tố cáo. Đội ngũ FastMark đã ghi nhận và đang xử lý.',
   'Báo cáo của bạn đã được duyệt. Chúng tôi sẽ theo dõi và xử lý phù hợp.',
+];
+
+const LOCK_APPEAL_APPROVE_TEMPLATES = [
+  'Khiếu nại đã được chấp nhận. Tài khoản của bạn đã được mở khóa.',
+  'Chúng tôi đã xem xét và mở lại tài khoản cho bạn. Vui lòng tuân thủ quy định cộng đồng.',
+];
+
+const SHOP_LOCK_APPEAL_APPROVE_TEMPLATES = [
+  'Khiếu nại đã được chấp nhận. Gian hàng của bạn đã được mở khóa.',
+  'Chúng tôi đã xem xét và mở lại gian hàng cho bạn. Vui lòng tuân thủ quy định cộng đồng.',
 ];
 
 const DISMISS_REPLY_TEMPLATES = [
@@ -46,11 +93,46 @@ const DISMISS_REPLY_TEMPLATES = [
   'Tố cáo chưa đủ thông tin nên đã bị bác bỏ. Bạn có thể gửi lại với chi tiết rõ hơn.',
 ];
 
-function formatDate(value) {
-  if (!value) {
-    return '';
-  }
-  return new Date(value).toLocaleString('vi-VN');
+const LOCK_APPEAL_DISMISS_TEMPLATES = [
+  'Khiếu nại khóa tài khoản đã bị từ chối. Tài khoản vẫn bị khóa.',
+  'Sau khi xem xét, chúng tôi giữ nguyên quyết định khóa tài khoản.',
+];
+
+const SHOP_LOCK_APPEAL_DISMISS_TEMPLATES = [
+  'Khiếu nại khóa gian hàng đã bị từ chối. Gian hàng vẫn bị khóa.',
+  'Sau khi xem xét, chúng tôi giữ nguyên quyết định khóa gian hàng.',
+];
+
+const MEMBER_REPORT_TYPE_OPTIONS = [
+  { value: '', label: 'Tất cả (người dùng & gian hàng)' },
+  { value: '2', label: 'Người dùng' },
+  { value: '3', label: 'Gian hàng' },
+  { value: '10', label: 'Khiếu nại khóa tài khoản' },
+  { value: '11', label: 'Khiếu nại khóa gian hàng' },
+];
+
+const SCOPE_TO_REPORT_TYPE = {
+  user: '2',
+  shop: '3',
+  product: '4',
+};
+
+const REPORT_TYPE_TO_SCOPE = {
+  2: 'user',
+  3: 'shop',
+  4: 'product',
+};
+
+function syncReportQueryParams(searchParams, patch) {
+  const next = new URLSearchParams(searchParams);
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') {
+      next.delete(key);
+    } else {
+      next.set(key, String(value));
+    }
+  });
+  return next;
 }
 
 function statusBadgeClass(status) {
@@ -79,6 +161,8 @@ function typeBadgeClass(reportType) {
   if (reportType === REPORT_TYPE.SHOP) return 'badge badge-warning';
   if (reportType === REPORT_TYPE.PRODUCT) return 'badge badge-danger';
   if (reportType === REPORT_TYPE.SYSTEM) return 'badge badge-danger';
+  if (reportType === REPORT_TYPE.ACCOUNT_LOCK_APPEAL) return 'badge badge-warning';
+  if (reportType === REPORT_TYPE.SHOP_LOCK_APPEAL) return 'badge badge-warning';
   if (reportType === REPORT_TYPE.OTHER) return 'badge badge-neutral';
   return 'badge badge-neutral';
 }
@@ -144,6 +228,10 @@ function getReportedSubjectFieldLabel(reportType) {
       return 'Đối tượng bị báo cáo';
     case REPORT_TYPE.OTHER:
       return 'Đối tượng bị báo cáo';
+    case REPORT_TYPE.ACCOUNT_LOCK_APPEAL:
+      return 'Tài khoản khiếu nại';
+    case REPORT_TYPE.SHOP_LOCK_APPEAL:
+      return 'Gian hàng khiếu nại';
     default:
       return 'Đối tượng bị báo cáo';
   }
@@ -180,6 +268,25 @@ function getReportedSubjectValue(detail) {
       return summary;
     }
     return detail?.content || '';
+  }
+
+  if (reportType === REPORT_TYPE.ACCOUNT_LOCK_APPEAL) {
+    return (
+      formatTargetUserLine(detail?.reporter) ||
+      detail?.reporter?.fullName ||
+      detail?.reporter?.userName ||
+      ''
+    );
+  }
+
+  if (reportType === REPORT_TYPE.SHOP_LOCK_APPEAL || isShopLockAppealReport(detail)) {
+    return (
+      detail?.shop?.name ||
+      detail?.targetShopName ||
+      detail?.target_shop_name ||
+      formatTargetUserLine(detail?.reporter) ||
+      ''
+    );
   }
 
   return detail?.targetSubjectLabel || getReportTargetLabel(detail) || '';
@@ -341,13 +448,26 @@ function ReportDetailModal({
   onConfirmDismiss,
   onCancelAction,
 }) {
-  const isPending = detail?.status === 0;
+  const isPending = Number(detail?.status) === 0;
+  const isAccountLockAppeal = isAccountLockAppealReport(detail);
+  const isShopLockAppeal = isShopLockAppealReport(detail);
+  const isLockAppeal = isAccountLockAppeal || isShopLockAppeal;
   const review = detail?.review;
   const shop = detail?.shop;
   const product = detail?.product;
   const evidenceImages = detail?.evidenceImages || [];
   const [previewImage, setPreviewImage] = useState('');
-  const replyTemplates = showDismissOptions ? DISMISS_REPLY_TEMPLATES : APPROVE_REPLY_TEMPLATES;
+  const replyTemplates = showDismissOptions
+    ? isAccountLockAppeal
+      ? LOCK_APPEAL_DISMISS_TEMPLATES
+      : isShopLockAppeal
+        ? SHOP_LOCK_APPEAL_DISMISS_TEMPLATES
+        : DISMISS_REPLY_TEMPLATES
+    : isAccountLockAppeal
+      ? LOCK_APPEAL_APPROVE_TEMPLATES
+      : isShopLockAppeal
+        ? SHOP_LOCK_APPEAL_APPROVE_TEMPLATES
+        : APPROVE_REPLY_TEMPLATES;
   const composingReply = showApproveOptions || showDismissOptions;
 
   function handlePreview(url) {
@@ -498,19 +618,23 @@ function ReportDetailModal({
               </section>
 
               <section className="modal-section modal-section-actions">
-                <h4>Phản hồi người tố cáo</h4>
+                <h4>{isLockAppeal ? 'Xử lý khiếu nại khóa' : 'Phản hồi người tố cáo'}</h4>
                 {!isPending ? (
                   <div className="empty-card">Báo cáo này đã được xử lý trước đó.</div>
                 ) : composingReply ? (
                   <div className="action-option-group">
                     <p>
                       {showDismissOptions
-                        ? 'Chọn hoặc nhập nội dung thông báo khi bác bỏ.'
-                        : 'Chọn hoặc nhập nội dung thông báo khi duyệt.'}
+                        ? isLockAppeal
+                          ? 'Chọn hoặc nhập thông báo gửi người khiếu nại khi bác bỏ.'
+                          : 'Chọn hoặc nhập nội dung thông báo khi bác bỏ.'
+                        : isLockAppeal
+                          ? 'Chọn hoặc nhập thông báo gửi người khiếu nại khi mở lại.'
+                          : 'Chọn hoặc nhập nội dung thông báo khi duyệt.'}
                     </p>
 
                     <label className="report-reply-field">
-                      <strong>Thông báo gửi người tố cáo</strong>
+                      <strong>{isLockAppeal ? 'Thông báo gửi người khiếu nại' : 'Thông báo gửi người tố cáo'}</strong>
                       <div className="report-reply-templates">
                         {replyTemplates.map((template, index) => (
                           <button
@@ -556,7 +680,11 @@ function ReportDetailModal({
                           disabled={actionLoading || !String(replyMessage || '').trim()}
                           onClick={onConfirmApprove}
                         >
-                          {actionLoading ? 'Đang xử lý...' : 'Xác nhận duyệt'}
+                          {actionLoading
+                            ? 'Đang xử lý...'
+                            : isLockAppeal
+                              ? 'Xác nhận mở lại'
+                              : 'Xác nhận duyệt'}
                         </button>
                       )}
                     </div>
@@ -564,7 +692,11 @@ function ReportDetailModal({
                 ) : (
                   <>
                     <p className="report-action-hint">
-                      Duyệt hoặc bác bỏ. Hệ thống chỉ gửi thông báo phản hồi cho người tố cáo.
+                      {isAccountLockAppeal
+                        ? 'Bác bỏ sẽ giữ khóa tài khoản. Mở lại sẽ khôi phục quyền truy cập cho người khiếu nại.'
+                        : isShopLockAppeal
+                          ? 'Bác bỏ sẽ giữ khóa gian hàng. Mở lại sẽ khôi phục hoạt động gian hàng.'
+                          : 'Duyệt hoặc bác bỏ. Hệ thống chỉ gửi thông báo phản hồi cho người tố cáo.'}
                     </p>
                     <div className="report-action-row">
                       <button
@@ -581,7 +713,7 @@ function ReportDetailModal({
                         disabled={actionLoading}
                         onClick={onApprove}
                       >
-                        Duyệt
+                        {isLockAppeal ? 'Mở lại' : 'Duyệt'}
                       </button>
                     </div>
                   </>
@@ -676,17 +808,37 @@ function ReportDetailModal({
 
 export default function ReportManagement() {
   const { getIdToken } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const scopeFromUrl = searchParams.get('scope') || '';
+  const statusFromUrl = searchParams.get('status') || '';
+  const productIdFromUrl = searchParams.get('productId') || '';
+
   const [items, setItems] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: DEFAULT_PAGE_SIZE,
+    total: 0,
+    totalPages: 1,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [snackbar, setSnackbar] = useState('');
 
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [reportType, setReportType] = useState('');
-  const [statusFilter, setStatusFilter] = useState('pending');
+  const { input: searchInput, debounced: search, setInput: setSearchInput } = useDebouncedSearch();
+  const {
+    from: dateFrom,
+    to: dateTo,
+    preset: datePreset,
+    applyRange: applyDateRange,
+    resetRange: resetDateRange,
+    queryParams: dateQueryParams,
+  } = useAdminDateFilter();
+  const [reportType, setReportType] = useState(SCOPE_TO_REPORT_TYPE[scopeFromUrl] || '');
+  const [statusFilter, setStatusFilter] = useState(
+    statusFromUrl === '1' ? 'processed' : 'pending',
+  );
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
   const [dataMeta, setDataMeta] = useState(null);
 
   const [selectedReportId, setSelectedReportId] = useState('');
@@ -699,6 +851,39 @@ export default function ReportManagement() {
 
   const statusParam = statusFilter === 'pending' ? '0' : 'processed';
 
+  const pageMeta = useMemo(
+    () => ({
+      title: 'Xử lý báo cáo',
+      description: productIdFromUrl
+        ? 'Báo cáo liên quan đến sản phẩm đang xem.'
+        : 'Xử lý báo cáo gian hàng, người dùng, sản phẩm, đánh giá và khiếu nại khóa tài khoản. Tranh chấp đơn hàng xử lý tại Quản lý đơn hàng.',
+    }),
+    [productIdFromUrl],
+  );
+
+  useEffect(() => {
+    if (scopeFromUrl !== 'members') {
+      setReportType(SCOPE_TO_REPORT_TYPE[scopeFromUrl] || '');
+    }
+    if (statusFromUrl === '1') {
+      setStatusFilter('processed');
+    } else if (statusFromUrl === '0') {
+      setStatusFilter('pending');
+    }
+    resetDateRange();
+    setPage(1);
+  }, [scopeFromUrl, statusFromUrl, resetDateRange]);
+
+  const reportTypeOptions = useMemo(() => {
+    if (scopeFromUrl === 'members') {
+      return MEMBER_REPORT_TYPE_OPTIONS;
+    }
+    if (scopeFromUrl === 'product') {
+      return REPORT_TYPE_OPTIONS.filter((option) => !option.value || option.value === '4');
+    }
+    return REPORT_TYPE_OPTIONS;
+  }, [scopeFromUrl]);
+
   const loadItems = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -709,12 +894,22 @@ export default function ReportManagement() {
         search,
         reportType,
         status: statusParam,
+        scope: scopeFromUrl === 'members' ? 'members' : undefined,
+        productId: productIdFromUrl || undefined,
         page,
-        limit: 20,
+        limit,
+        ...dateQueryParams,
       });
 
       setItems(payload.data?.items || []);
-      setPagination(payload.data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 });
+      setPagination(
+        payload.data?.pagination || {
+          page: 1,
+          limit: DEFAULT_PAGE_SIZE,
+          total: 0,
+          totalPages: 1,
+        },
+      );
       setDataMeta(payload.data?.meta || null);
     } catch (loadError) {
       setError(loadError.message || 'Không tải được danh sách báo cáo.');
@@ -722,7 +917,7 @@ export default function ReportManagement() {
     } finally {
       setLoading(false);
     }
-  }, [getIdToken, page, reportType, search, statusParam]);
+  }, [getIdToken, limit, page, productIdFromUrl, reportType, scopeFromUrl, search, statusParam, dateFrom, dateTo, dateQueryParams]);
 
   const loadDetail = useCallback(
     async (reportId) => {
@@ -748,6 +943,8 @@ export default function ReportManagement() {
     loadItems();
   }, [loadItems]);
 
+  useAdminRealtimeRefresh('report', loadItems);
+
   useEffect(() => {
     if (!snackbar) {
       return undefined;
@@ -757,16 +954,42 @@ export default function ReportManagement() {
     return () => clearTimeout(timeoutId);
   }, [snackbar]);
 
-  function handleSearchSubmit(event) {
-    event.preventDefault();
+  useEffect(() => {
     setPage(1);
-    setSearch(searchInput.trim());
+  }, [search]);
+
+  function handleStatusFilterChange(value) {
+    setStatusFilter(value);
+    setPage(1);
+    setShowApproveOptions(false);
+    setShowDismissOptions(false);
+    const patch = {
+      status: value === 'processed' ? '1' : value === 'pending' ? '0' : null,
+    };
+    if (scopeFromUrl === 'members') {
+      patch.scope = 'members';
+    } else if (scopeFromUrl === 'product') {
+      patch.scope = 'product';
+    }
+    setSearchParams(syncReportQueryParams(searchParams, patch), { replace: true });
   }
 
-  function handleFilterChange(setter, value) {
-    setter(value);
+  function handleReportTypeChange(value) {
+    setReportType(value);
     setPage(1);
+    if (scopeFromUrl === 'members') {
+      return;
+    }
+    setSearchParams(
+      syncReportQueryParams(searchParams, {
+        scope: REPORT_TYPE_TO_SCOPE[value] || null,
+      }),
+      { replace: true },
+    );
   }
+
+  const pendingCount = items.filter((item) => item.status === 0).length;
+  const processedCount = items.filter((item) => item.status !== 0).length;
 
   function openDetail(reportId) {
     setSelectedReportId(reportId);
@@ -795,9 +1018,17 @@ export default function ReportManagement() {
   }
 
   function handleDismissClick() {
+    const isAccountLockAppeal = isAccountLockAppealReport(detail);
+    const isShopLockAppeal = isShopLockAppealReport(detail);
     setShowDismissOptions(true);
     setShowApproveOptions(false);
-    setReplyMessage(DISMISS_REPLY_TEMPLATES[0]);
+    setReplyMessage(
+      isAccountLockAppeal
+        ? LOCK_APPEAL_DISMISS_TEMPLATES[0]
+        : isShopLockAppeal
+          ? SHOP_LOCK_APPEAL_DISMISS_TEMPLATES[0]
+          : DISMISS_REPLY_TEMPLATES[0]
+    );
   }
 
   async function handleConfirmDismiss() {
@@ -816,7 +1047,15 @@ export default function ReportManagement() {
     try {
       const token = await getIdToken();
       const payload = await dismissReport(token, selectedReportId, message);
-      await refreshAfterAction(payload.message || 'Đã bác bỏ báo cáo vi phạm.', payload.data?.report);
+      await refreshAfterAction(
+        payload.message ||
+          (isAccountLockAppealReport(detail)
+            ? 'Đã bác bỏ khiếu nại khóa tài khoản.'
+            : isShopLockAppealReport(detail)
+              ? 'Đã bác bỏ khiếu nại khóa gian hàng.'
+              : 'Đã bác bỏ báo cáo vi phạm.'),
+        payload.data?.report
+      );
     } catch (actionError) {
       setError(actionError.message || 'Không bác bỏ được báo cáo.');
     } finally {
@@ -825,9 +1064,17 @@ export default function ReportManagement() {
   }
 
   function handleApproveClick() {
+    const isAccountLockAppeal = isAccountLockAppealReport(detail);
+    const isShopLockAppeal = isShopLockAppealReport(detail);
     setShowApproveOptions(true);
     setShowDismissOptions(false);
-    setReplyMessage(APPROVE_REPLY_TEMPLATES[0]);
+    setReplyMessage(
+      isAccountLockAppeal
+        ? LOCK_APPEAL_APPROVE_TEMPLATES[0]
+        : isShopLockAppeal
+          ? SHOP_LOCK_APPEAL_APPROVE_TEMPLATES[0]
+          : APPROVE_REPLY_TEMPLATES[0]
+    );
   }
 
   async function handleConfirmApprove() {
@@ -846,7 +1093,15 @@ export default function ReportManagement() {
     try {
       const token = await getIdToken();
       const payload = await approveReport(token, selectedReportId, 'resolve', message);
-      await refreshAfterAction(payload.message || 'Đã duyệt vi phạm thành công.', payload.data?.report);
+      await refreshAfterAction(
+        payload.message ||
+          (isAccountLockAppealReport(detail)
+            ? 'Đã mở lại tài khoản.'
+            : isShopLockAppealReport(detail)
+              ? 'Đã mở lại gian hàng.'
+              : 'Đã duyệt vi phạm thành công.'),
+        payload.data?.report
+      );
     } catch (actionError) {
       setError(actionError.message || 'Không duyệt được báo cáo.');
     } finally {
@@ -855,155 +1110,138 @@ export default function ReportManagement() {
   }
 
   return (
-    <div className="page">
-      <section className="filter-card">
-        <form className="filter-form" onSubmit={handleSearchSubmit}>
-          <label className="filter-search">
-            Tìm kiếm
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Nội dung, lý do, tên người báo cáo..."
-            />
-          </label>
-          <button type="submit" className="primary-btn">
-            Tìm
-          </button>
-        </form>
-
-        <div className="filter-grid">
-          <label>
-            Trạng thái
-            <select
-              value={statusFilter}
-              onChange={(event) => {
-                handleFilterChange(setStatusFilter, event.target.value);
-                setShowApproveOptions(false);
-                setShowDismissOptions(false);
-              }}
-            >
-              {STATUS_FILTER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Loại vi phạm
-            <select
-              value={reportType}
-              onChange={(event) => handleFilterChange(setReportType, event.target.value)}
-            >
-              {REPORT_TYPE_OPTIONS.map((option) => (
-                <option key={option.value || 'all-type'} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-
+    <AdminPageShell
+      icon={MessageSquareWarning}
+      title={pageMeta.title}
+      description={pageMeta.description}
+      stats={[
+        { label: 'Tổng báo cáo', value: loading ? '…' : pagination.total, icon: MessageSquareWarning, tone: 'green' },
+        { label: 'Chờ xử lý (trang)', value: loading ? '…' : pendingCount, icon: Clock, tone: 'amber' },
+        { label: 'Đã xử lý (trang)', value: loading ? '…' : processedCount, icon: CheckCircle, tone: 'blue' },
+      ]}
+    >
       {snackbar ? <p className="snackbar">{snackbar}</p> : null}
       {error ? <p className="error-banner">{error}</p> : null}
 
-      <section className="table-card">
-        <div className="table-toolbar">
-          <strong>
-            {statusFilter === 'pending' ? 'Báo cáo chờ xử lý' : 'Báo cáo đã xử lý'} ·{' '}
-            {pagination.total} phiếu
-          </strong>
-        </div>
-        <div className="account-table-wrap">
-          <table className="account-table">
-            <thead>
+      <DataTableShell
+        title={statusFilter === 'pending' ? 'Báo cáo chờ xử lý' : 'Báo cáo đã xử lý'}
+        filters={
+          <AdminFilterPanel
+            layout="inline"
+            searchValue={searchInput}
+            onSearchChange={setSearchInput}
+            searchPlaceholder="Nội dung, lý do, tên người báo cáo..."
+          >
+            <label>
+              Trạng thái
+              <select value={statusFilter} onChange={(event) => handleStatusFilterChange(event.target.value)}>
+                {STATUS_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Loại vi phạm
+              <select value={reportType} onChange={(event) => handleReportTypeChange(event.target.value)}>
+                {reportTypeOptions.map((option) => (
+                  <option key={option.value || 'all-type'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <AdminDateFilter
+              from={dateFrom}
+              to={dateTo}
+              preset={datePreset}
+              onApply={(range) => applyDateRange(range, () => setPage(1))}
+            />
+          </AdminFilterPanel>
+        }
+        pagination={
+          <AdminPagination
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            total={pagination.total}
+            label="báo cáo"
+            limit={limit}
+            onLimitChange={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+            loading={loading}
+            onPageChange={setPage}
+          />
+        }
+      >
+        <table className="account-table admin-data-table">
+          <thead>
+            <tr>
+              <th>Nội dung vi phạm</th>
+              <th>Loại</th>
+              <th>Lý do vi phạm</th>
+              <th>Người báo cáo</th>
+              <th>Trạng thái</th>
+              <th>Thời gian</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? <SkeletonRows /> : null}
+            {!loading && items.length === 0 ? (
               <tr>
-                <th>Nội dung vi phạm</th>
-                <th>Loại</th>
-                <th>Lý do vi phạm</th>
-                <th>Người báo cáo</th>
-                <th>Trạng thái</th>
-                <th>Thời gian</th>
-                <th />
+                <td colSpan={7} className="table-empty">
+                  {statusFilter === 'pending'
+                    ? 'Không có báo cáo chờ xử lý.'
+                    : 'Không có báo cáo đã xử lý.'}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {loading ? <SkeletonRows /> : null}
-              {!loading && items.length === 0 ? (
-                <tr>
-                  <td colSpan={7}>
-                    <div className="empty-card">
-                      {statusFilter === 'pending'
-                        ? 'Không có báo cáo chờ xử lý.'
-                        : 'Không có báo cáo đã xử lý.'}
-                    </div>
-                  </td>
-                </tr>
-              ) : null}
-              {!loading
-                ? items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <div className="account-primary">{item.content || item.title || ''}</div>
-                        {getReportTargetLabel(item) ? (
-                          <div className="report-target-meta">{getReportTargetLabel(item)}</div>
-                        ) : null}
-                      </td>
-                      <td>
-                        <span className={typeBadgeClass(item.reportType)}>{item.reportTypeLabel}</span>
-                      </td>
-                      <td>
-                        <span className={reasonBadgeClass(item.reasonLabel)}>{item.reasonLabel}</span>
-                      </td>
-                      <td>
-                        <div>{item.reporter?.fullName || item.reporter?.userName || ''}</div>
-                        <div className="account-secondary">{item.reporter?.email || ''}</div>
-                      </td>
-                      <td>
-                        <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
-                      </td>
-                      <td>
-                        <div className="account-secondary">Gửi: {formatDate(item.createdAt)}</div>
-                        <div className="account-secondary">Xử lý: {formatDate(item.processedAt)}</div>
-                      </td>
-                      <td>
-                        <button type="button" className="detail-btn" onClick={() => openDetail(item.id)}>
-                          Chi tiết
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div className="pagination-row">
-        <span>
-          Trang {pagination.page}/{pagination.totalPages} • {pagination.total} báo cáo
-          {dataMeta?.dataSource ? ` • Nguồn: ${dataMeta.dataSource}` : ''}
-        </span>
-        <div className="pagination-actions">
-          <button
-            type="button"
-            className="ghost-btn"
-            disabled={loading || pagination.page <= 1}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-          >
-            Trước
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            disabled={loading || pagination.page >= pagination.totalPages}
-            onClick={() => setPage((current) => current + 1)}
-          >
-            Sau
-          </button>
-        </div>
-      </div>
+            ) : null}
+            {!loading
+              ? items.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <div className="account-primary">{item.content || item.title || ''}</div>
+                      {getReportTargetLabel(item) ? (
+                        <div className="report-target-meta">{getReportTargetLabel(item)}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <span className={typeBadgeClass(item.reportType)}>{item.reportTypeLabel}</span>
+                    </td>
+                    <td>
+                      <span className={reasonBadgeClass(item.reasonLabel)}>{item.reasonLabel}</span>
+                    </td>
+                    <td>
+                      <div>{item.reporter?.fullName || item.reporter?.userName || ''}</div>
+                      <div className="account-secondary">{item.reporter?.email || ''}</div>
+                    </td>
+                    <td>
+                      <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
+                    </td>
+                    <td>
+                      <div className="account-secondary">Gửi: {formatDate(item.createdAt)}</div>
+                      <div className="account-secondary">Xử lý: {formatDate(item.processedAt)}</div>
+                    </td>
+                    <td>
+                      <TableIconActions
+                        actions={[
+                          {
+                            icon: Eye,
+                            label: 'Chi tiết báo cáo',
+                            onClick: () => openDetail(item.id),
+                          },
+                        ]}
+                      />
+                    </td>
+                  </tr>
+                ))
+              : null}
+          </tbody>
+        </table>
+      </DataTableShell>
 
       {selectedReportId ? (
         <ReportDetailModal
@@ -1026,6 +1264,6 @@ export default function ReportManagement() {
           }}
         />
       ) : null}
-    </div>
+    </AdminPageShell>
   );
 }

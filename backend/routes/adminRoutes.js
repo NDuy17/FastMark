@@ -10,6 +10,7 @@ const adminDashboardController = require("../controllers/adminDashboardControlle
 const adminCatalogController = require("../controllers/adminCatalogController");
 const adminReservationController = require("../controllers/adminReservationController");
 const adminInsightController = require("../controllers/adminInsightController");
+const adminFollowController = require("../controllers/adminFollowController");
 
 const router = express.Router();
 
@@ -45,6 +46,18 @@ router.get(
   asyncHandler(adminInsightController.getAccountFinance)
 );
 router.get(
+  "/accounts/:id/following",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminFollowController.listAccountFollowing)
+);
+router.get(
+  "/accounts/:id/followers",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminFollowController.listAccountFollowers)
+);
+router.get(
   "/finance/overview",
   verifyFirebaseToken,
   requireAdmin,
@@ -75,6 +88,24 @@ router.get(
   verifyFirebaseToken,
   requireAdmin,
   asyncHandler(adminCatalogController.getShopDetail)
+);
+router.get(
+  "/shops/:id/history",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminInsightController.getShopHistory)
+);
+router.get(
+  "/shops/:id/following",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminFollowController.listShopFollowing)
+);
+router.get(
+  "/shops/:id/followers",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminFollowController.listShopFollowers)
 );
 router.post(
   "/shops/:id/block",

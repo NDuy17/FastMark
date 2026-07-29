@@ -1,7 +1,7 @@
-const messageService = require("../services/messageService");
 const buyerReviewService = require("../services/buyerReviewService");
 const favoriteProductService = require("../services/favoriteProductService");
 const userFollowService = require("../services/userFollowService");
+const userDiscoveryService = require("../services/userDiscoveryService");
 const reportService = require("../services/reportService");
 const { success, fail } = require("../utils/apiResponse");
 
@@ -16,91 +16,6 @@ function pickBodyValue(body, keys) {
   }
   return "";
 }
-
-exports.listConversations = async (req, res) => {
-  const conversations = await messageService.listBuyerConversations(req.currentUser);
-  return success(res, { data: { conversations } });
-};
-
-exports.listShops = async (req, res) => {
-  const shops = await messageService.listShopsForBuyer(req.currentUser);
-  return success(res, { data: { shops } });
-};
-
-exports.startConversation = async (req, res) => {
-  const shopId = pickBodyValue(req.body, ["shopId", "shop_id"]);
-  if (!shopId) {
-    return fail(res, { status: 400, message: "Thiếu shopId." });
-  }
-
-  const content = pickBodyValue(req.body, ["content", "message"]);
-  const shopName = pickBodyValue(req.body, ["shopName", "shop_name"]);
-  const messageType = req.body.messageType;
-  const imageContent = pickBodyValue(req.body, ["imageContent", "imageUri"]);
-
-  const result = await messageService.startConversationWithShop(req.currentUser, shopId, {
-    shopName,
-    content,
-    messageType,
-    imageContent,
-  });
-
-  return success(res, {
-    message: "Đã mở cuộc trò chuyện.",
-    data: result,
-  });
-};
-
-exports.listMessages = async (req, res) => {
-  const result = await messageService.listBuyerConversationMessages(
-    req.currentUser,
-    req.params.id
-  );
-  return success(res, { data: result });
-};
-
-exports.sendMessage = async (req, res) => {
-  const content = pickBodyValue(req.body, ["content", "message"]);
-  const imageContent = pickBodyValue(req.body, ["imageContent", "imageUri"]);
-  const messageType = req.body.messageType;
-
-  if (!content && !imageContent && Number(messageType) !== 1) {
-    return fail(res, { status: 400, message: "Thiếu nội dung tin nhắn." });
-  }
-
-  const message = await messageService.sendBuyerMessage(req.currentUser, req.params.id, {
-    content,
-    messageType,
-    imageContent,
-  });
-
-  return success(res, {
-    message: "Đã gửi tin nhắn.",
-    data: { message },
-  });
-};
-
-exports.deleteMessage = async (req, res) => {
-  const message = await messageService.deleteMessage(
-    req.currentUser,
-    req.params.id,
-    req.params.messageId,
-    { asSeller: false }
-  );
-
-  return success(res, {
-    message: "Đã gỡ tin nhắn.",
-    data: {
-      message,
-      lastMessage: message.conversationLastMessage || "",
-    },
-  });
-};
-
-exports.getConversationPeer = async (req, res) => {
-  const peer = await messageService.getBuyerConversationPeer(req.currentUser, req.params.id);
-  return success(res, { data: { peer } });
-};
 
 exports.listReviews = async (req, res) => {
   const reviews = await buyerReviewService.listBuyerReviews(req.currentUser);
@@ -271,4 +186,21 @@ exports.createReport = async (req, res) => {
     message: "Đã gửi báo cáo vi phạm.",
     data: { report },
   });
+};
+
+exports.searchUsers = async (req, res) => {
+  const data = await userDiscoveryService.searchUsers(req.currentUser, req.query);
+  return success(res, { data });
+};
+
+exports.getPublicUserProfile = async (req, res) => {
+  const userId = String(req.params.userId || "").trim();
+  const data = await userDiscoveryService.getPublicUserProfile(req.currentUser, userId);
+  return success(res, { data });
+};
+
+exports.getPublicUserFollowing = async (req, res) => {
+  const userId = String(req.params.userId || "").trim();
+  const data = await userDiscoveryService.listPublicUserFollowing(userId, req.query);
+  return success(res, { data });
 };

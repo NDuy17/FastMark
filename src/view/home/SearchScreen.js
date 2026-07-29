@@ -13,9 +13,12 @@ import { useSelector } from 'react-redux';
 
 import { discoverProductsOnBackend, listPromotionProductsOnBackend } from '../../api/productApi';
 import { fetchSearchShopsFromNode } from '../../api/storeNodeApi';
+import { searchUsersOnBackend } from '../../api/userDiscoveryApi';
+import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { normalizeProduct } from '../../model/productModel';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { formatDistance, hasValidLocation } from '../../core/utils/geo';
+import { showErrorAlert } from '../../core/utils/appAlert';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import {
   addSearchHistory,
@@ -26,7 +29,7 @@ import {
 import { selectAuthProfile, selectAuthUser } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
-import CircularBackButton from '../shared/components/CircularBackButton';
+import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_TABS = [
@@ -184,6 +187,35 @@ function ShopResultRow({ shop, onPress }) {
   );
 }
 
+function UserResultRow({ user, onPress }) {
+  const displayName = user.fullName || user.userName || 'Người dùng';
+  const username = user.userName ? `@${String(user.userName).replace(/^@+/, '')}` : '';
+  const avatar = isRemoteAvatarUrl(user.avatar) ? user.avatar : '';
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.resultRow, pressed && styles.pressed]}
+      onPress={() => onPress?.(user.userId || user.id)}
+    >
+      <AvatarBadge name={displayName} uri={avatar} size={48} />
+      <View style={styles.resultBody}>
+        <Text style={styles.resultTitle} numberOfLines={1}>
+          {displayName}
+        </Text>
+        {username ? (
+          <Text style={styles.resultMetaText} numberOfLines={1}>
+            {username}
+          </Text>
+        ) : null}
+        <Text style={styles.resultMetaText} numberOfLines={1}>
+          {Number(user.followersCount) || 0} người theo dõi
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+    </Pressable>
+  );
+}
+
 function HistoryRow({ keyword, onPress, onRemove }) {
   return (
     <Pressable
@@ -208,33 +240,48 @@ function HistoryRow({ keyword, onPress, onRemove }) {
 
 function SuggestionRow({ item, onPress }) {
   const isProduct = item.type === 'product';
+  const isUser = item.type === 'user';
   const label = isProduct
     ? item.data.name
-    : item.data.shop_name || item.data.name || 'Gian hàng';
-  const username = item.data.shop_username || item.data.shopUsername || item.data.userName || '';
+    : isUser
+      ? item.data.fullName || item.data.displayName || item.data.userName || 'Người dùng'
+      : item.data.shop_name || item.data.name || 'Gian hàng';
+  const username = isUser
+    ? item.data.userName || item.data.username || ''
+    : item.data.shop_username || item.data.shopUsername || item.data.userName || '';
   const subtitle = isProduct
     ? item.data.storeName || 'Sản phẩm'
-    : username
-      ? `@${String(username).replace(/^@+/, '')}`
-      : 'Gian hàng';
-  const distance = formatDistance(item.distance);
+    : isUser
+      ? username
+        ? `@${String(username).replace(/^@+/, '')}`
+        : 'Người dùng'
+      : username
+        ? `@${String(username).replace(/^@+/, '')}`
+        : 'Gian hàng';
+  const distance = isUser ? '' : formatDistance(item.distance);
+  const iconName = isProduct ? 'cube-outline' : isUser ? 'person-outline' : 'storefront-outline';
+  const typeLabel = isProduct ? 'Sản phẩm' : isUser ? 'Người dùng' : 'Gian hàng';
 
   return (
     <Pressable
       style={({ pressed }) => [styles.suggestRow, pressed && styles.pressed]}
       onPress={() => onPress?.(item)}
     >
-      <Ionicons
-        name={isProduct ? 'cube-outline' : 'storefront-outline'}
-        size={18}
-        color="#076F32"
-      />
+      {isUser ? (
+        <AvatarBadge
+          name={label}
+          uri={item.data.avatarUrl || item.data.avatar || ''}
+          size={28}
+        />
+      ) : (
+        <Ionicons name={iconName} size={18} color="#076F32" />
+      )}
       <View style={styles.suggestBody}>
         <Text style={styles.suggestText} numberOfLines={1}>
           {label}
         </Text>
         <Text style={styles.suggestSubText} numberOfLines={1}>
-          {isProduct ? `Sản phẩm · ${subtitle}` : `Gian hàng · ${subtitle}`}
+          {`${typeLabel} · ${subtitle}`}
         </Text>
       </View>
       {distance && distance !== '--' ? (
@@ -244,7 +291,7 @@ function SuggestionRow({ item, onPress }) {
   );
 }
 
-export default function SearchScreen({ currentLocation, onBack, onOpenProduct, onOpenShop }) {
+export default function SearchScreen({ currentLocation, onBack, onOpenProduct, onOpenShop, onOpenBuyer }) {
   const insets = useScreenInsets();
   const authUser = useSelector(selectAuthUser);
   const profile = useSelector(selectAuthProfile);
@@ -256,6 +303,7 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
   const [activeTab, setActiveTab] = useState('all');
   const [products, setProducts] = useState([]);
   const [shops, setShops] = useState([]);
+  const [users, setUsers] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [history, setHistory] = useState([]);
   const [isSuggesting, setIsSuggesting] = useState(false);
@@ -308,7 +356,8 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
 
       const requestId = ++searchRequestIdRef.current;
       try {
-        const [rows, promoRows, shopResult] = await Promise.all([
+        const idToken = await getCurrentUserIdToken();
+        const [rows, promoRows, shopResult, userResult] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
@@ -329,6 +378,7 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
             identityOnly: true,
             limit: 50,
           }),
+          searchUsersOnBackend(idToken, { search: keyword, limit: 50 }).catch(() => ({ items: [] })),
         ]);
 
         if (searchRequestIdRef.current !== requestId) {
@@ -339,11 +389,13 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
         setShops(
           sortByDistanceAsc(Array.isArray(shopResult?.shops) ? shopResult.shops : [], shopDistance)
         );
+        setUsers(Array.isArray(userResult?.items) ? userResult.items : []);
       } catch (error) {
         if (searchRequestIdRef.current === requestId) {
           setProducts([]);
           setShops([]);
-          setErrorText(error.message || 'Không tìm kiếm được. Vui lòng thử lại.');
+          setUsers([]);
+          showErrorAlert(error.message || 'Không tìm kiếm được. Vui lòng thử lại.');
         }
       } finally {
         if (searchRequestIdRef.current === requestId) {
@@ -373,7 +425,8 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
 
     const timer = setTimeout(async () => {
       try {
-        const [productRows, shopResult] = await Promise.all([
+        const idToken = await getCurrentUserIdToken().catch(() => null);
+        const [productRows, shopResult, userResult] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
@@ -389,6 +442,11 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
             identityOnly: true,
             limit: SUGGEST_LIMIT,
           }),
+          idToken
+            ? searchUsersOnBackend(idToken, { search: trimmedQuery, limit: SUGGEST_LIMIT }).catch(
+                () => ({ items: [] })
+              )
+            : Promise.resolve({ items: [] }),
         ]);
 
         if (suggestRequestIdRef.current !== requestId) {
@@ -419,8 +477,16 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
             distance: shopDistance(shop),
           }));
 
-        // Luôn gợi ý cả sản phẩm và gian hàng/người dùng, ưu tiên gần trước.
-        const merged = [...productSuggestions, ...shopSuggestions].sort(
+        const userSuggestions = (Array.isArray(userResult?.items) ? userResult.items : [])
+          .slice(0, SUGGEST_LIMIT)
+          .map((user) => ({
+            id: `user-${user.id}`,
+            type: 'user',
+            data: user,
+            distance: Number.POSITIVE_INFINITY,
+          }));
+
+        const merged = [...productSuggestions, ...shopSuggestions, ...userSuggestions].sort(
           (left, right) => left.distance - right.distance
         );
 
@@ -480,6 +546,14 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       onOpenProduct?.(item.data.id);
       return;
     }
+    if (item.type === 'user') {
+      const name = String(item.data?.fullName || item.data?.userName || '').trim();
+      if (name && historyUserId) {
+        addSearchHistory(historyUserId, name).then(setHistory);
+      }
+      onOpenBuyer?.(item.data.id);
+      return;
+    }
     const name = String(item.data?.shop_name || item.data?.name || '').trim();
     if (name && historyUserId) {
       addSearchHistory(historyUserId, name).then(setHistory);
@@ -500,8 +574,16 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       data: shop,
       distance: shopDistance(shop),
     }));
-    return [...productItems, ...shopItems].sort((left, right) => left.distance - right.distance);
-  }, [products, shops]);
+    const userItems = users.map((user) => ({
+      key: `user-${user.userId || user.id}`,
+      type: 'user',
+      data: user,
+      distance: Number.POSITIVE_INFINITY,
+    }));
+    return [...productItems, ...shopItems, ...userItems].sort(
+      (left, right) => left.distance - right.distance
+    );
+  }, [products, shops, users]);
 
   const listData = useMemo(() => {
     if (activeTab === 'products') {
@@ -512,14 +594,14 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       }));
     }
     if (activeTab === 'users') {
-      return shops.map((shop) => ({
-        key: `shop-${shop.id}`,
-        type: 'shop',
-        data: shop,
+      return users.map((user) => ({
+        key: `user-${user.userId || user.id}`,
+        type: 'user',
+        data: user,
       }));
     }
     return allItems;
-  }, [activeTab, allItems, products, shops]);
+  }, [activeTab, allItems, products, users]);
 
   const emptyText = useMemo(() => {
     if (!showResults || isSearching) {
@@ -536,12 +618,7 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <CircularBackButton onPress={onBack} variant="plain" style={styles.headerRoundBtn} />
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          Tìm kiếm
-        </Text>
-      </View>
+      <SubScreenHeader title="Tìm kiếm" onBack={onBack} />
 
       <View style={styles.searchBarWrap}>
         <ClearableSearchField
@@ -597,6 +674,8 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
             renderItem={({ item }) =>
               item.type === 'product' ? (
                 <ProductResultRow product={item.data} onPress={onOpenProduct} />
+              ) : item.type === 'user' ? (
+                <UserResultRow user={item.data} onPress={onOpenBuyer} />
               ) : (
                 <ShopResultRow shop={item.data} onPress={onOpenShop} />
               )
@@ -662,26 +741,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f8fafc',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 8,
-    backgroundColor: '#ffffff',
-  },
-  headerRoundBtn: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0f172a',
   },
   searchBarWrap: {
     paddingHorizontal: 16,

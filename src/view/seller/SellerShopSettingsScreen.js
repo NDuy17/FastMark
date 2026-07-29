@@ -2,14 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
-  Image,
-  Linking,
   Pressable,
-  Share,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -18,6 +14,7 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import {
   getSellerShopSettingsOnBackend,
   updateSellerShopSettingsOnBackend,
+  checkSellerShopUsernameAvailabilityOnBackend,
 } from '../../api/sellerOpsApi';
 import { syncSellerAccess, applyShopSettingsToProfile } from '../../viewmodel/auth/authSlice';
 import { selectAuthProfile } from '../../viewmodel/auth/authSelectors';
@@ -25,6 +22,32 @@ import { reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import SellerLocationPickerScreen from './SellerLocationPickerScreen';
 import TimePickerField from '../shared/components/TimePickerField';
+import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
+
+const SHOP_USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
+
+function normalizeShopUsername(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getShopNameError(value) {
+  const normalized = String(value || '').trim();
+  if (normalized.length < 2) {
+    return 'Tên gian hàng phải có ít nhất 2 ký tự.';
+  }
+  return '';
+}
+
+function getShopUsernameFormatError(value) {
+  const normalized = normalizeShopUsername(value);
+  if (!normalized) {
+    return 'Vui lòng nhập username gian hàng.';
+  }
+  if (!SHOP_USERNAME_PATTERN.test(normalized)) {
+    return 'Username shop: 3-30 ký tự, chữ thường, số và dấu _.';
+  }
+  return '';
+}
 
 export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSaved }) {
   const dispatch = useDispatch();
@@ -35,22 +58,27 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
   const [isPickingLocation, setIsPickingLocation] = useState(false);
 
   const [systemAddress, setSystemAddress] = useState('');
+  const [shopName, setShopName] = useState('');
+  const [shopUsername, setShopUsername] = useState('');
+  const [initialShopUsername, setInitialShopUsername] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [isCheckingShopUsername, setIsCheckingShopUsername] = useState(false);
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
   const [description, setDescription] = useState('');
   const [openTime, setOpenTime] = useState('');
   const [closeTime, setCloseTime] = useState('');
   const [isOpen, setIsOpen] = useState(true);
-  const [depositPercent, setDepositPercent] = useState(0);
-  const [qrPayload, setQrPayload] = useState('');
-  const [qrCodeValue, setQrCodeValue] = useState('');
-  const [shopId, setShopId] = useState('');
+  const [depositPercent, setDepositPercent] = useState('0');
 
   const loadSettings = useCallback(async () => {
     setIsLoading(true);
     try {
       const idToken = await getCurrentUserIdToken();
       const shop = await getSellerShopSettingsOnBackend(idToken);
+      setShopName(shop.shopName || '');
+      setShopUsername(shop.shopUsername || '');
+      setInitialShopUsername(normalizeShopUsername(shop.shopUsername || ''));
       setSystemAddress(shop.systemAddress || shop.addressHeThong || '');
       setLatitude(Number.isFinite(Number(shop.latitude)) ? Number(shop.latitude) : null);
       setLongitude(Number.isFinite(Number(shop.longitude)) ? Number(shop.longitude) : null);
@@ -58,14 +86,7 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
       setOpenTime(shop.openTime || '08:00');
       setCloseTime(shop.closeTime || '21:00');
       setIsOpen(Number(shop.isOpen) === 1);
-      setDepositPercent(Math.max(0, Math.min(100, Number(shop.depositPercent) || 0)));
-      const nextShopId = String(shop.shopId || shop.id || '');
-      setShopId(nextShopId);
-      setQrCodeValue(String(shop.qrCodeValue || nextShopId));
-      setQrPayload(
-        shop.qrPayload ||
-          JSON.stringify({ shopId: String(shop.qrCodeValue || nextShopId) })
-      );
+      setDepositPercent(String(Math.max(0, Math.min(100, Number(shop.depositPercent) || 0))));
       dispatch(applyShopSettingsToProfile(shop));
     } catch (loadError) {
       Alert.alert('Lỗi', loadError.message || 'Không tải được cài đặt cửa hàng.');
@@ -111,7 +132,89 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
     setIsPickingLocation(false);
   }
 
+  async function handleShopUsernameBlur() {
+    const normalized = normalizeShopUsername(shopUsername);
+    setShopUsername(normalized);
+
+    const formatError = getShopUsernameFormatError(normalized);
+    if (formatError) {
+      setFieldErrors((current) => ({ ...current, shopUsername: formatError }));
+      return;
+    }
+
+    if (normalized === initialShopUsername) {
+      setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+      return;
+    }
+
+    await verifyShopUsernameAvailability(normalized);
+  }
+
+  function handleShopNameBlur() {
+    const normalized = String(shopName || '').trim();
+    setShopName(normalized);
+    setFieldErrors((current) => ({ ...current, shopName: getShopNameError(normalized) }));
+  }
+
+  async function verifyShopUsernameAvailability(nextUsername) {
+    const normalized = normalizeShopUsername(nextUsername);
+    const formatError = getShopUsernameFormatError(normalized);
+    if (formatError) {
+      setFieldErrors((current) => ({ ...current, shopUsername: formatError }));
+      return false;
+    }
+    if (normalized === initialShopUsername) {
+      setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+      return true;
+    }
+
+    setIsCheckingShopUsername(true);
+    try {
+      const idToken = await getCurrentUserIdToken();
+      const result = await checkSellerShopUsernameAvailabilityOnBackend({
+        idToken,
+        shopUsername: normalized,
+      });
+      if (!result?.available) {
+        setFieldErrors((current) => ({
+          ...current,
+          shopUsername: result?.message || 'Username shop đã được sử dụng.',
+        }));
+        return false;
+      }
+      setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+      return true;
+    } catch (checkError) {
+      setFieldErrors((current) => ({
+        ...current,
+        shopUsername: checkError.message || 'Không kiểm tra được username shop.',
+      }));
+      return false;
+    } finally {
+      setIsCheckingShopUsername(false);
+    }
+  }
+
   async function handleSave() {
+    const shopNameError = getShopNameError(shopName);
+    if (shopNameError) {
+      setFieldErrors((current) => ({ ...current, shopName: shopNameError }));
+      Alert.alert('Lỗi', shopNameError);
+      return;
+    }
+
+    const usernameFormatError = getShopUsernameFormatError(shopUsername);
+    if (usernameFormatError || fieldErrors.shopUsername || isCheckingShopUsername) {
+      Alert.alert('Lỗi', usernameFormatError || fieldErrors.shopUsername || 'Đang kiểm tra username shop...');
+      return;
+    }
+
+    const usernameOk = await verifyShopUsernameAvailability(shopUsername);
+    if (!usernameOk) {
+      Alert.alert('Lỗi', fieldErrors.shopUsername || 'Username shop không hợp lệ.');
+      return;
+    }
+
     if (!systemAddress.trim()) {
       Alert.alert('Lỗi', 'Vui lòng chọn vị trí cửa hàng để lấy địa chỉ hệ thống.');
       return;
@@ -130,12 +233,21 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
       return;
     }
 
+    const parsedDepositPercent = Number(String(depositPercent).trim());
+    if (!Number.isFinite(parsedDepositPercent) || parsedDepositPercent < 0 || parsedDepositPercent > 100) {
+      Alert.alert('Lỗi', 'Phần trăm đặt cọc phải từ 0 đến 100.');
+      return;
+    }
+    const normalizedDepositPercent = Math.round(parsedDepositPercent);
+
     setIsSaving(true);
     try {
       const idToken = await getCurrentUserIdToken();
       const updated = await updateSellerShopSettingsOnBackend({
         idToken,
         payload: {
+          shopName: String(shopName).trim(),
+          shopUsername: normalizeShopUsername(shopUsername),
           description: description.trim(),
           systemAddress: systemAddress.trim(),
           addressHeThong: systemAddress.trim(),
@@ -144,17 +256,20 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
           openTime: nextOpenTime,
           closeTime: nextCloseTime,
           isOpen: isOpen ? 1 : 0,
-          depositPercent: Math.max(0, Math.min(100, Number(depositPercent) || 0)),
+          depositPercent: normalizedDepositPercent,
         },
       });
 
       if (updated) {
+        setShopName(updated.shopName || shopName);
+        setShopUsername(updated.shopUsername || shopUsername);
+        setInitialShopUsername(normalizeShopUsername(updated.shopUsername || shopUsername));
         setSystemAddress(updated.systemAddress || updated.addressHeThong || systemAddress);
         setDescription(updated.description || '');
         setOpenTime(updated.openTime || nextOpenTime);
         setCloseTime(updated.closeTime || nextCloseTime);
         setIsOpen(Number(updated.isOpen) === 1);
-        setDepositPercent(Math.max(0, Math.min(100, Number(updated.depositPercent) || 0)));
+        setDepositPercent(String(Math.max(0, Math.min(100, Number(updated.depositPercent) || 0))));
         dispatch(applyShopSettingsToProfile(updated));
         onSaved?.(updated);
       } else {
@@ -203,6 +318,50 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
     <View style={styles.screenWrap}>
       <ProfileSubScreen title="Cài đặt cửa hàng" onBack={onBack}>
         <View style={styles.card}>
+          <Field
+            label="Tên gian hàng"
+            value={shopName}
+            onChangeText={(value) => {
+              setShopName(value);
+              setFieldErrors((current) => ({ ...current, shopName: '' }));
+            }}
+            onFocus={() => setFieldErrors((current) => ({ ...current, shopName: '' }))}
+            onBlur={handleShopNameBlur}
+            placeholder="Tên hiển thị công khai"
+            error={fieldErrors.shopName}
+            hint="Tối thiểu 2 ký tự."
+            identity
+          />
+          <Field
+            label="Username"
+            value={shopUsername}
+            onChangeText={(value) => {
+              setShopUsername(normalizeShopUsername(value));
+              setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+            }}
+            onFocus={() => {
+              setFieldErrors((current) => ({ ...current, shopUsername: '' }));
+              const normalized = normalizeShopUsername(shopUsername);
+              if (!normalized || normalized === initialShopUsername) {
+                return;
+              }
+              if (getShopUsernameFormatError(normalized)) {
+                return;
+              }
+              verifyShopUsernameAvailability(normalized);
+            }}
+            onBlur={handleShopUsernameBlur}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="vd: tiembanh_123"
+            error={fieldErrors.shopUsername}
+            hint="3-30 ký tự, chỉ chữ thường, số và dấu gạch dưới."
+            identity
+            spaced
+          />
+
+          <View style={styles.divider} />
+
           <Text style={styles.sectionTitle}>SĐT</Text>
           <Text style={styles.readOnlyValue}>{displayPhone}</Text>
           <Pressable
@@ -211,178 +370,130 @@ export default function SellerShopSettingsScreen({ onBack, onChangePhone, onSave
           >
             <Text style={styles.secondaryButtonText}>Đổi SĐT</Text>
           </Pressable>
-        </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Địa chỉ</Text>
+          <View style={styles.divider} />
 
-        <View style={styles.locationBox}>
-          <Text style={styles.locationLabel}>Vị trí cửa hàng</Text>
-          <Text style={styles.locationValue}>
-            {Number.isFinite(latitude) && Number.isFinite(longitude)
-              ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
-              : 'Chưa chọn vị trí'}
-          </Text>
+          <Text style={styles.sectionTitle}>Địa chỉ</Text>
+          <View style={styles.locationBox}>
+            <Text style={styles.locationLabel}>Vị trí cửa hàng</Text>
+            <Text style={styles.locationValue}>
+              {Number.isFinite(latitude) && Number.isFinite(longitude)
+                ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
+                : 'Chưa chọn vị trí'}
+            </Text>
 
-          {systemAddress ? (
-            <View style={styles.systemAddressBox}>
-              <Text style={styles.systemAddressLabel}>Địa chỉ hệ thống</Text>
-              <Text style={styles.systemAddressText}>{systemAddress}</Text>
-            </View>
-          ) : null}
+            {systemAddress ? (
+              <View style={styles.systemAddressBox}>
+                <Text style={styles.systemAddressLabel}>Địa chỉ hệ thống</Text>
+                <Text style={styles.systemAddressText}>{systemAddress}</Text>
+              </View>
+            ) : null}
 
-          <View style={styles.locationButtonRow}>
-            <Pressable
-              disabled={isLocating}
-              onPress={handleUseCurrentLocation}
-              style={({ pressed }) => [
-                styles.locationButton,
-                pressed && styles.buttonPressed,
-                isLocating && styles.buttonDisabled,
-              ]}
-            >
-              {isLocating ? (
-                <ActivityIndicator color="#076F32" />
-              ) : (
-                <Text style={styles.locationButtonText}>Vị trí hiện tại</Text>
-              )}
-            </Pressable>
-            <Pressable
-              onPress={() => setIsPickingLocation(true)}
-              style={({ pressed }) => [styles.locationButton, pressed && styles.buttonPressed]}
-            >
-              <Text style={styles.locationButtonText}>Chọn trên bản đồ</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        <Field
-          label="Mô tả cửa hàng"
-          value={description}
-          onChangeText={setDescription}
-          multiline
-        />
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Giờ hoạt động</Text>
-        <TimePickerField
-          label="Giờ mở cửa"
-          value={openTime}
-          onChange={setOpenTime}
-          placeholder="08:00"
-        />
-        <TimePickerField
-          label="Giờ đóng cửa"
-          value={closeTime}
-          onChange={setCloseTime}
-          placeholder="21:00"
-        />
-        <View style={styles.switchRow}>
-          <View style={styles.switchInfo}>
-            <Text style={styles.switchLabel}>Đang mở cửa</Text>
-            <Text style={styles.switchHint}>Bật/tắt trạng thái mở cửa hiện tại</Text>
-          </View>
-          <Switch
-            value={isOpen}
-            onValueChange={setIsOpen}
-            trackColor={{ false: '#cbd5e1', true: '#7dd3c7' }}
-            thumbColor={isOpen ? '#076F32' : '#f8fafc'}
-          />
-        </View>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Giữ hàng & đặt cọc</Text>
-        <Text style={styles.label}>Phần trăm đặt cọc (0 = không cọc)</Text>
-        <View style={styles.depositChipRow}>
-          {[0, 10, 30, 50].map((pct) => {
-            const active = depositPercent === pct;
-            return (
+            <View style={styles.locationButtonRow}>
               <Pressable
-                key={pct}
-                onPress={() => setDepositPercent(pct)}
-                style={[styles.depositChip, active && styles.depositChipActive]}
+                disabled={isLocating}
+                onPress={handleUseCurrentLocation}
+                style={({ pressed }) => [
+                  styles.locationButton,
+                  pressed && styles.buttonPressed,
+                  isLocating && styles.buttonDisabled,
+                ]}
               >
-                <Text style={[styles.depositChipText, active && styles.depositChipTextActive]}>
-                  {pct}%
-                </Text>
+                {isLocating ? (
+                  <ActivityIndicator color="#076F32" />
+                ) : (
+                  <Text style={styles.locationButtonText}>Vị trí hiện tại</Text>
+                )}
               </Pressable>
-            );
-          })}
-        </View>
-      </View>
+              <Pressable
+                onPress={() => setIsPickingLocation(true)}
+                style={({ pressed }) => [styles.locationButton, pressed && styles.buttonPressed]}
+              >
+                <Text style={styles.locationButtonText}>Chọn trên bản đồ</Text>
+              </Pressable>
+            </View>
+          </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>My Shop QR</Text>
-        <Text style={styles.switchHint}>
-          QR cố định của gian hàng. Khách quét mã này khi nhận hàng để hoàn tất đơn giữ.
-        </Text>
-        {qrPayload ? (
-          <Image
-            source={{
-              uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(
-                qrPayload
-              )}`,
-            }}
-            style={styles.qrImage}
+          <View style={styles.divider} />
+
+          <Field
+            label="Mô tả cửa hàng"
+            value={description}
+            onChangeText={setDescription}
+            multiline
           />
-        ) : (
-          <Text style={styles.switchHint}>Đang tạo mã QR…</Text>
-        )}
-        <Text style={styles.qrValue}>{qrCodeValue || shopId || '—'}</Text>
-        <View style={styles.qrActions}>
-          <Pressable
-            style={styles.qrActionBtn}
-            onPress={() => {
-              if (!qrPayload) return;
-              Alert.alert('QR gian hàng', `Nội dung QR:\n${qrPayload}`);
-            }}
-          >
-            <Text style={styles.qrActionText}>Xem QR</Text>
-          </Pressable>
-          <Pressable
-            style={styles.qrActionBtn}
-            onPress={async () => {
-              if (!qrPayload) return;
-              const url = `https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=8&data=${encodeURIComponent(
-                qrPayload
-              )}`;
-              try {
-                await Linking.openURL(url);
-              } catch {
-                Alert.alert('Lỗi', 'Không mở được liên kết tải QR.');
-              }
-            }}
-          >
-            <Text style={styles.qrActionText}>Tải QR</Text>
-          </Pressable>
-          <Pressable
-            style={styles.qrActionBtn}
-            onPress={async () => {
-              if (!qrPayload) return;
-              try {
-                await Share.share({
-                  message: `FastMark Shop QR\n${qrPayload}`,
-                  title: 'Chia sẻ QR gian hàng',
-                });
-              } catch {
-                Alert.alert('Lỗi', 'Không chia sẻ được QR.');
-              }
-            }}
-          >
-            <Text style={styles.qrActionText}>Chia sẻ</Text>
-          </Pressable>
-        </View>
-      </View>
 
-      <Pressable
-        disabled={isSaving}
-        onPress={handleSave}
-        style={({ pressed }) => [styles.saveButton, pressed && styles.buttonPressed, isSaving && styles.buttonDisabled]}
-      >
-        <Text style={styles.saveButtonText}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</Text>
-      </Pressable>
+          <View style={styles.divider} />
+
+          <Text style={styles.sectionTitle}>Giờ hoạt động</Text>
+          <TimePickerField
+            label="Giờ mở cửa"
+            value={openTime}
+            onChange={setOpenTime}
+            placeholder="08:00"
+            compact
+          />
+          <View style={styles.divider} />
+          <TimePickerField
+            label="Giờ đóng cửa"
+            value={closeTime}
+            onChange={setCloseTime}
+            placeholder="21:00"
+            compact
+          />
+          <View style={styles.divider} />
+          <View style={styles.switchRow}>
+            <View style={styles.switchInfo}>
+              <Text style={styles.switchLabel}>Đang mở cửa</Text>
+              <Text style={styles.switchHint}>Bật/tắt trạng thái mở cửa hiện tại</Text>
+            </View>
+            <Switch
+              value={isOpen}
+              onValueChange={setIsOpen}
+              trackColor={{ false: '#cbd5e1', true: '#7dd3c7' }}
+              thumbColor={isOpen ? '#076F32' : '#f8fafc'}
+            />
+          </View>
+
+          <View style={styles.divider} />
+
+          <Text style={styles.sectionTitle}>Giữ hàng & đặt cọc</Text>
+          <Field
+            label="Phần trăm đặt cọc (%)"
+            value={depositPercent}
+            onChangeText={(text) => {
+              const digits = text.replace(/\D/g, '');
+              if (!digits) {
+                setDepositPercent('');
+                return;
+              }
+              setDepositPercent(String(Math.min(100, Number(digits))));
+            }}
+            placeholder="0"
+            keyboardType="number-pad"
+            hint="Nhập từ 0 đến 100. 0 = không yêu cầu đặt cọc."
+          />
+        </View>
+
+        <View style={styles.saveSection}>
+        <Pressable
+          disabled={isSaving || isCheckingShopUsername}
+          onPress={handleSave}
+          style={({ pressed }) => [
+            styles.saveButton,
+            pressed && styles.buttonPressed,
+            (isSaving || isCheckingShopUsername) && styles.buttonDisabled,
+          ]}
+        >
+          <Text style={styles.saveButtonText}>
+            {isSaving
+              ? 'Đang lưu...'
+              : isCheckingShopUsername
+                ? 'Đang kiểm tra...'
+                : 'Lưu thay đổi'}
+          </Text>
+        </Pressable>
+      </View>
       </ProfileSubScreen>
     </View>
   );
@@ -396,25 +507,33 @@ function Field({
   onBlur,
   multiline,
   placeholder,
+  keyboardType,
   autoCapitalize,
   autoCorrect,
   error,
   hint,
+  identity = false,
+  spaced = false,
 }) {
   return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
+    <View style={[styles.field, spaced && styles.fieldSpaced]}>
+      <Text style={[styles.label, identity && styles.identityLabel]}>{label}</Text>
+      <KeyboardAwareTextInput
         value={value}
         onChangeText={onChangeText}
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder={placeholder}
         placeholderTextColor="#94a3b8"
+        keyboardType={keyboardType}
         multiline={multiline}
         autoCapitalize={autoCapitalize}
         autoCorrect={autoCorrect}
-        style={[styles.input, multiline && styles.textArea, error ? styles.inputError : null]}
+        style={[
+          identity ? styles.identityInput : styles.input,
+          multiline && styles.textArea,
+          error ? styles.inputError : null,
+        ]}
       />
       {error ? <Text style={styles.fieldError}>{error}</Text> : null}
       {!error && hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
@@ -434,40 +553,13 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    gap: 4,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 14,
   },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', marginBottom: 8 },
-  qrImage: {
-    width: 220,
-    height: 220,
-    alignSelf: 'center',
-    marginVertical: 12,
-    backgroundColor: '#f8fafc',
-  },
-  qrValue: {
-    textAlign: 'center',
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
-    marginBottom: 10,
-  },
-  qrActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  qrActionBtn: {
-    flex: 1,
-    minHeight: 40,
-    borderRadius: 10,
-    backgroundColor: '#E6F4EC',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qrActionText: {
-    color: '#076F32',
-    fontWeight: '800',
-    fontSize: 12,
-  },
   readOnlyValue: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   secondaryButton: {
     marginTop: 12,
@@ -478,8 +570,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   secondaryButtonText: { color: '#076F32', fontWeight: '800' },
-  field: { marginBottom: 12 },
+  field: { marginBottom: 0 },
+  fieldSpaced: { marginTop: 14 },
   label: { fontSize: 13, fontWeight: '700', color: '#475569', marginBottom: 6 },
+  identityLabel: { color: '#334155' },
+  identityInput: {
+    minHeight: 48,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    color: '#0f172a',
+    backgroundColor: '#ffffff',
+    fontSize: 15,
+  },
   input: {
     minHeight: 46,
     borderWidth: 1.5,
@@ -506,7 +610,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   locationBox: {
-    marginBottom: 12,
     padding: 12,
     borderRadius: 12,
     backgroundColor: '#f8fafc',
@@ -534,38 +637,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 8,
   },
   switchInfo: { flex: 1, paddingRight: 12 },
   switchLabel: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
   switchHint: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  depositChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
-  },
-  depositChip: {
-    minWidth: 64,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  depositChipActive: {
-    borderColor: '#076F32',
-    backgroundColor: '#E6F4EC',
-  },
-  depositChipText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  depositChipTextActive: {
-    color: '#076F32',
+  saveSection: {
+    paddingBottom: 24,
   },
   saveButton: {
     minHeight: 50,

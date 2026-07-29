@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -113,14 +112,34 @@ function ProfileAvatar({ name, photoUrl, onPress, isUploading }) {
         onPress={onPress}
         disabled={isUploading}
         style={({ pressed }) => [styles.avatarPlusButton, pressed && styles.buttonPressed]}
+        accessibilityRole="button"
+        accessibilityLabel="Đổi ảnh đại diện"
       >
         {isUploading ? (
           <ActivityIndicator color="#ffffff" size="small" />
         ) : (
-          <Text style={styles.avatarPlusText}>+</Text>
+          <Ionicons name="camera" size={14} color="#ffffff" />
         )}
       </Pressable>
     </View>
+  );
+}
+
+function BuyerMenuItem({ icon, title, subtitle, onPress }) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.buyerMenuRow, pressed && styles.buttonPressed]}
+      onPress={onPress}
+    >
+      <View style={styles.buyerMenuIconWrap}>
+        <Ionicons name={icon} size={20} color="#076F32" />
+      </View>
+      <View style={styles.buyerMenuCopy}>
+        <Text style={styles.buyerMenuTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.buyerMenuSubtitle}>{subtitle}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+    </Pressable>
   );
 }
 
@@ -133,13 +152,12 @@ export default function AccountProfileScreen({
   onOpenProduct,
   onEditAccount,
   onOpenActivity,
-  onOpenNotificationSettings,
-  onOpenInbox,
   onOpenBuyerOrders,
   onOpenFavoriteProducts,
   onOpenReport,
   onOpenWallet,
   onOpenWalletTopUp,
+  onOpenVisitedStores,
   onOpenSellerShopSettings,
   onOpenSellerReviews,
   onOpenSellerOrders,
@@ -321,6 +339,139 @@ export default function AccountProfileScreen({
     }
   }
 
+  if (showAsBuyer) {
+    const buyerMenuItems = [
+      {
+        key: 'favorites',
+        icon: 'heart-outline',
+        title: 'Sản phẩm yêu thích',
+        subtitle: 'Danh sách sản phẩm bạn đã thích',
+        onPress: () => onOpenFavoriteProducts?.(),
+      },
+      {
+        key: 'edit',
+        icon: 'create-outline',
+        title: 'Chỉnh sửa hồ sơ',
+        subtitle: 'Cập nhật thông tin cá nhân',
+        onPress: () => onEditAccount?.(),
+      },
+      {
+        key: 'report',
+        icon: 'shield-checkmark-outline',
+        title: 'Báo cáo',
+        subtitle: 'Hệ thống lỗi hoặc loại khác',
+        onPress: () => onOpenReport?.(),
+      },
+    ];
+
+    return (
+      <View style={styles.buyerScreen}>
+        <ScrollView
+          style={styles.buyerScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.buyerScrollContent,
+            {
+              paddingTop: 8,
+              paddingBottom: screenInsets.tabRootScrollPaddingBottom,
+            },
+          ]}
+        >
+          <View style={styles.buyerHeaderRow}>
+            <Text style={styles.buyerHeaderTitle}>Tài khoản của tôi</Text>
+          </View>
+
+          <View style={styles.buyerProfileRow}>
+            <ProfileAvatar
+              name={avatarLabelName}
+              photoUrl={avatarUrl}
+              onPress={handlePickAvatar}
+              isUploading={isUploadingAvatar}
+            />
+            <View style={styles.buyerProfileInfo}>
+              <Text style={styles.buyerDisplayName} numberOfLines={1}>
+                {displayName}
+              </Text>
+              {userName ? (
+                <Text style={styles.buyerUserName} numberOfLines={1}>
+                  @{userName}
+                </Text>
+              ) : null}
+              <View style={styles.buyerFollowRow}>
+                <Pressable onPress={() => onOpenFollowConnections?.('following')}>
+                  <Text style={styles.buyerFollowText}>
+                    <Text style={styles.buyerFollowValue}>{formatCount(stats.following)}</Text>
+                    {' '}Đang theo dõi
+                  </Text>
+                </Pressable>
+                <View style={styles.buyerFollowDivider} />
+                <Pressable onPress={() => onOpenFollowConnections?.('followers')}>
+                  <Text style={styles.buyerFollowText}>
+                    <Text style={styles.buyerFollowValue}>{formatCount(stats.followers)}</Text>
+                    {' '}Người theo dõi
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [styles.buyerWalletCard, pressed && styles.buttonPressed]}
+            onPress={() => onOpenWallet?.()}
+          >
+            <View style={styles.buyerWalletIcon}>
+              <Ionicons name="wallet" size={18} color="#076F32" />
+            </View>
+            <View style={styles.buyerWalletInfo}>
+              <Text style={styles.buyerWalletLabel}>Ví FastMark</Text>
+              <Text style={styles.buyerWalletBalance}>
+                {formatPrice(profile?.walletBalance || 0)}
+              </Text>
+              <Pressable
+                onPress={(event) => {
+                  event?.stopPropagation?.();
+                  onOpenWalletTopUp?.();
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.buyerWalletCta}>Nạp tiền ngay →</Text>
+              </Pressable>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.85)" />
+          </Pressable>
+
+          <View style={styles.buyerMenuCard}>
+            {buyerMenuItems.map((item, index) => (
+              <View key={item.key}>
+                {index > 0 ? <View style={styles.buyerMenuDivider} /> : null}
+                <BuyerMenuItem
+                  icon={item.icon}
+                  title={item.title}
+                  subtitle={item.subtitle}
+                  onPress={item.onPress}
+                />
+              </View>
+            ))}
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [styles.buyerLogoutCard, pressed && styles.buttonPressed]}
+            onPress={() => onLogout?.()}
+          >
+            <View style={styles.buyerLogoutIcon}>
+              <Ionicons name="log-out-outline" size={20} color="#dc2626" />
+            </View>
+            <View style={styles.buyerMenuCopy}>
+              <Text style={styles.buyerLogoutText}>Đăng xuất</Text>
+              <Text style={styles.buyerMenuSubtitle}>Đăng xuất khỏi tài khoản</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#f87171" />
+          </Pressable>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen}>
       <ScrollView
@@ -413,71 +564,6 @@ export default function AccountProfileScreen({
                 <Text style={styles.shopStatValue}>{formatCount(stats.likes)}</Text>
                 <Text style={styles.shopStatLabel}>Lượt thích</Text>
               </View>
-            </View>
-          ) : null}
-
-          {showAsBuyer ? (
-            <Pressable
-              style={({ pressed }) => [styles.walletCard, pressed && styles.buttonPressed]}
-              onPress={() => onOpenWallet?.()}
-            >
-              <View style={styles.walletCardTop}>
-                <Ionicons name="wallet-outline" size={18} color="#fff" />
-                <Text style={styles.walletCardTitle}>Ví FastMark</Text>
-              </View>
-              <Text style={styles.walletCardBalance}>
-                {formatPrice(profile?.walletBalance || 0)}
-              </Text>
-              <Pressable
-                onPress={(event) => {
-                  event?.stopPropagation?.();
-                  onOpenWalletTopUp?.();
-                }}
-                hitSlop={8}
-              >
-                <Text style={styles.walletCardCta}>Nạp tiền ngay →</Text>
-              </Pressable>
-            </Pressable>
-          ) : null}
-
-          {showAsBuyer ? (
-            <View style={styles.buyerMenuList}>
-              <Pressable
-                style={styles.buyerMenuItem}
-                onPress={() => onOpenFavoriteProducts?.()}
-              >
-                <View style={styles.buyerMenuIcon}>
-                  <Ionicons name="heart-outline" size={18} color="#2563eb" />
-                </View>
-                <Text style={styles.buyerMenuText}>Sản phẩm yêu thích</Text>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </Pressable>
-              <Pressable style={styles.buyerMenuItem} onPress={() => onEditAccount?.()}>
-                <View style={styles.buyerMenuIcon}>
-                  <Ionicons name="create-outline" size={18} color="#2563eb" />
-                </View>
-                <Text style={styles.buyerMenuText}>Chỉnh sửa hồ sơ</Text>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </Pressable>
-              <Pressable
-                style={styles.buyerMenuItem}
-                onPress={() => onOpenReport?.()}
-              >
-                <View style={styles.buyerMenuIcon}>
-                  <Ionicons name="flag-outline" size={18} color="#2563eb" />
-                </View>
-                <Text style={styles.buyerMenuText}>Report</Text>
-                <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-              </Pressable>
-              <Pressable
-                style={[styles.buyerMenuItem, styles.buyerMenuLogout]}
-                onPress={() => onLogout?.()}
-              >
-                <View style={[styles.buyerMenuIcon, styles.buyerMenuLogoutIcon]}>
-                  <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-                </View>
-                <Text style={[styles.buyerMenuText, styles.buyerMenuLogoutText]}>Đăng xuất</Text>
-              </Pressable>
             </View>
           ) : null}
 
@@ -649,6 +735,184 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f4f7f6',
     minHeight: 0,
+  },
+  buyerScreen: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: '#ffffff',
+    minHeight: 0,
+  },
+  buyerScroll: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  buyerScrollContent: {
+    paddingHorizontal: 16,
+  },
+  buyerHeaderRow: {
+    marginBottom: 18,
+  },
+  buyerHeaderTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#076F32',
+    letterSpacing: -0.3,
+  },
+  buyerProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  buyerProfileInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  buyerDisplayName: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  buyerUserName: {
+    marginTop: 2,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  buyerFollowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 10,
+  },
+  buyerFollowText: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  buyerFollowValue: {
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  buyerFollowDivider: {
+    width: 1,
+    height: 14,
+    backgroundColor: '#cbd5e1',
+  },
+  buyerWalletCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#076F32',
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+    gap: 10,
+    shadowColor: '#076F32',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  buyerWalletIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buyerWalletInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  buyerWalletLabel: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  buyerWalletBalance: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  buyerWalletCta: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  buyerMenuCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    paddingVertical: 6,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e8f0eb',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  buyerMenuDivider: {
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    marginLeft: 70,
+  },
+  buyerMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  buyerMenuIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#E6F4EC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buyerMenuCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  buyerMenuTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  buyerMenuSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#94a3b8',
+  },
+  buyerLogoutCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fee2e2',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 12,
+    marginBottom: 8,
+  },
+  buyerLogoutIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#fecaca',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buyerLogoutText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#dc2626',
   },
   scrollContent: {
     paddingTop: 8,

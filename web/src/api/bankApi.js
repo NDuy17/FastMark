@@ -23,6 +23,13 @@ export async function deleteAdminBank(token, bankId) {
   });
 }
 
+export async function restoreAdminBank(token, bankId) {
+  return apiRequest(`/api/admin/banks/${bankId}/restore`, {
+    method: 'POST',
+    token,
+  });
+}
+
 export async function listAdminWithdraws(token, params = {}) {
   const query = new URLSearchParams();
   if (params.page) query.set('page', params.page);

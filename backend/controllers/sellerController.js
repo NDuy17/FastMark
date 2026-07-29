@@ -123,6 +123,18 @@ exports.listPendingVerifications = async (req, res) => {
   });
 };
 
+exports.listAdminVerifications = async (req, res) => {
+  const payload = await sellerService.listAdminSellerVerifications(req.query);
+
+  return success(res, {
+    data: {
+      verifications: payload.items.map(sellerService.toAdminVerification),
+      pagination: payload.pagination,
+      stats: payload.stats,
+    },
+  });
+};
+
 exports.approveVerification = async (req, res) => {
   const verification = await sellerService.approveSellerVerificationByAdmin(
     req.currentUser,
