@@ -21,7 +21,7 @@ const {
 } = require("../constants");
 const { resolveMediaUrl } = require("../utils/resolveMediaUrl");
 const { createNotification } = require("./notificationService");
-const { emitAdminUpdated } = require("./realtimeService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 const { notifyReviewerReviewModerated } = require("./adminReviewService");
 const { blockAccount, unblockAccount } = require("./adminAccountService");
 const { setShopStatus } = require("./adminCatalogService");
@@ -688,6 +688,10 @@ async function notifyReporter(report, { title, content }) {
       "Báo cáo của bạn đã được hệ thống cập nhật. Cảm ơn bạn đã đóng góp.",
     audience: NOTIFICATION_AUDIENCE.SYSTEM,
     index: NOTIFICATION_INDEX.SYSTEM,
+  });
+  emitUserResourceUpdated(report.userId, "report", {
+    reportId: String(report._id),
+    status: report.status,
   });
 }
 

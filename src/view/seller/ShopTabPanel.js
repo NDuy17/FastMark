@@ -166,7 +166,7 @@ export default function ShopTabPanel({
       if (type === 'wallet' || type === 'withdraw') {
         dispatch(loadUserProfile()).catch(() => {});
       }
-      if (type === 'banner' || type === 'subscription') {
+      if (type === 'banner' || type === 'subscription' || type === 'review') {
         loadShopSettings();
       }
     },

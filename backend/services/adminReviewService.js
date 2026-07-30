@@ -3,10 +3,10 @@ const Review = require("../models/Review");
 const User = require("../models/User");
 const ShopProfile = require("../models/ShopProfile");
 const Product = require("../models/Product");
-const { NOTIFICATION_AUDIENCE } = require("../constants");
+const { NOTIFICATION_AUDIENCE, NOTIFICATION_INDEX } = require("../constants");
 const { refreshShopReviewStats, loadReviewImagesMap } = require("./buyerReviewService");
-const { createNotification, NOTIFICATION_INDEX } = require("./notificationService");
-const { emitAdminUpdated } = require("./realtimeService");
+const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 const { resolveShopDisplayName } = require("../utils/shopIdentity");
 const { buildSearchRegex } = require("../utils/searchText");
 const {
@@ -300,17 +300,27 @@ async function setReviewVisibility(publicId, isHidden, { reason } = {}) {
   review.isHidden = Boolean(isHidden);
   review.UpdatedAt = new Date();
   await review.save();
-  await refreshShopReviewStats(review.shopId);
+  const shop = await refreshShopReviewStats(review.shopId);
 
   if (Boolean(isHidden) && !wasHidden) {
     await notifyReviewerReviewModerated(review, "hidden", moderationReason);
   }
 
   const [item] = await enrichReviews([review.toObject()]);
-  emitAdminUpdated("review", {
+  const payload = {
     reviewId: String(review._id),
+    shopId: review.shopId ? String(review.shopId) : "",
     action: Boolean(isHidden) ? "hidden" : "visible",
-  });
+    totalReviews: Number(shop?.totalReviews || 0),
+    averageRating: Number(shop?.averageRating || 0),
+  };
+  emitAdminUpdated("review", payload);
+  if (shop?.userId) {
+    emitUserResourceUpdated(shop.userId, "review", payload);
+  }
+  if (review.userId) {
+    emitUserResourceUpdated(review.userId, "review", payload);
+  }
   return item;
 }
 
@@ -328,13 +338,23 @@ async function softDeleteReview(publicId, { reason } = {}) {
   review.moderationReason = moderationReason;
   review.UpdatedAt = now;
   await review.save();
-  await refreshShopReviewStats(review.shopId);
+  const shop = await refreshShopReviewStats(review.shopId);
   await notifyReviewerReviewModerated(review, "deleted", moderationReason);
 
-  emitAdminUpdated("review", {
+  const payload = {
     reviewId: String(review._id),
+    shopId: review.shopId ? String(review.shopId) : "",
     action: "deleted",
-  });
+    totalReviews: Number(shop?.totalReviews || 0),
+    averageRating: Number(shop?.averageRating || 0),
+  };
+  emitAdminUpdated("review", payload);
+  if (shop?.userId) {
+    emitUserResourceUpdated(shop.userId, "review", payload);
+  }
+  if (review.userId) {
+    emitUserResourceUpdated(review.userId, "review", payload);
+  }
 
   return { id: String(review._id), deletedAt: now };
 }

@@ -6,8 +6,14 @@ const ReviewImage = require("../models/ReviewImage");
 const Product = require("../models/Product");
 const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
-const { RESERVATION_STATUS } = require("../constants");
+const {
+  NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
+  RESERVATION_STATUS,
+} = require("../constants");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated, emitPublicUpdated } = require("./realtimeService");
 const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 
 const REVIEWABLE_STATUSES = [
@@ -230,6 +236,56 @@ async function refreshShopReviewStats(shopId) {
   return shop;
 }
 
+function buildReviewRealtimePayload(review, shop = null, extras = {}) {
+  return {
+    reviewId: review?._id ? String(review._id) : String(extras.reviewId || ""),
+    shopId: review?.shopId ? String(review.shopId) : String(extras.shopId || ""),
+    productId: review?.productId ? String(review.productId) : String(extras.productId || ""),
+    reservationId: review?.reservationId
+      ? String(review.reservationId)
+      : String(extras.reservationId || ""),
+    rating: Number(review?.rating || extras.rating || 0),
+    totalReviews: Number(shop?.totalReviews || 0),
+    averageRating: Number(shop?.averageRating || 0),
+    action: extras.action || "updated",
+  };
+}
+
+async function emitReviewRealtime(review, shop = null, extras = {}) {
+  const payload = buildReviewRealtimePayload(review, shop, extras);
+  emitAdminUpdated("review", payload);
+  emitPublicUpdated("review", payload);
+
+  const sellerUserId = shop?.userId;
+  if (sellerUserId) {
+    emitUserResourceUpdated(sellerUserId, "review", payload);
+  }
+}
+
+async function notifyShopNewReview({ shop, buyer, product, rating }) {
+  const sellerUserId = shop?.userId;
+  if (!sellerUserId) {
+    return;
+  }
+  if (String(sellerUserId) === String(buyer?._id)) {
+    return;
+  }
+
+  const buyerName =
+    pickString(buyer?.FullName) || pickString(buyer?.UserName) || "Khách hàng";
+  const productName = pickString(product?.ProductName) || "sản phẩm";
+  const stars = Number(rating) || 0;
+
+  await createNotification(sellerUserId, {
+    title: "Đánh giá mới từ khách hàng",
+    content: `${buyerName} đã đánh giá ${stars}★ cho "${productName}".`,
+    audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.SYSTEM,
+  }).catch((error) => {
+    console.warn("[review] notify shop failed:", error?.message || error);
+  });
+}
+
 async function assertPurchasedProduct(user, { productId, reservationId, shopId } = {}) {
   const productObjectId = pickString(productId);
   if (!productObjectId || !isStrictMongoObjectId(productObjectId)) {
@@ -363,15 +419,27 @@ async function createBuyerReview(user, payload = {}) {
   });
 
   const imageDocs = await replaceReviewImages(review._id, collectImageInputs(payload));
-  await refreshShopReviewStats(shopId);
+  let shop = await refreshShopReviewStats(shopId);
+  if (!shop?.userId && shopId) {
+    shop = await ShopProfile.findById(shopId).select("userId totalReviews averageRating shopName");
+  }
   await Reservation.updateOne(
     { _id: reservation._id },
     { $set: { hasReviewed: true } }
   );
 
+  await notifyShopNewReview({
+    shop,
+    buyer: user,
+    product,
+    rating,
+  });
+  emitReviewRealtime(review, shop, { action: "created" });
+
   return toPublicReview(review, {
     user,
     product,
+    shop,
     images: imageDocs.map((doc, index) => ({
       id: doc._id,
       imageUrl: doc.ImageUrl,
@@ -416,8 +484,9 @@ async function updateBuyerReview(user, reviewId, payload = {}) {
     }));
   }
 
-  await refreshShopReviewStats(review.shopId);
-  return toPublicReview(review, { user, images });
+  const shop = await refreshShopReviewStats(review.shopId);
+  emitReviewRealtime(review, shop, { action: "updated" });
+  return toPublicReview(review, { user, images, shop });
 }
 
 async function deleteBuyerReview(user, reviewId) {
@@ -437,7 +506,8 @@ async function deleteBuyerReview(user, reviewId) {
   review.UpdatedAt = now;
   await review.save();
 
-  await refreshShopReviewStats(review.shopId);
+  const shop = await refreshShopReviewStats(review.shopId);
+  emitReviewRealtime(review, shop, { action: "deleted" });
   return { id: String(review._id) };
 }
 

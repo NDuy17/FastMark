@@ -70,11 +70,12 @@ const HANDLER_META = {
   syncTopup: { desc: "Đồng bộ trạng thái nạp tiền", params: "Header: Bearer token; Body: { orderCode }", result: '{ "success": true, "data": { "wallet", "transaction" } }' },
   cancelTopup: { desc: "Hủy phiên nạp tiền", params: "Header: Bearer token; Body: { orderCode }", result: '{ "success": true }' },
   payosWebhook: { desc: "Webhook PayOS", params: "Body: PayOS payload", result: '{ "success": true }' },
-  listMyNotifications: { desc: "Danh sách thông báo", params: "Header: Bearer token (User); Query: page?, limit?", result: '{ "success": true, "data": { "items", "unreadCount" } }' },
-  markAllAsRead: { desc: "Đánh dấu đọc tất cả thông báo", params: "Header: Bearer token (User)", result: '{ "success": true }' },
+  listMyNotifications: { desc: "Danh sách thông báo", params: "Header: Bearer token (User); Query: page?, limit?, audience?=buyer|seller", result: '{ "success": true, "data": { "items", "unreadCount", "pagination" } }' },
+  getUnreadCount: { desc: "Số thông báo chưa đọc theo audience", params: "Header: Bearer token (User); Query: audience?=buyer|seller", result: '{ "success": true, "data": { "unreadCount", "audience" } }' },
+  markAllAsRead: { desc: "Đánh dấu đọc tất cả thông báo", params: "Header: Bearer token (User); Query/Body: audience?", result: '{ "success": true }' },
   registerDeviceToken: { desc: "Đăng ký FCM device token", params: "Header: Bearer token; Body: { token, platform? }", result: '{ "success": true }' },
   removeDeviceToken: { desc: "Xóa FCM device token", params: "Header: Bearer token; Body: { token }", result: '{ "success": true }' },
-  markAsRead: { desc: "Đánh dấu đọc 1 thông báo", params: "Header: Bearer token; Path: :id", result: '{ "success": true }' },
+  markAsRead: { desc: "Đánh dấu đọc 1 thông báo", params: "Header: Bearer token; Path: :id; Query: audience?", result: '{ "success": true, "data": { "unreadCount?", "unreadCounts?" } }' },
 };
 
 function resolveAuth(block) {

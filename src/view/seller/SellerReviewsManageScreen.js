@@ -16,13 +16,15 @@ import { fetchReviewsFromNode } from '../../api/storeNodeApi';
 import { submitReportOnBackend } from '../../api/reportApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import StarRating from '../store/components/StarRating';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ReportSheet from '../shared/components/ReportSheet';
 import ReportComposeModal from '../shared/components/ReportComposeModal';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
-import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 
 const REVIEW_REPORT_REASONS = [
   'Ngôn từ xúc phạm',
@@ -57,11 +59,13 @@ export default function SellerReviewsManageScreen({ onBack }) {
   const [reportReason, setReportReason] = useState('');
   const [reportingReview, setReportingReview] = useState(null);
 
-  const loadReviews = useCallback(async ({ nextPage = 1 } = {}) => {
-    if (nextPage === 1) {
-      setIsLoading(true);
-    } else {
-      setIsLoadingMore(true);
+  const loadReviews = useCallback(async ({ nextPage = 1, silent = false } = {}) => {
+    if (!silent) {
+      if (nextPage === 1) {
+        setIsLoading(true);
+      } else {
+        setIsLoadingMore(true);
+      }
     }
     try {
       const idToken = await getCurrentUserIdToken();
@@ -86,11 +90,16 @@ export default function SellerReviewsManageScreen({ onBack }) {
         limit: DEFAULT_PAGE_SIZE,
       });
       const rows = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
-      setReviews((current) => (nextPage === 1 ? rows : appendUniqueById(current, rows)));
+      setReviews((current) =>
+        nextPage === 1 ? mergeListById(current, rows) : appendUniqueById(current, rows)
+      );
       setPage(Number(data?.page) || nextPage);
       setHasMore(Boolean(data?.hasMore));
       setTotalCount(Math.max(0, Number(data?.total) || 0));
     } catch (loadError) {
+      if (silent) {
+        return;
+      }
       showErrorAlert(loadError.message || 'Không tải được đánh giá.');
       if (nextPage === 1) {
         setReviews([]);
@@ -98,14 +107,36 @@ export default function SellerReviewsManageScreen({ onBack }) {
         setTotalCount(0);
       }
     } finally {
-      setIsLoading(false);
-      setIsLoadingMore(false);
+      if (!silent) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     loadReviews();
   }, [loadReviews]);
+
+  const handleReviewRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'review') {
+        return;
+      }
+      const eventShopId = String(payload?.shopId || '').trim();
+      if (eventShopId && shopId && eventShopId !== String(shopId)) {
+        return;
+      }
+      loadReviews({ nextPage: 1, silent: true });
+    },
+    [loadReviews, shopId]
+  );
+
+  useResourceSocket({
+    enabled: Boolean(shopId),
+    onResourceUpdated: handleReviewRealtime,
+  });
 
   function openReport(review) {
     setReportingReview(review);

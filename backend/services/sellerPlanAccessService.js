@@ -8,7 +8,11 @@ const {
   SELLER_BANNER_STATUS,
   PRODUCT_STATUS,
   SHOP_STATUS,
+  NOTIFICATION_AUDIENCE,
+  NOTIFICATION_INDEX,
 } = require("../constants");
+const { createNotification } = require("./notificationService");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -91,6 +95,7 @@ async function expireDueSubscriptions({ limit = 200 } = {}) {
 
   let expiredCount = 0;
   const shopIds = new Set();
+  const notifiedSellerIds = new Set();
 
   for (const row of due) {
     await SellerSubscription.updateOne(
@@ -100,6 +105,32 @@ async function expireDueSubscriptions({ limit = 200 } = {}) {
     expiredCount += 1;
     if (row.shopId) {
       shopIds.add(String(row.shopId));
+    }
+
+    const payload = {
+      subscriptionId: String(row._id),
+      shopId: row.shopId ? String(row.shopId) : "",
+      status: SELLER_SUBSCRIPTION_STATUS.EXPIRED,
+      action: "expired",
+    };
+    emitAdminUpdated("subscription", payload);
+
+    const sellerUserId = row.sellerId;
+    if (sellerUserId) {
+      const sellerKey = String(sellerUserId);
+      emitUserResourceUpdated(sellerUserId, "subscription", payload);
+      if (!notifiedSellerIds.has(sellerKey)) {
+        notifiedSellerIds.add(sellerKey);
+        await createNotification(sellerUserId, {
+          title: "Gói Seller đã hết hạn",
+          content:
+            "Gói đăng ký gian hàng của bạn đã hết hạn. Vui lòng gia hạn để tiếp tục bán hàng.",
+          audience: NOTIFICATION_AUDIENCE.SELLER,
+          index: NOTIFICATION_INDEX.SYSTEM,
+        }).catch((error) => {
+          console.warn("[sellerPlanExpiry] notify failed:", error?.message || error);
+        });
+      }
     }
   }
 
@@ -114,6 +145,13 @@ async function expireDueSubscriptions({ limit = 200 } = {}) {
       shop.UpdatedAt = now;
       await shop.save();
       await deactivateShopProducts(shop._id);
+      if (shop.userId) {
+        emitUserResourceUpdated(shop.userId, "subscription", {
+          shopId: String(shop._id),
+          status: SELLER_SUBSCRIPTION_STATUS.EXPIRED,
+          action: "shop_deactivated",
+        });
+      }
     } else {
       await syncShopFromSubscription(shop, stillActive);
     }
