@@ -42,6 +42,7 @@ import FollowListDialog, { FollowStatButton } from '../components/admin/FollowLi
 import TableIconActions from '../components/ui/TableIconActions';
 import { EmptyState } from '../components/ui/Feedback';
 import { useAuth } from '../context/AuthContext';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import {
   getHistoryStatusFilters,
   HISTORY_STATUS_FILTER_ALL,
@@ -236,13 +237,15 @@ function HistoryDetailDialog({ tab, item, detail, loading, error, onClose }) {
               ) : null}
               <DetailField label="Đơn vị">{product.donVi || item.donVi || ''}</DetailField>
               <DetailField label="Trạng thái">
-                {(product.isDeleted ?? item.isDeleted)
-                  ? 'Đã gỡ'
-                  : (product.status ?? item.status) === 1
-                    ? 'Đang hiện'
-                    : 'Đã ẩn'}
+                {product.statusLabel ||
+                  item.statusLabel ||
+                  ((product.isDeleted ?? item.isDeleted)
+                    ? 'Đã xóa'
+                    : (product.status ?? item.status) === 1
+                      ? 'Đang hiện'
+                      : 'Đã ẩn')}
               </DetailField>
-              {(product.isDeleted ?? item.isDeleted) ? (
+              {(product.isAdminRemoved ?? item.isAdminRemoved) ? (
                 <DetailField label="Lý do gỡ">
                   {product.adminRemovalReason || item.adminRemovalReason || '—'}
                 </DetailField>
@@ -899,6 +902,20 @@ function HistoryTable({
   );
 }
 
+const HISTORY_TAB_REALTIME_RESOURCES = {
+  products: 'product',
+  wallet: 'wallet',
+  withdrawals: 'withdraw',
+  reservations: 'reservation',
+  'shop-reservations': 'reservation',
+  'reports-filed': 'report',
+  'reports-received': 'report',
+  reviews: 'review',
+  'shop-reviews': 'review',
+  'seller-subscriptions': 'subscription',
+  'seller-banners': 'banner',
+};
+
 export function ActivityHistorySection({
   entityId,
   getIdToken,
@@ -989,6 +1006,15 @@ export function ActivityHistorySection({
       cancelled = true;
     };
   }, [entityId, tab, page, limit, statusFilter, getIdToken, loadHistory, reloadTick]);
+
+  const realtimeResource = HISTORY_TAB_REALTIME_RESOURCES[tab] || '';
+  const refreshFromRealtime = useCallback(() => {
+    setReloadTick((value) => value + 1);
+  }, []);
+
+  useAdminRealtimeRefresh(realtimeResource, refreshFromRealtime, {
+    enabled: Boolean(realtimeResource),
+  });
 
   async function openDetail(item) {
     if (tab === 'products' && item?.id) {

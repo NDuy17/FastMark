@@ -28,6 +28,7 @@ const {
 const { createNotification, NOTIFICATION_INDEX } = require("./notificationService");
 const { emitOrderUpdated } = require("./orderRealtimeService");
 const { getShopForSeller } = require("./shopSettingsService");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 const {
   refundDepositFromSystem,
   releaseDepositFromSystem,
@@ -489,7 +490,7 @@ async function reserveVariantInventory(variantId, quantity, session = null) {
   const query = ProductVariant.findOneAndUpdate(
     { _id: variantId, Quantity: { $gte: normalizedQuantity } },
     { $inc: { Quantity: -normalizedQuantity }, $set: { UpdatedAt: now } },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   const updatedVariant = session ? await query.session(session) : await query;
@@ -552,7 +553,7 @@ async function markReservationSold(reservation, session = null) {
   reservation.inventoryHeld = false;
 }
 
-async function listSellerReservations(user, { tab = "pending" } = {}) {
+async function listSellerReservations(user, { tab = "pending", page, limit } = {}) {
   await processReservationLifecycle();
   const shop = await getShopForSeller(user);
   let statusFilter = null;
@@ -587,21 +588,29 @@ async function listSellerReservations(user, { tab = "pending" } = {}) {
     reservationQuery.status = { $in: statusFilter };
   }
 
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const total = await Reservation.countDocuments(reservationQuery);
   const reservations = await Reservation.find(reservationQuery)
-    .sort({ UpdatedAt: -1 })
-    .limit(100);
+    .sort({ UpdatedAt: -1, _id: -1 })
+    .skip(skip)
+    .limit(safeLimit);
 
   const disputeTimesMap = await loadDisputeReportTimesMap(
     reservations.map((doc) => doc._id)
   );
 
-  return Promise.all(
+  const items = await Promise.all(
     reservations.map((doc) =>
       toPublicReservation(doc, {
         disputeTimes: disputeTimesMap.get(String(doc._id)) || {},
       })
     )
   );
+
+  return {
+    reservations: items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function getSellerReservationDetail(user, reservationId) {
@@ -620,7 +629,7 @@ async function getSellerReservationDetail(user, reservationId) {
 
 /** Seller đồng ý giữ hàng → WaitingPickup. */
 async function confirmReservation(user, reservationId) {
-  const { reservation } = await getOwnedReservation(user, reservationId);
+  const { shop, reservation } = await getOwnedReservation(user, reservationId);
 
   if (reservation.status !== RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION) {
     throw createServiceError("Chỉ có thể đồng ý đơn đang chờ xác nhận.");
@@ -645,13 +654,22 @@ async function confirmReservation(user, reservationId) {
     });
   }
 
+  if (shop?.userId) {
+    await createNotification(shop.userId, {
+      title: "Bạn đã xác nhận đơn giữ hàng",
+      content: "Đơn đã chuyển sang chờ khách nhận hàng. Hãy chuẩn bị hàng trước giờ lấy.",
+      audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.ORDER,
+    });
+  }
+
   await emitOrderUpdated(reservation, { action: "confirmed" });
   return toPublicReservation(reservation);
 }
 
 /** Seller từ chối → Rejected + hoàn cọc. */
 async function rejectReservation(user, reservationId, { reason } = {}) {
-  const { reservation } = await getOwnedReservation(user, reservationId);
+  const { shop, reservation } = await getOwnedReservation(user, reservationId);
 
   if (reservation.status === RESERVATION_STATUS.WAITING_PICKUP) {
     throw createServiceError(
@@ -695,6 +713,15 @@ async function rejectReservation(user, reservationId, { reason } = {}) {
     });
   }
 
+  if (shop?.userId) {
+    await createNotification(shop.userId, {
+      title: "Bạn đã từ chối đơn giữ hàng",
+      content: "Yêu cầu giữ hàng đã bị từ chối. Tiền cọc đã hoàn về ví người mua.",
+      audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.ORDER,
+    });
+  }
+
   await emitOrderUpdated(reservation, { action: "rejected" });
   return toPublicReservation(reservation);
 }
@@ -708,7 +735,7 @@ async function cancelAcceptedReservationBySeller(
   reservationId,
   { reason, images } = {}
 ) {
-  const { reservation } = await getOwnedReservation(user, reservationId);
+  const { shop, reservation } = await getOwnedReservation(user, reservationId);
 
   if (reservation.status !== RESERVATION_STATUS.WAITING_PICKUP) {
     throw createServiceError(
@@ -769,6 +796,15 @@ async function cancelAcceptedReservationBySeller(
       content: `Shop đã hủy đơn sau khi xác nhận. Lý do: ${reservation.cancelNote}. Tiền cọc đã được hoàn về ví của bạn.`,
       audience: NOTIFICATION_AUDIENCE.BUYER,
     index: NOTIFICATION_INDEX.ORDER,
+    });
+  }
+
+  if (shop?.userId) {
+    await createNotification(shop.userId, {
+      title: "Bạn đã hủy đơn giữ hàng",
+      content: `Đơn đã hủy. Lý do: ${reservation.cancelNote}. Tiền cọc đã hoàn về ví người mua.`,
+      audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.ORDER,
     });
   }
 
@@ -1309,6 +1345,32 @@ async function processReservationLifecycle() {
           } else {
             reservation.status = RESERVATION_STATUS.AUTO_COMPLETED;
             reservation.completedAt = now;
+            autoCompletedCount += 1;
+
+            const product = reservation.productId
+              ? await Product.findById(reservation.productId).select("ProductName").lean()
+              : null;
+            const productName = product?.ProductName || "sản phẩm";
+            const shop = reservation.shopId
+              ? await ShopProfile.findById(reservation.shopId).select("userId").lean()
+              : null;
+
+            if (reservation.userId) {
+              await createNotification(reservation.userId, {
+                title: "Đơn giữ hàng hoàn thành",
+                content: `Đơn giữ ${productName} đã tự hoàn thành sau thời hạn xử lý.`,
+                audience: NOTIFICATION_AUDIENCE.BUYER,
+                index: NOTIFICATION_INDEX.ORDER,
+              });
+            }
+            if (shop?.userId) {
+              await createNotification(shop.userId, {
+                title: "Đơn giữ hàng hoàn thành",
+                content: `Đơn giữ ${productName} đã tự hoàn thành. Cọc đã vào ví của bạn.`,
+                audience: NOTIFICATION_AUDIENCE.SELLER,
+                index: NOTIFICATION_INDEX.ORDER,
+              });
+            }
           }
           reservation.UpdatedAt = now;
           await reservation.save();
@@ -1379,6 +1441,21 @@ const ACTIVE_LOCK_CANCEL_STATUSES = [
   RESERVATION_STATUS.WAITING_PICKUP,
   RESERVATION_STATUS.DISPUTED,
 ];
+
+async function assertNoActiveReservationsForProduct(productId) {
+  const activeCount = await Reservation.countDocuments({
+    productId,
+    status: { $in: ACTIVE_LOCK_CANCEL_STATUSES },
+  });
+
+  if (activeCount > 0) {
+    throw createServiceError(
+      activeCount === 1
+        ? "Đang có đơn giữ hàng liên quan. Hoàn thành đơn này trước khi gỡ sản phẩm."
+        : `Đang có ${activeCount} đơn giữ hàng liên quan. Hoàn thành các đơn này trước khi gỡ sản phẩm.`
+    );
+  }
+}
 
 /**
  * Hủy đơn đang active khi admin khóa tài khoản — luôn hoàn cọc cho buyer.
@@ -1606,6 +1683,7 @@ module.exports = {
   sendPickupReminders,
   cancelActiveReservationsForAccountLock,
   cancelActiveReservationsForShopLock,
+  assertNoActiveReservationsForProduct,
   SHOP_CANCEL_REASON,
   BUYER_CANCEL_REASON,
   SHOP_REJECT_REASON,

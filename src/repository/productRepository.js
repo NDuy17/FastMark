@@ -8,21 +8,25 @@ import { normalizeProduct } from '../model/productModel';
 
 const log = createLogger('ProductRepository');
 
-export async function fetchProductsByStoreId(storeId) {
-  log.info('fetchProductsByStoreId:start', { storeId });
+export async function fetchProductsByStoreId(storeId, { page = 1, limit = 20 } = {}) {
+  log.info('fetchProductsByStoreId:start', { storeId, page, limit });
 
   if (!hasStoreNodeApi()) {
     log.warn('fetchProductsByStoreId:no-api', { storeId });
-    return [];
+    return { items: [], page, limit, total: 0, hasMore: false };
   }
 
   try {
-    const products = await fetchProductsFromNode(storeId);
+    const productsPage = await fetchProductsFromNode(storeId, { page, limit });
+    const products = productsPage.items || [];
     log.ok('fetchProductsByStoreId:node-api', { storeId, count: products.length });
-    return products.map(normalizeProduct);
+    return {
+      ...productsPage,
+      items: products.map(normalizeProduct),
+    };
   } catch (error) {
     log.warn('fetchProductsByStoreId:node-api-failed', error?.message || error);
-    return [];
+    return { items: [], page, limit, total: 0, hasMore: false };
   }
 }
 

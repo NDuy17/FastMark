@@ -62,7 +62,8 @@ export default function MyReviewDetailModal({
         if (!idToken) {
           return;
         }
-        const reviews = await getMyReviewsOnBackend(idToken);
+        const reviewsPage = await getMyReviewsOnBackend(idToken, { page: 1, limit: 20 });
+        const reviews = reviewsPage.items || [];
         const reviewId = String(review.id || '').trim();
         const reservationId = String(review.reservationId || review.orderCode || '').trim();
         const match = (reviews || []).find((row) => {

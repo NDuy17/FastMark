@@ -222,8 +222,8 @@ export default function AccountProfileScreen({
         throw new Error('Phiên đăng nhập đã hết hạn.');
       }
 
-      const products = await getMyProductsOnBackend(idToken);
-      setSellerProducts(products.map(mapApiProductToCard));
+      const productsPage = await getMyProductsOnBackend(idToken, { page: 1, limit: 20 });
+      setSellerProducts((productsPage.items || []).map(mapApiProductToCard));
     } catch {
       setSellerProducts([]);
     }

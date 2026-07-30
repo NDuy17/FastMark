@@ -9,8 +9,10 @@ const { isSubscriptionActive } = require("../constants");
 const {
   assertCanManageProducts,
 } = require("./sellerPlanAccessService");
+const { assertNoActiveReservationsForProduct } = require("./reservationService");
 const { sanitizeUploadLabel } = require("../utils/sanitizeFileName");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -250,12 +252,31 @@ function toPublicVariant(variant) {
   };
 }
 
-function activeProductFilter(extra = {}) {
+function publicProductFilter(extra = {}) {
   return {
     ...extra,
+    IsDeleted: { $ne: true },
+    SellerRemovedAt: null,
     $or: [
       { Status: PRODUCT_STATUS.ACTIVE },
-      { Status: { $exists: false }, IsDeleted: { $ne: true } },
+      { Status: { $exists: false } },
+    ],
+  };
+}
+
+function activeProductFilter(extra = {}) {
+  return publicProductFilter(extra);
+}
+
+function sellerManagedProductFilter(extra = {}) {
+  return {
+    ...extra,
+    IsDeleted: { $ne: true },
+    SellerRemovedAt: null,
+    $or: [
+      { Status: PRODUCT_STATUS.ACTIVE },
+      { Status: PRODUCT_STATUS.HIDDEN },
+      { Status: { $exists: false } },
     ],
   };
 }
@@ -351,7 +372,7 @@ async function getSellerShop(user) {
 async function getOwnedProduct(user, productId, { includeHidden = false } = {}) {
   const shop = await getSellerShop(user);
   const filter = includeHidden
-    ? { _id: productId, ShopId: shop._id }
+    ? sellerManagedProductFilter({ _id: productId, ShopId: shop._id })
     : activeProductFilter({ _id: productId, ShopId: shop._id });
 
   const product = await Product.findOne(filter);
@@ -558,21 +579,19 @@ async function createProduct(user, payload) {
   };
 }
 
-async function listMyProducts(user) {
+async function listMyProducts(user, { page, limit } = {}) {
   const shop = await getSellerShop(user);
   await syncShopProductStats(shop);
 
-  const products = await Product.find({
-    ShopId: shop._id,
-    $or: [
-      { Status: PRODUCT_STATUS.ACTIVE },
-      { Status: PRODUCT_STATUS.HIDDEN },
-      { Status: { $exists: false }, IsDeleted: { $ne: true } },
-    ],
-  }).sort({
-    pinProduct: -1,
-    CreatedAt: -1,
-  });
+  const filter = sellerManagedProductFilter({ ShopId: shop._id });
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const total = await Product.countDocuments(filter);
+  // _id là tiebreaker bắt buộc: nhiều sản phẩm có cùng CreatedAt nên nếu thiếu nó
+  // các trang skip/limit sẽ trả về trùng bản ghi và "Xem thêm" không ra dữ liệu mới.
+  const products = await Product.find(filter)
+    .sort({ pinProduct: -1, CreatedAt: -1, _id: -1 })
+    .skip(skip)
+    .limit(safeLimit);
 
   const productIds = products.map((product) => product._id);
   const [variants, imagesByProduct] = await Promise.all([
@@ -588,7 +607,7 @@ async function listMyProducts(user) {
     return map;
   }, {});
 
-  return sortProductsByPin(
+  const items = sortProductsByPin(
     products.map((product) =>
       toPublicProduct(
         product,
@@ -598,19 +617,22 @@ async function listMyProducts(user) {
       )
     )
   );
+
+  return {
+    products: items,
+    items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function getProductById(productId) {
-  const product = await Product.findByIdAndUpdate(
-    productId,
+  // Chỉ tăng ViewCount cho sản phẩm còn hiển thị công khai.
+  const product = await Product.findOneAndUpdate(
+    publicProductFilter({ _id: productId }),
     { $inc: { ViewCount: 1 } },
-    { new: true }
+    { returnDocument: "after" }
   );
   if (!product) {
-    throw createServiceError("Không tìm thấy sản phẩm.", 404);
-  }
-
-  if (Number(product.Status) === PRODUCT_STATUS.HIDDEN) {
     throw createServiceError("Không tìm thấy sản phẩm.", 404);
   }
 
@@ -714,18 +736,48 @@ async function updateProduct(user, productId, payload) {
 }
 
 async function softDeleteProduct(user, productId) {
-  const { product, shop } = await getOwnedProduct(user, productId, { includeHidden: true });
+  const shop = await getSellerShop(user);
+  const product = await Product.findOne({
+    _id: productId,
+    ShopId: shop._id,
+    IsDeleted: { $ne: true },
+    SellerRemovedAt: null,
+  });
+  if (!product) {
+    throw createServiceError("Không tìm thấy sản phẩm.", 404);
+  }
 
-  if (product.Status === PRODUCT_STATUS.HIDDEN) {
+  if (product.SellerRemovedAt) {
     return { product };
   }
 
+  await assertNoActiveReservationsForProduct(product._id);
+
   product.Status = PRODUCT_STATUS.HIDDEN;
+  product.SellerRemovedAt = new Date();
   product.pinProduct = 0;
+  product.IsPromotion = false;
+  product.DiscountPercent = 0;
+  product.PromotionStartDate = null;
+  product.PromotionEndDate = null;
   product.UpdatedAt = new Date();
   await product.save();
 
   await syncShopProductStats(shop);
+
+  const { emitAdminUpdated, emitUserResourceUpdated, emitPublicUpdated } = require("./realtimeService");
+  const removedPayload = {
+    productId: String(product._id),
+    shopId: String(product.ShopId || ""),
+    removed: true,
+    removedBy: "seller",
+  };
+  emitAdminUpdated("product", {
+    ...removedPayload,
+    userId: shop.userId ? String(shop.userId) : "",
+  });
+  emitUserResourceUpdated(shop.userId, "product", removedPayload);
+  emitPublicUpdated("product", removedPayload);
 
   return { product };
 }
@@ -741,15 +793,9 @@ async function setProductPin(user, productId, pinValue) {
   await assertCanManageProducts(shop);
   const pinProduct = normalizePinProduct(pinValue);
 
-  const product = await Product.findOne({
-    _id: productId,
-    ShopId: shop._id,
-    $or: [
-      { Status: PRODUCT_STATUS.ACTIVE },
-      { Status: PRODUCT_STATUS.HIDDEN },
-      { Status: { $exists: false }, IsDeleted: { $ne: true } },
-    ],
-  });
+  const product = await Product.findOne(
+    sellerManagedProductFilter({ _id: productId, ShopId: shop._id })
+  );
   if (!product) {
     throw createServiceError("Không tìm thấy sản phẩm.", 404);
   }
@@ -832,4 +878,7 @@ module.exports = {
   loadProductImages,
   loadProductImagesByProductIds,
   toPublicProductImages,
+  syncShopProductStats,
+  publicProductFilter,
+  activeProductFilter,
 };

@@ -28,6 +28,7 @@ function activeProductFilter(extra = {}) {
   return {
     ...extra,
     IsDeleted: { $ne: true },
+    SellerRemovedAt: null,
     Status: PRODUCT_STATUS.ACTIVE,
   };
 }
@@ -283,7 +284,7 @@ async function listFavorites(user, query = {}) {
   };
 
   const rows = await FavoriteProduct.find({ userId: user._id })
-    .sort({ CreatedAt: -1 })
+    .sort({ CreatedAt: -1, _id: -1 })
     .limit(hasPaging ? 500 : 200)
     .lean();
 

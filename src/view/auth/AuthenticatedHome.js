@@ -4,13 +4,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSelector } from 'react-redux';
 
-import { getMyNotificationsOnBackend } from '../../api/notificationApi';
-import { notificationMatchesAudience } from '../../core/utils/notificationRealtime';
+import { getUnreadNotificationCountOnBackend } from '../../api/notificationApi';
+import {
+  notificationMatchesAudience,
+  resolveUnreadCountFromReadEvent,
+} from '../../core/utils/notificationRealtime';
 import { APP_MODE_BUYER, useAppMode } from '../../hooks/useAppMode';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { usePresence } from '../../hooks/usePresence';
 import { useShopPresence } from '../../hooks/useShopPresence';
 import { useSellerAccessSync } from '../../hooks/useSellerAccessSync';
+import { useAccountStatusSync } from '../../hooks/useAccountStatusSync';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
 import {
   selectCanSwitchToSeller,
@@ -199,8 +203,8 @@ export default function AuthenticatedHome() {
 
   const loadUnreadBadges = useCallback(async () => {
     try {
-      const notifications = await getMyNotificationsOnBackend('buyer');
-      const notificationCount = (notifications || []).filter((item) => !item.isRead).length;
+      // Đếm từ backend theo toàn bộ thông báo, không dựa vào trang 20 item đang tải.
+      const notificationCount = await getUnreadNotificationCountOnBackend('buyer');
       setUnreadNotificationsCount(notificationCount);
     } catch {
       // Keep the previous badge state on transient failures.
@@ -223,8 +227,9 @@ export default function AuthenticatedHome() {
       return;
     }
 
-    if (Number.isFinite(Number(payload?.unreadCount))) {
-      setUnreadNotificationsCount(Math.max(0, Number(payload.unreadCount)));
+    const unreadCount = resolveUnreadCountFromReadEvent(payload, 'buyer');
+    if (unreadCount != null) {
+      setUnreadNotificationsCount(unreadCount);
       return;
     }
 
@@ -240,6 +245,8 @@ export default function AuthenticatedHome() {
   useSellerAccessSync({
     enabled: !isAccountLocked,
   });
+
+  useAccountStatusSync({ enabled: true });
 
   useEffect(() => {
     if (!isReady || isAccountLocked) {

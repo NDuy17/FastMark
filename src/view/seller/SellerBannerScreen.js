@@ -21,9 +21,11 @@ import {
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { useResourceSocket } from '../../hooks/useResourceSocket';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import WalletBalanceTopUpBar from '../shared/components/WalletBalanceTopUpBar';
 import { BOTTOM_SHEET_BORDER, BottomSheetDismissOverlay, BottomSheetHandle, BottomSheetPanel } from '../shared/components/bottomSheetChrome';
 
@@ -75,6 +77,10 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
   const [targetType, setTargetType] = useState(BANNER_TARGET_TYPE.SHOP);
   const [targetProductId, setTargetProductId] = useState('');
   const [products, setProducts] = useState([]);
+  const [productsPage, setProductsPage] = useState(1);
+  const [productsHasMore, setProductsHasMore] = useState(false);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
 
   const banners = useMemo(
@@ -150,28 +156,46 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
     },
   });
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const idToken = await getCurrentUserIdToken();
-        if (!idToken) return;
-        const rows = await getMyProductsOnBackend(idToken);
-        // Chỉ SP đang bán của shop — dùng khi đích đến = Sản phẩm.
-        setProducts(
-          (Array.isArray(rows) ? rows : [])
-            .filter((item) => Number(item.status) === 1)
-            .map((item) => ({
-              id: String(item.id || item._id || ''),
-              name: item.productName || item.name || 'Sản phẩm',
-              thumbnail: resolveProductThumbnail(item),
-            }))
-            .filter((item) => item.id)
-        );
-      } catch {
+  const loadProducts = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (nextPage > 1) {
+      setLoadingMoreProducts(true);
+    }
+    try {
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) return;
+      const rowsPage = await getMyProductsOnBackend(idToken, {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = rowsPage.items || [];
+      const mapped = (Array.isArray(rows) ? rows : [])
+        .filter((item) => Number(item.status) === 1)
+        .map((item) => ({
+          id: String(item.id || item._id || ''),
+          name: item.productName || item.name || 'Sản phẩm',
+          thumbnail: resolveProductThumbnail(item),
+        }))
+        .filter((item) => item.id);
+      setProducts((current) =>
+        nextPage === 1 ? mapped : appendUniqueById(current, mapped)
+      );
+      setProductsPage(Number(rowsPage.page) || nextPage);
+      setProductsHasMore(Boolean(rowsPage.hasMore));
+      setProductsTotal(Math.max(0, Number(rowsPage.total) || 0));
+    } catch {
+      if (nextPage === 1) {
         setProducts([]);
+        setProductsHasMore(false);
+        setProductsTotal(0);
       }
-    })();
+    } finally {
+      setLoadingMoreProducts(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadProducts({ nextPage: 1 });
+  }, [loadProducts]);
 
   function handleSelectBanner(banner) {
     setSelectedBannerId(banner.id);
@@ -453,7 +477,8 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
                 {products.length === 0 ? (
                   <Text style={styles.empty}>Chưa có sản phẩm đang bán.</Text>
                 ) : (
-                  products.map((product) => {
+                  <>
+                  {products.map((product) => {
                     const selected = String(product.id) === String(targetProductId);
                     return (
                       <Pressable
@@ -479,7 +504,18 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
                         </Text>
                       </Pressable>
                     );
-                  })
+                  })}
+                  <LoadMoreButton
+                    currentCount={products.length}
+                    totalCount={
+                      productsHasMore
+                        ? Math.max(productsTotal, products.length + DEFAULT_PAGE_SIZE)
+                        : products.length
+                    }
+                    loading={loadingMoreProducts}
+                    onPress={() => loadProducts({ nextPage: productsPage + 1 })}
+                  />
+                  </>
                 )}
               </ScrollView>
               <Pressable

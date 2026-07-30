@@ -11,9 +11,36 @@ let listenerCount = 0;
 const newListeners = new Set();
 const readListeners = new Set();
 
+/**
+ * Backend phát cùng một thông báo qua hai event ("notification:new" và
+ * "notification_created") nên phải chặn bản trùng, tránh badge chưa đọc bị +2.
+ */
+const NEW_EVENT_DEDUPE_MS = 60000;
+const seenNewNotificationIds = new Map();
+
+function isDuplicateNewNotification(id) {
+  const now = Date.now();
+  seenNewNotificationIds.forEach((seenAt, key) => {
+    if (now - seenAt > NEW_EVENT_DEDUPE_MS) {
+      seenNewNotificationIds.delete(key);
+    }
+  });
+
+  if (seenNewNotificationIds.has(id)) {
+    return true;
+  }
+
+  seenNewNotificationIds.set(id, now);
+  return false;
+}
+
 function notifyNewListeners(payload) {
   const normalized = normalizeSocketNotification(payload);
   if (!normalized) {
+    return;
+  }
+
+  if (isDuplicateNewNotification(normalized.id)) {
     return;
   }
 

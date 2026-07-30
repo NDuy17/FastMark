@@ -12,9 +12,11 @@ exports.getWallet = async (req, res) => {
 };
 
 exports.listTransactions = async (req, res) => {
-  const limit = req.query.limit;
-  const transactions = await walletService.listTransactions(req.currentUser._id, { limit });
-  return success(res, { data: { transactions } });
+  const data = await walletService.listTransactions(req.currentUser._id, {
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  return success(res, { data });
 };
 
 exports.getTransaction = async (req, res) => {

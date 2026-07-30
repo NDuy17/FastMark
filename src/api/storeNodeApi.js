@@ -1,6 +1,7 @@
 import { apiRequest, hasApiBaseUrl } from './client';
 import { API_ENDPOINTS } from './endpoints';
 import { createLogger } from '../core/utils/logger';
+import { normalizePageResult } from '../core/utils/pagination';
 
 const log = createLogger('StoreNodeApi');
 
@@ -21,20 +22,32 @@ function isMongoObjectId(value) {
   return /^[a-f\d]{24}$/i.test(String(value || ''));
 }
 
-export async function fetchNearbyShopsFromNode({ latitude, longitude, radiusMeters = 2000 }) {
+export async function fetchNearbyShopsFromNode({
+  latitude,
+  longitude,
+  radiusMeters = 2000,
+  page = 1,
+  limit = 20,
+  seed = '',
+}) {
   if (!hasStoreNodeApi()) {
-    return [];
+    return normalizePageResult({}, 'shops');
   }
 
   const params = new URLSearchParams({
     lat: String(latitude),
     lng: String(longitude),
     radius: String(radiusMeters),
+    page: String(page),
+    limit: String(limit),
   });
+  if (seed) {
+    params.set('seed', String(seed));
+  }
 
   const response = await apiRequest(`${API_ENDPOINTS.shopsNearby}?${params.toString()}`);
   const payload = await parseJson(response, 'fetchNearbyShopsFromNode');
-  return payload.data?.shops || [];
+  return normalizePageResult(payload.data || {}, 'shops');
 }
 
 export async function fetchSearchShopsFromNode({
@@ -46,16 +59,18 @@ export async function fetchSearchShopsFromNode({
   productCategoryId = '',
   productQuery = '',
   identityOnly = false,
-  limit = 50,
+  page = 1,
+  limit = 20,
 }) {
   if (!hasStoreNodeApi()) {
-    return { shops: [], count: 0 };
+    return normalizePageResult({}, 'shops');
   }
 
   const params = new URLSearchParams({
     lat: String(latitude),
     lng: String(longitude),
     radius: String(radiusMeters),
+    page: String(page),
     limit: String(limit),
   });
 
@@ -80,6 +95,7 @@ export async function fetchSearchShopsFromNode({
   const response = await apiRequest(`${API_ENDPOINTS.shopsSearch}?${params.toString()}`);
   const payload = await parseJson(response, 'fetchSearchShopsFromNode');
   return {
+    ...normalizePageResult(payload.data || {}, 'shops'),
     shops: payload.data?.shops || [],
     count: payload.data?.count || 0,
     radiusMeters: payload.data?.radius_meters ?? radiusMeters,
@@ -114,23 +130,35 @@ export async function fetchStoreFromNode(storeId, { latitude, longitude } = {}) 
   }
 }
 
-export async function fetchProductsFromNode(storeId) {
+export async function fetchProductsFromNode(storeId, { page = 1, limit = 20 } = {}) {
   if (!hasStoreNodeApi()) {
-    return [];
+    return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
   }
 
   const normalizedId = String(storeId);
   if (!isMongoObjectId(normalizedId)) {
-    return [];
+    return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
   }
 
   try {
-    const response = await apiRequest(API_ENDPOINTS.shopProducts(normalizedId));
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+    });
+    const response = await apiRequest(
+      `${API_ENDPOINTS.shopProducts(normalizedId)}?${params.toString()}`
+    );
     const payload = await parseJson(response, 'fetchShopProductsFromNode');
-    return payload.data?.products || [];
+    return normalizePageResult(
+      {
+        ...(payload.data || {}),
+        items: payload.data?.products || payload.data?.items || [],
+      },
+      'items'
+    );
   } catch (error) {
     if (Number(error?.statusCode) === 404) {
-      return [];
+      return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
     }
     throw error;
   }
@@ -151,23 +179,35 @@ export async function fetchProductFromNode(productId) {
   return payload.data?.product || payload.product || null;
 }
 
-export async function fetchReviewsFromNode(storeId) {
+export async function fetchReviewsFromNode(storeId, { page = 1, limit = 20 } = {}) {
   if (!hasStoreNodeApi()) {
-    return [];
+    return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
   }
 
   const normalizedId = String(storeId);
   if (!isMongoObjectId(normalizedId)) {
-    return [];
+    return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
   }
 
   try {
-    const response = await apiRequest(API_ENDPOINTS.shopReviews(normalizedId));
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+    });
+    const response = await apiRequest(
+      `${API_ENDPOINTS.shopReviews(normalizedId)}?${params.toString()}`
+    );
     const payload = await parseJson(response, 'fetchShopReviewsFromNode');
-    return payload.data?.reviews || [];
+    return normalizePageResult(
+      {
+        ...(payload.data || {}),
+        items: payload.data?.reviews || payload.data?.items || [],
+      },
+      'items'
+    );
   } catch (error) {
     if (Number(error?.statusCode) === 404) {
-      return [];
+      return normalizePageResult({ items: [], page, limit, total: 0, hasMore: false });
     }
     throw error;
   }

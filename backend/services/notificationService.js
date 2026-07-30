@@ -5,7 +5,9 @@ const {
   normalizeNotificationAudience,
   normalizeNotificationIndex,
 } = require("../constants");
-const { emitUserEvent } = require("../socket");
+// Lấy hàm khi gọi (không destructure lúc require) vì socket ↔ service là circular
+// dependency: destructure sớm có thể nhận undefined và mất event realtime.
+const socketBus = require("../socket");
 const { sendPushToUser } = require("./pushNotificationService");
 
 function buildAudienceListFilter(audience) {
@@ -78,8 +80,8 @@ async function createNotification(userId, { title, content, audience, index, isA
     createdAt: notification.CreatedAt,
   };
 
-  emitUserEvent(String(userId), "notification:new", payload);
-  emitUserEvent(String(userId), "notification_created", payload);
+  socketBus.emitUserEvent(String(userId), "notification:new", payload);
+  socketBus.emitUserEvent(String(userId), "notification_created", payload);
 
   sendPushToUser(userId, {
     title: notification.title,
@@ -110,32 +112,47 @@ function toClientNotification(notification) {
   };
 }
 
-async function listNotificationsForUser(userId, { page = 1, limit = 50, audience } = {}) {
+async function listNotificationsForUser(userId, { page = 1, limit = 20, audience } = {}) {
   if (!userId) {
-    return { items: [], pagination: { page: 1, limit: 50, total: 0, totalPages: 1 } };
+    return {
+      items: [],
+      page: 1,
+      limit: 20,
+      total: 0,
+      totalPages: 1,
+      hasMore: false,
+      pagination: { page: 1, limit: 20, total: 0, totalPages: 1, hasMore: false },
+    };
   }
 
   const currentPage = Math.max(1, Number(page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(limit) || 50));
+  const pageSize = Math.min(100, Math.max(1, Number(limit) || 20));
   const skip = (currentPage - 1) * pageSize;
   const filter = {
     userId,
     ...buildAudienceListFilter(audience),
   };
 
-  const [items, total] = await Promise.all([
-    Notification.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(pageSize).lean(),
+  const [items, total, unreadCount] = await Promise.all([
+    Notification.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(pageSize).lean(),
     Notification.countDocuments(filter),
+    // Đếm trên toàn bộ phạm vi audience, không phụ thuộc trang đang tải.
+    Notification.countDocuments({ ...filter, isRead: { $ne: 1 } }),
   ]);
+
+  const pagination = {
+    page: currentPage,
+    limit: pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    hasMore: currentPage * pageSize < total,
+  };
 
   return {
     items: items.map(toClientNotification),
-    pagination: {
-      page: currentPage,
-      limit: pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    },
+    unreadCount,
+    ...pagination,
+    pagination,
   };
 }
 
@@ -160,11 +177,19 @@ async function emitNotificationReadEvent(userId, { id, audience, all = false } =
     audience,
     NOTIFICATION_AUDIENCE.BUYER
   );
-  const unreadCount = await countUnreadNotifications(userId, normalizedAudience);
 
-  emitUserEvent(String(userId), "notification:read", {
+  // Thông báo audience "system" nằm trong cả phạm vi buyer và seller, nên phải gửi
+  // kèm số chưa đọc của từng phạm vi để mỗi badge lấy đúng con số của mình.
+  const [buyerUnread, sellerUnread] = await Promise.all([
+    countUnreadNotifications(userId, NOTIFICATION_AUDIENCE.BUYER),
+    countUnreadNotifications(userId, NOTIFICATION_AUDIENCE.SELLER),
+  ]);
+
+  socketBus.emitUserEvent(String(userId), "notification:read", {
     id: id ? String(id) : "",
-    unreadCount,
+    unreadCount:
+      normalizedAudience === NOTIFICATION_AUDIENCE.SELLER ? sellerUnread : buyerUnread,
+    unreadCounts: { buyer: buyerUnread, seller: sellerUnread },
     audience: normalizedAudience,
     all: Boolean(all),
   });
@@ -187,7 +212,7 @@ async function markNotificationAsRead(userId, notificationId, { audience } = {})
   const notification = await Notification.findOneAndUpdate(
     filter,
     { $set: { isRead: 1, UpdatedAt: now } },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!notification) {
@@ -198,7 +223,7 @@ async function markNotificationAsRead(userId, notificationId, { audience } = {})
 
   await emitNotificationReadEvent(userId, {
     id: notification._id,
-    audience: notification.audience || audience,
+    audience,
   });
 
   return toClientNotification(notification);

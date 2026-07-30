@@ -11,6 +11,12 @@ router.get(
   asyncHandler(notificationController.listMyNotifications)
 );
 
+router.get(
+  "/unread-count",
+  verifyFirebaseToken,
+  asyncHandler(notificationController.getUnreadCount)
+);
+
 router.post(
   "/read-all",
   verifyFirebaseToken,

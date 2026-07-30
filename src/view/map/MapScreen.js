@@ -27,7 +27,9 @@ import { loadStoreById } from '../../viewmodel/store/storeViewModel';
 import { mapLogger as log } from '../../core/utils/logger';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
 import AvatarBadge from '../shared/components/AvatarBadge';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 
 const TYPE_LABEL = {
   cafe: 'Cà phê',
@@ -97,6 +99,9 @@ export default function MapScreen({
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [registeredShops, setRegisteredShops] = useState([]);
   const [isScanningShops, setIsScanningShops] = useState(false);
+  const [isLoadingMoreShops, setIsLoadingMoreShops] = useState(false);
+  const [shopsHasMore, setShopsHasMore] = useState(false);
+  const [shopsTotal, setShopsTotal] = useState(0);
   const [storeNav, setStoreNav] = useState(null);
   const [activeReservation, setActiveReservation] = useState(null);
   const [directionsSession, setDirectionsSession] = useState(null);
@@ -126,6 +131,7 @@ export default function MapScreen({
   const reverseScanRequestRef = useRef(0);
   const scanFetchTimerRef = useRef(null);
   const lastScanFetchRef = useRef(null);
+  const shopsPageRef = useRef(1);
 
   const resolveScanAddress = useCallback(async (location) => {
     if (!hasValidLocation(location)) {
@@ -338,6 +344,8 @@ export default function MapScreen({
   useEffect(() => {
     if (selectedCategory === 'none') {
       setRegisteredShops([]);
+      setShopsHasMore(false);
+      setShopsTotal(0);
       setIsScanningShops(false);
       return undefined;
     }
@@ -371,19 +379,27 @@ export default function MapScreen({
       });
 
       setIsScanningShops(true);
+      shopsPageRef.current = 1;
       loadNearbyRegisteredShops({
         latitude: scanLocation.latitude,
         longitude: scanLocation.longitude,
         radiusMeters: effectiveRadius,
         shopCategoryId: selectedCategory === 'all' || selectedCategory === 'none' ? '' : selectedCategory,
+        page: 1,
+        limit: DEFAULT_PAGE_SIZE,
       })
         .then((data) => {
           if (!isCurrent) {
             return;
           }
           lastScanFetchRef.current = locKey;
-          log.ok('fetchRegisteredShops:map-loaded', { count: data.length });
-          setRegisteredShops(Array.isArray(data) ? data : []);
+          log.ok('fetchRegisteredShops:map-loaded', {
+            count: Array.isArray(data) ? data.length : data?.items?.length || 0,
+          });
+          const shops = Array.isArray(data) ? data : data?.items || data?.shops || [];
+          setRegisteredShops(shops);
+          setShopsHasMore(Boolean(data?.hasMore));
+          setShopsTotal(Math.max(0, Number(data?.total) || shops.length));
         })
         .catch((error) => {
           if (!isCurrent) {
@@ -411,6 +427,47 @@ export default function MapScreen({
       }
     };
   }, [scanLocation, selectedRadius, selectedCategory, usingCustomScan, isScreenActive]);
+
+  const loadMoreShops = useCallback(async () => {
+    if (
+      isLoadingMoreShops ||
+      !shopsHasMore ||
+      !hasValidLocation(scanLocation) ||
+      selectedCategory === 'none'
+    ) {
+      return;
+    }
+
+    setIsLoadingMoreShops(true);
+    try {
+      const nextPage = shopsPageRef.current + 1;
+      const effectiveRadius = selectedRadius == null ? 0 : selectedRadius;
+      const data = await loadNearbyRegisteredShops({
+        latitude: scanLocation.latitude,
+        longitude: scanLocation.longitude,
+        radiusMeters: effectiveRadius,
+        shopCategoryId: selectedCategory === 'all' ? '' : selectedCategory,
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = Array.isArray(data) ? data : data?.items || data?.shops || [];
+      shopsPageRef.current = nextPage;
+      setRegisteredShops((current) => appendUniqueById(current, rows));
+      setShopsHasMore(Boolean(data?.hasMore));
+      setShopsTotal(Math.max(0, Number(data?.total) || shopsTotal));
+    } catch (error) {
+      log.fail('fetchRegisteredShops:map-load-more-failed', error);
+    } finally {
+      setIsLoadingMoreShops(false);
+    }
+  }, [
+    isLoadingMoreShops,
+    scanLocation,
+    selectedCategory,
+    selectedRadius,
+    shopsHasMore,
+    shopsTotal,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -1117,6 +1174,20 @@ export default function MapScreen({
               keyExtractor={(item) => String(item.id)}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.nearbyList}
+              ListFooterComponent={
+                displayRestaurants.length > 0 ? (
+                  <LoadMoreButton
+                    currentCount={displayRestaurants.length}
+                    totalCount={
+                      shopsHasMore
+                        ? Math.max(shopsTotal, displayRestaurants.length + DEFAULT_PAGE_SIZE)
+                        : displayRestaurants.length
+                    }
+                    loading={isLoadingMoreShops}
+                    onPress={loadMoreShops}
+                  />
+                ) : null
+              }
               renderItem={({ item: restaurant }) => {
                 const categoryLabel =
                   restaurant.category_name ||

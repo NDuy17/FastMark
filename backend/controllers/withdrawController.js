@@ -23,10 +23,11 @@ exports.createWithdraw = async (req, res) => {
 };
 
 exports.listMyWithdraws = async (req, res) => {
-  const withdraws = await withdrawService.listMyWithdraws(req.currentUser._id, {
+  const data = await withdrawService.listMyWithdraws(req.currentUser._id, {
     limit: req.query.limit,
+    page: req.query.page,
   });
-  return success(res, { data: { withdraws } });
+  return success(res, { data });
 };
 
 exports.listAdminWithdraws = async (req, res) => {

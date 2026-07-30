@@ -34,7 +34,7 @@ const PRODUCT_FILTERS = [
   { value: HISTORY_STATUS_FILTER_ALL, label: 'Tất cả' },
   { value: 'active', label: 'Đang hiện' },
   { value: 'hidden', label: 'Đã ẩn' },
-  { value: 'removed', label: 'Đã gỡ' },
+  { value: 'removed', label: 'Đã xóa' },
 ];
 
 /** Nhãn khớp cột Hiển thị tab đánh giá. */

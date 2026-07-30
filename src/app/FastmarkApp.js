@@ -167,7 +167,7 @@ export default function FastmarkApp() {
         <View style={styles.welcomeScreen}>
           <StatusBar style="dark" />
           <Image
-            source={require('../../assets/splash-welcome.png')}
+            source={require('../../assets/splash-welcome.jpg')}
             style={styles.welcomeImage}
             resizeMode="cover"
           />

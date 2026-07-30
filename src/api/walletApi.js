@@ -1,6 +1,7 @@
 import { apiRequest, AUTH_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
 import { normalizeWallet, normalizeWalletTransaction } from '../model/walletModel';
+import { DEFAULT_PAGE_SIZE, normalizePageResult } from '../core/utils/pagination';
 
 async function parseApiResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -36,15 +37,30 @@ export async function getWalletOnBackend(idToken) {
   return normalizeWallet(payload.data?.wallet || {});
 }
 
-export async function getWalletTransactionsOnBackend(idToken, { limit = 30 } = {}) {
-  const params = new URLSearchParams({ limit: String(limit) });
+export async function getWalletTransactionsOnBackend(
+  idToken,
+  { page = 1, limit = DEFAULT_PAGE_SIZE } = {}
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   const response = await apiRequest(
     `${API_ENDPOINTS.walletTransactions}?${params.toString()}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
-  return (payload.data?.transactions || []).map(normalizeWalletTransaction);
+  const data = payload.data || {};
+  const result = normalizePageResult(
+    { ...data, items: data.transactions || data.items || [] },
+    'items'
+  );
+  return {
+    ...result,
+    transactions: result.items.map(normalizeWalletTransaction),
+    items: result.items.map(normalizeWalletTransaction),
+  };
 }
 
 export async function getWalletTransactionOnBackend(idToken, transactionId) {
@@ -143,12 +159,23 @@ export async function createWalletWithdrawOnBackend(idToken, body) {
   };
 }
 
-export async function listWalletWithdrawsOnBackend(idToken, { limit = 30 } = {}) {
+export async function listWalletWithdrawsOnBackend(
+  idToken,
+  { page = 1, limit = DEFAULT_PAGE_SIZE } = {}
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   const response = await apiRequest(
-    `${API_ENDPOINTS.walletWithdraws}?limit=${limit}`,
+    `${API_ENDPOINTS.walletWithdraws}?${params.toString()}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
-  return payload.data?.withdraws || [];
+  const data = payload.data || {};
+  return normalizePageResult(
+    { ...data, items: data.withdraws || data.items || [] },
+    'items'
+  );
 }

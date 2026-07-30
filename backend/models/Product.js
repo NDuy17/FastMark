@@ -54,6 +54,8 @@ const ProductSchema = new mongoose.Schema({
   IsDeleted: { type: Boolean, default: false, index: true },
   AdminRemovalReason: { type: String, default: "", trim: true },
   AdminRemovedAt: { type: Date, default: null },
+  /** Seller tự gỡ sản phẩm — ẩn khỏi quản lý shop, admin vẫn có thể gỡ vi phạm. */
+  SellerRemovedAt: { type: Date, default: null, index: true },
 
   // Thời điểm tạo sản phẩm.
   CreatedAt: { type: Date, default: Date.now },

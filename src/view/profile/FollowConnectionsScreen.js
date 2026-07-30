@@ -20,6 +20,7 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_DEBOUNCE_MS = 400;
@@ -271,12 +272,6 @@ export default function FollowConnectionsScreen({
           refreshControl={
             <RefreshControl refreshing={isRefreshing} onRefresh={() => loadData({ refresh: true })} />
           }
-          onEndReached={() => {
-            if (!isLoadingMore && page < (pagination.totalPages || 1)) {
-              loadData({ nextPage: page + 1 });
-            }
-          }}
-          onEndReachedThreshold={0.3}
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Text style={styles.emptyTitle}>
@@ -290,8 +285,17 @@ export default function FollowConnectionsScreen({
             </View>
           }
           ListFooterComponent={
-            isLoadingMore ? (
-              <ActivityIndicator style={{ marginVertical: 16 }} color="#076F32" />
+            items.length > 0 ? (
+              <LoadMoreButton
+                currentCount={items.length}
+                totalCount={pagination.total}
+                loading={isLoadingMore}
+                onPress={() => {
+                  if (!isLoadingMore && page < (pagination.totalPages || 1)) {
+                    loadData({ nextPage: page + 1 });
+                  }
+                }}
+              />
             ) : null
           }
           renderItem={({ item }) => (

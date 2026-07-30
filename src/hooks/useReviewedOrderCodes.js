@@ -24,7 +24,19 @@ export async function loadReviewedOrderData() {
   try {
     const idToken = await getCurrentUserIdToken();
     if (idToken) {
-      const reviews = await getMyReviewsOnBackend(idToken);
+      const reviews = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore && page <= 50) {
+        const pageResult = await getMyReviewsOnBackend(idToken, { page, limit: 20 });
+        const rows = pageResult.items || [];
+        reviews.push(...rows);
+        hasMore = Boolean(pageResult.hasMore);
+        page += 1;
+        if (!rows.length) {
+          break;
+        }
+      }
       const reviewsByOrderId = new Map();
       const apiKeys = new Set();
 

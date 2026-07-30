@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -18,12 +18,14 @@ import {
   notificationMatchesAudience,
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useMessageInboxSocket } from '../../hooks/useMessageInboxSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { selectIsSeller } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import ChatScreen from './ChatScreen';
@@ -131,10 +133,14 @@ export default function InboxScreen({
   const [loadError, setLoadError] = useState('');
   const [selectedChat, setSelectedChat] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [notificationPage, setNotificationPage] = useState(1);
+  const [notificationsHasMore, setNotificationsHasMore] = useState(true);
+  const [notificationTotal, setNotificationTotal] = useState(0);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
+  const [isLoadingMoreNotifications, setIsLoadingMoreNotifications] = useState(false);
   const [notificationError, setNotificationError] = useState('');
-
+  const notificationLoadGuardRef = useRef(false);
   const loadConversations = useCallback(async () => {
     setIsLoading(true);
     setLoadError('');
@@ -170,22 +176,62 @@ export default function InboxScreen({
     }
   }, [showSellerInbox]);
 
-  const loadNotifications = useCallback(async () => {
-    setIsLoadingNotifications(true);
+  const loadNotifications = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (notificationLoadGuardRef.current) {
+      return;
+    }
+    notificationLoadGuardRef.current = true;
+    if (nextPage === 1) {
+      setIsLoadingNotifications(true);
+    } else {
+      setIsLoadingMoreNotifications(true);
+    }
     setNotificationError('');
 
     try {
       // Tab thông báo trong inbox buyer luôn lấy audience buyer (không lẫn shop).
-      const items = await getMyNotificationsOnBackend('buyer');
-      setNotifications(Array.isArray(items) ? items : []);
+      const result = await getMyNotificationsOnBackend('buyer', {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const items = Array.isArray(result?.items) ? result.items : [];
+      setNotifications((current) =>
+        nextPage === 1 ? items : appendUniqueById(current, items)
+      );
+      setNotificationPage(Number(result?.page) || nextPage);
+      setNotificationsHasMore(Boolean(result?.hasMore));
+      setNotificationTotal(Math.max(0, Number(result?.total) || 0));
     } catch (error) {
-      setNotifications([]);
+      if (nextPage === 1) {
+        setNotifications([]);
+        setNotificationsHasMore(false);
+        setNotificationTotal(0);
+      }
       setNotificationError(error.message || 'Không tải được thông báo.');
     } finally {
       setIsLoadingNotifications(false);
+      setIsLoadingMoreNotifications(false);
+      notificationLoadGuardRef.current = false;
     }
   }, []);
 
+  const handleLoadMoreNotifications = useCallback(() => {
+    if (
+      !notificationsHasMore ||
+      isLoadingNotifications ||
+      isLoadingMoreNotifications ||
+      notificationLoadGuardRef.current
+    ) {
+      return;
+    }
+    loadNotifications({ nextPage: notificationPage + 1 });
+  }, [
+    isLoadingMoreNotifications,
+    isLoadingNotifications,
+    loadNotifications,
+    notificationPage,
+    notificationsHasMore,
+  ]);
   const handleRealtimeNotification = useCallback((notification) => {
     if (messagesOnly || activeTab !== 'notifications') {
       return;
@@ -221,7 +267,7 @@ export default function InboxScreen({
 
   useEffect(() => {
     if (!messagesOnly && activeTab === 'notifications') {
-      loadNotifications();
+      loadNotifications({ nextPage: 1 });
     }
   }, [activeTab, loadNotifications, messagesOnly]);
 
@@ -253,7 +299,7 @@ export default function InboxScreen({
         audience="buyer"
         onBack={() => {
           setSelectedNotification(null);
-          loadNotifications();
+          loadNotifications({ nextPage: 1 });
         }}
         onMarkedRead={(id) => {
           setNotifications((current) =>
@@ -463,6 +509,20 @@ export default function InboxScreen({
             styles.listContent,
             { paddingBottom: insets.nestedScrollPaddingBottom },
           ]}
+          ListFooterComponent={
+            notifications.length > 0 ? (
+              <LoadMoreButton
+                currentCount={notifications.length}
+                totalCount={
+                  notificationsHasMore
+                    ? Math.max(notificationTotal, notifications.length + DEFAULT_PAGE_SIZE)
+                    : notifications.length
+                }
+                loading={isLoadingMoreNotifications}
+                onPress={handleLoadMoreNotifications}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>

@@ -21,6 +21,7 @@ import {
 } from '../../api/favoriteApi';
 import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import { searchRegisteredShops } from '../../repository/searchShopRepository';
@@ -32,11 +33,13 @@ import StoreDetailScreen from '../store/StoreDetailScreen';
 import ProductCard from '../shared/components/ProductCard';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 
 const SEARCH_DEBOUNCE_MS = 400;
 const NEARBY_RADIUS_METERS = 5000;
 const ALL_PRODUCTS_RADIUS_METERS = 20000;
 const UNLIMITED_SEARCH_RADIUS = 0;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const SEARCH_TABS = [
   { key: 'products', label: 'Sản phẩm' },
   { key: 'shops', label: 'Gian hàng' },
@@ -88,7 +91,15 @@ export default function ProductsScreen({
   const [isLoadingShops, setIsLoadingShops] = useState(false);
   const [browseNearbyShops, setBrowseNearbyShops] = useState(false);
   const [autoFocusSearch, setAutoFocusSearch] = useState(false);
+  const [productsHasMore, setProductsHasMore] = useState(false);
+  const [shopsHasMore, setShopsHasMore] = useState(false);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [shopsTotal, setShopsTotal] = useState(0);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
+  const [loadingMoreShops, setLoadingMoreShops] = useState(false);
   const searchInputRef = useRef(null);
+  const productsPageRef = useRef(1);
+  const shopsPageRef = useRef(1);
 
   const isSearching = Boolean(debouncedSearch) || browseNearbyShops;
 
@@ -224,6 +235,7 @@ export default function ProductsScreen({
     async ({ refresh = false } = {}) => {
       if (!hasValidLocation(currentLocation)) {
         setProducts([]);
+        setProductsHasMore(false);
         setIsLoading(false);
         setIsRefreshing(false);
         return;
@@ -235,24 +247,27 @@ export default function ProductsScreen({
         setIsLoading(true);
       }
       try {
-        const [rows, promoRows] = await Promise.all([
+        productsPageRef.current = 1;
+        const [pageResult, promoPage] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : ALL_PRODUCTS_RADIUS_METERS,
             categoryId: selectedCategoryId,
             search: debouncedSearch,
-            limit: 200,
+            page: 1,
+            limit: PAGE_SIZE,
           }),
           listPromotionProductsOnBackend({
-            limit: 80,
+            page: 1,
+            limit: PAGE_SIZE,
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
-          }).catch(() => []),
+          }).catch(() => ({ items: [] })),
         ]);
 
         const promoById = new Map();
-        (Array.isArray(promoRows) ? promoRows : []).forEach((row) => {
+        (promoPage.items || []).forEach((row) => {
           const promo = normalizeProduct(row);
           if (promo.id && promo.isPromotion && Number(promo.discountPercent) > 0) {
             promoById.set(promo.id, promo);
@@ -260,31 +275,33 @@ export default function ProductsScreen({
         });
 
         setProducts(
-          Array.isArray(rows)
-            ? rows
-                .map((row) => {
-                  const product = normalizeProduct(row);
-                  const promo = promoById.get(product.id);
-                  if (!promo) {
-                    return product;
-                  }
-                  return {
-                    ...product,
-                    isPromotion: true,
-                    discountPercent: promo.discountPercent,
-                    originalPrice: promo.originalPrice ?? product.minPrice,
-                    originalMaxPrice: promo.originalMaxPrice ?? product.maxPrice,
-                    promotionPrice: promo.promotionPrice,
-                    promotionMinPrice: promo.promotionMinPrice,
-                    promotionMaxPrice: promo.promotionMaxPrice,
-                    displayPrice: promo.displayPrice ?? promo.promotionPrice ?? product.displayPrice,
-                  };
-                })
-                .filter((product) => !product.isOutOfStock && !product.isUnavailable)
-            : []
+          (pageResult.items || [])
+            .map((row) => {
+              const product = normalizeProduct(row);
+              const promo = promoById.get(product.id);
+              if (!promo) {
+                return product;
+              }
+              return {
+                ...product,
+                isPromotion: true,
+                discountPercent: promo.discountPercent,
+                originalPrice: promo.originalPrice ?? product.minPrice,
+                originalMaxPrice: promo.originalMaxPrice ?? product.maxPrice,
+                promotionPrice: promo.promotionPrice,
+                promotionMinPrice: promo.promotionMinPrice,
+                promotionMaxPrice: promo.promotionMaxPrice,
+                displayPrice: promo.displayPrice ?? promo.promotionPrice ?? product.displayPrice,
+              };
+            })
+            .filter((product) => !product.isOutOfStock && !product.isUnavailable)
         );
+        setProductsHasMore(Boolean(pageResult.hasMore));
+        setProductsTotal(Math.max(0, Number(pageResult.total) || 0));
       } catch (error) {
         setProducts([]);
+        setProductsHasMore(false);
+        setProductsTotal(0);
         showErrorAlert(error.message || 'Không tải được sản phẩm.');
       } finally {
         setIsLoading(false);
@@ -294,10 +311,47 @@ export default function ProductsScreen({
     [currentLocation, debouncedSearch, selectedCategoryId]
   );
 
+  const loadMoreProducts = useCallback(async () => {
+    if (loadingMoreProducts || !productsHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMoreProducts(true);
+    try {
+      const nextPage = productsPageRef.current + 1;
+      const pageResult = await discoverProductsOnBackend({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        radiusMeters: debouncedSearch ? UNLIMITED_SEARCH_RADIUS : ALL_PRODUCTS_RADIUS_METERS,
+        categoryId: selectedCategoryId,
+        search: debouncedSearch,
+        page: nextPage,
+        limit: PAGE_SIZE,
+      });
+      productsPageRef.current = nextPage;
+      const nextItems = (pageResult.items || [])
+        .map((row) => normalizeProduct(row))
+        .filter((product) => !product.isOutOfStock && !product.isUnavailable);
+      setProducts((prev) => appendUniqueById(prev, nextItems));
+      setProductsHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // giữ danh sách hiện tại
+    } finally {
+      setLoadingMoreProducts(false);
+    }
+  }, [
+    currentLocation,
+    debouncedSearch,
+    loadingMoreProducts,
+    productsHasMore,
+    selectedCategoryId,
+  ]);
+
   const loadShops = useCallback(
     async ({ refresh = false } = {}) => {
       if ((!debouncedSearch && !browseNearbyShops) || !hasValidLocation(currentLocation)) {
         setShops([]);
+        setShopsHasMore(false);
+        setShopsTotal(0);
         setIsLoadingShops(false);
         return;
       }
@@ -306,13 +360,18 @@ export default function ProductsScreen({
         setIsLoadingShops(true);
       }
       try {
+        shopsPageRef.current = 1;
         if (browseNearbyShops && !debouncedSearch) {
           const nearby = await loadNearbyRegisteredShops({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             radiusMeters: NEARBY_RADIUS_METERS,
+            page: 1,
+            limit: PAGE_SIZE,
           });
-          setShops(Array.isArray(nearby) ? nearby : []);
+          setShops(nearby.items || nearby.shops || []);
+          setShopsHasMore(Boolean(nearby.hasMore));
+          setShopsTotal(Math.max(0, Number(nearby.total) || 0));
         } else {
           const result = await searchRegisteredShops({
             latitude: currentLocation.latitude,
@@ -320,12 +379,17 @@ export default function ProductsScreen({
             radiusMeters: UNLIMITED_SEARCH_RADIUS,
             shopQuery: debouncedSearch,
             identityOnly: true,
-            limit: 200,
+            page: 1,
+            limit: PAGE_SIZE,
           });
-          setShops(Array.isArray(result?.shops) ? result.shops : []);
+          setShops(result.shops || result.items || []);
+          setShopsHasMore(Boolean(result.hasMore));
+          setShopsTotal(Math.max(0, Number(result.total) || 0));
         }
       } catch (error) {
         setShops([]);
+        setShopsHasMore(false);
+        setShopsTotal(0);
         showErrorAlert(error.message || 'Không tìm được gian hàng.');
       } finally {
         setIsLoadingShops(false);
@@ -333,6 +397,49 @@ export default function ProductsScreen({
     },
     [browseNearbyShops, currentLocation, debouncedSearch]
   );
+
+  const loadMoreShops = useCallback(async () => {
+    if (loadingMoreShops || !shopsHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMoreShops(true);
+    try {
+      const nextPage = shopsPageRef.current + 1;
+      let pageResult;
+      if (browseNearbyShops && !debouncedSearch) {
+        pageResult = await loadNearbyRegisteredShops({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          radiusMeters: NEARBY_RADIUS_METERS,
+          page: nextPage,
+          limit: PAGE_SIZE,
+        });
+      } else {
+        pageResult = await searchRegisteredShops({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          radiusMeters: UNLIMITED_SEARCH_RADIUS,
+          shopQuery: debouncedSearch,
+          identityOnly: true,
+          page: nextPage,
+          limit: PAGE_SIZE,
+        });
+      }
+      shopsPageRef.current = nextPage;
+      setShops((prev) => appendUniqueById(prev, pageResult.items || pageResult.shops || []));
+      setShopsHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMoreShops(false);
+    }
+  }, [
+    browseNearbyShops,
+    currentLocation,
+    debouncedSearch,
+    loadingMoreShops,
+    shopsHasMore,
+  ]);
 
   useEffect(() => {
     loadLocation();
@@ -468,7 +575,7 @@ export default function ProductsScreen({
             loadLocation();
             loadFavoriteIds();
             loadProducts({ refresh: true });
-            if (debouncedSearch) {
+            if (debouncedSearch || browseNearbyShops) {
               loadShops({ refresh: true });
             }
           }}
@@ -534,6 +641,16 @@ export default function ProductsScreen({
                     />
                   ))}
                 </View>
+                <LoadMoreButton
+                  currentCount={products.length}
+                  totalCount={
+                    productsHasMore
+                      ? Math.max(productsTotal, products.length + PAGE_SIZE)
+                      : products.length
+                  }
+                  loading={loadingMoreProducts}
+                  onPress={loadMoreProducts}
+                />
               </View>
             ) : (
               <View style={[styles.emptyInline, styles.emptyInlineInset]}>
@@ -597,6 +714,14 @@ export default function ProductsScreen({
                   </Pressable>
                 );
               })}
+              <LoadMoreButton
+                currentCount={shops.length}
+                totalCount={
+                  shopsHasMore ? Math.max(shopsTotal, shops.length + PAGE_SIZE) : shops.length
+                }
+                loading={loadingMoreShops}
+                onPress={loadMoreShops}
+              />
             </View>
           ) : showShopsEmpty ? (
             <View style={styles.emptyInline}>
@@ -651,6 +776,16 @@ export default function ProductsScreen({
                   onPress={handleOpenProduct}
                 />
               ))}
+              <LoadMoreButton
+                currentCount={products.length}
+                totalCount={
+                  productsHasMore
+                    ? Math.max(productsTotal, products.length + PAGE_SIZE)
+                    : products.length
+                }
+                loading={loadingMoreProducts}
+                onPress={loadMoreProducts}
+              />
             </ScrollView>
           ) : showEmptyState ? (
             <View style={styles.emptyInline}>
@@ -662,17 +797,29 @@ export default function ProductsScreen({
             <Text style={styles.sectionTitle}>Tất cả sản phẩm</Text>
 
             {isLoading || isLocating ? null : products.length > 0 ? (
-              <View style={styles.productGrid}>
-                {products.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    isLiked={Boolean(likedProducts[product.id])}
-                    onToggleLike={toggleLikeProduct}
-                    onPress={handleOpenProduct}
-                  />
-                ))}
-              </View>
+              <>
+                <View style={styles.productGrid}>
+                  {products.map((product) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      isLiked={Boolean(likedProducts[product.id])}
+                      onToggleLike={toggleLikeProduct}
+                      onPress={handleOpenProduct}
+                    />
+                  ))}
+                </View>
+                <LoadMoreButton
+                  currentCount={products.length}
+                  totalCount={
+                    productsHasMore
+                      ? Math.max(productsTotal, products.length + PAGE_SIZE)
+                      : products.length
+                  }
+                  loading={loadingMoreProducts}
+                  onPress={loadMoreProducts}
+                />
+              </>
             ) : showEmptyState ? (
               <View style={[styles.emptyInline, styles.emptyInlineInset]}>
                 <Text style={styles.emptyText}>Chưa có sản phẩm phù hợp.</Text>

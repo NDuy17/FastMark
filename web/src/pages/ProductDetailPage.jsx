@@ -15,6 +15,7 @@ import {
 } from '../api/catalogApi';
 import ProductRemoveDialog from '../components/admin/ProductRemoveDialog';
 import { useAuth } from '../context/AuthContext';
+import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { formatDateTimeDetail, formatMoney } from '../utils/format';
 import { goBackOr } from '../utils/navigation';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
@@ -150,6 +151,8 @@ export default function ProductDetailPage() {
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
+
+  useAdminRealtimeRefresh('product', loadDetail);
 
   useEffect(() => {
     if (!message) return undefined;

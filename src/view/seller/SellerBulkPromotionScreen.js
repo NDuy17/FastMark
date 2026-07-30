@@ -21,10 +21,12 @@ import {
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import { formatPrice, getProductPromoPriceLabels } from '../../core/utils/productFormat';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import DatePickerField from '../shared/components/DatePickerField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 
 function toDateInput(value) {
@@ -53,46 +55,73 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
   const [startDate, setStartDate] = useState(todayInput());
   const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  const [visiblePromoCount, setVisiblePromoCount] = useState(DEFAULT_PAGE_SIZE);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [clearingId, setClearingId] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
+  const loadData = useCallback(async ({ nextPage = 1, refreshPromos = true } = {}) => {
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     setError('');
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
         throw new Error('Phiên đăng nhập đã hết hạn.');
       }
-      const [mine, promos] = await Promise.all([
-        getMyProductsOnBackend(idToken),
-        listMyPromotionProductsOnBackend(idToken),
-      ]);
-      setProducts(
-        (mine || []).map((row) => ({
-          id: String(row.id),
-          name: row.productName || row.name || 'Sản phẩm',
-          thumbnail: row.thumbnail || '',
-          minPrice: Number(row.minPrice ?? row.price ?? 0),
-          isPromotion: Boolean(row.isPromotion),
-          discountPercent: Number(row.discountPercent) || 0,
-          promotionEndDate: row.promotionEndDate || null,
-        }))
+      const requests = [
+        getMyProductsOnBackend(idToken, { page: nextPage, limit: DEFAULT_PAGE_SIZE }),
+      ];
+      if (refreshPromos) {
+        requests.push(listMyPromotionProductsOnBackend(idToken));
+      }
+      const results = await Promise.all(requests);
+      const minePage = results[0];
+      const promos = refreshPromos ? results[1] : null;
+      const mine = minePage.items || [];
+      const mapped = (mine || []).map((row) => ({
+        id: String(row.id),
+        name: row.productName || row.name || 'Sản phẩm',
+        thumbnail: row.thumbnail || '',
+        minPrice: Number(row.minPrice ?? row.price ?? 0),
+        isPromotion: Boolean(row.isPromotion),
+        discountPercent: Number(row.discountPercent) || 0,
+        promotionEndDate: row.promotionEndDate || null,
+      }));
+      setProducts((current) =>
+        nextPage === 1 ? mapped : appendUniqueById(current, mapped)
       );
-      setActivePromos(promos || []);
+      setPage(Number(minePage.page) || nextPage);
+      setHasMore(Boolean(minePage.hasMore));
+      setTotalCount(Math.max(0, Number(minePage.total) || 0));
+      if (refreshPromos) {
+        setActivePromos(promos || []);
+        setVisiblePromoCount(DEFAULT_PAGE_SIZE);
+      }
     } catch (loadError) {
       showErrorAlert(loadError.message || 'Không tải được danh sách sản phẩm.');
-      setProducts([]);
-      setActivePromos([]);
+      if (nextPage === 1) {
+        setProducts([]);
+        setActivePromos([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
+    loadData({ nextPage: 1 });
   }, [loadData]);
 
   const selectableProducts = useMemo(
@@ -168,7 +197,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
       setSuccess(`Đã giảm ${percent}% cho ${result.updatedCount || 0} sản phẩm.`);
       setSelectedIds(new Set());
       onChanged?.();
-      await loadData();
+      await loadData({ nextPage: 1 });
       setTab('active');
     } catch (submitError) {
       setError(submitError.message || 'Không áp dụng được giảm giá hàng loạt.');
@@ -199,7 +228,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
             }
             await clearProductPromotionOnBackend({ idToken, productId });
             onChanged?.();
-            await loadData();
+            await loadData({ nextPage: 1 });
           } catch (clearError) {
             setError(clearError.message || 'Không xóa được giảm giá.');
           } finally {
@@ -239,7 +268,7 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
         </View>
       ) : tab === 'active' ? (
         <FlatList
-          data={activePromos}
+          data={activePromos.slice(0, visiblePromoCount)}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={[
             styles.listContent,
@@ -252,6 +281,20 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
                 Chuyển tab “Chọn giảm giá” để áp dụng % cho nhiều sản phẩm.
               </Text>
             </View>
+          }
+          ListFooterComponent={
+            activePromos.length > 0 ? (
+              <LoadMoreButton
+                currentCount={Math.min(visiblePromoCount, activePromos.length)}
+                totalCount={activePromos.length}
+                loading={false}
+                onPress={() =>
+                  setVisiblePromoCount((current) =>
+                    Math.min(activePromos.length, current + DEFAULT_PAGE_SIZE)
+                  )
+                }
+              />
+            ) : null
           }
           renderItem={({ item }) => {
             const discountPercent = Number(item.discountPercent) || 0;
@@ -420,7 +463,18 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
                   Sản phẩm đang giảm giá nằm ở tab “Đang giảm giá”.
                 </Text>
               </View>
-            ) : null}
+            ) : (
+              <LoadMoreButton
+                currentCount={products.length}
+                totalCount={
+                  hasMore
+                    ? Math.max(totalCount, products.length + DEFAULT_PAGE_SIZE)
+                    : products.length
+                }
+                loading={isLoadingMore}
+                onPress={() => loadData({ nextPage: page + 1, refreshPromos: false })}
+              />
+            )}
 
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
             {success ? <Text style={styles.successText}>{success}</Text> : null}

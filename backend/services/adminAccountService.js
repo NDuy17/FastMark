@@ -19,6 +19,7 @@ const {
   resolveStatusesFromLabelSearch,
 } = require("../utils/adminSearchHelpers");
 const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
+const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
 
 const CANCELLED_RESERVATION_STATUSES = [
   RESERVATION_STATUS.REJECTED,
@@ -557,6 +558,22 @@ async function setAccountStatus(adminUser, targetUserId, nextStatus) {
     }
 
     updatedDetail = await getAccountDetail(targetUserId);
+
+    const shopAfter = await ShopProfile.findOne({ userId: targetUserId })
+      .select("_id status")
+      .lean();
+    emitUserResourceUpdated(targetUserId, "account", {
+      status: nextStatus,
+      locked: nextStatus === USER_STATUS.BLOCKED,
+      shopId: shopAfter?._id ? String(shopAfter._id) : "",
+      shopStatus: shopAfter ? Number(shopAfter.status) : undefined,
+    });
+    emitAdminUpdated("account", {
+      userId: String(targetUserId),
+      status: nextStatus,
+      locked: nextStatus === USER_STATUS.BLOCKED,
+    });
+
     return updatedDetail;
   } finally {
     session.endSession();

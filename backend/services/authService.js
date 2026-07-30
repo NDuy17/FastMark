@@ -617,6 +617,37 @@ async function requestPasswordReset({ email }) {
   return issuePasswordResetCode(user, normalizedEmail, { enforceCooldown: true });
 }
 
+async function requestPasswordResetForUser(user) {
+  if (!user) {
+    const error = new Error("Không tìm thấy tài khoản.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  if (user.AuthProvider !== "email") {
+    const error = new Error("Tài khoản đăng nhập Google không thể đặt lại mật khẩu qua email.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const normalizedEmail = normalizeEmail(user.Email);
+  if (!normalizedEmail) {
+    const error = new Error("Tài khoản chưa có email.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  passwordResetSessions.delete(normalizedEmail);
+  const verification = await issuePasswordResetCode(user, normalizedEmail, {
+    enforceCooldown: true,
+  });
+
+  return {
+    email: normalizedEmail,
+    verification,
+  };
+}
+
 async function verifyPasswordResetOtp({ email, code }) {
   const normalizedEmail = normalizeEmail(email);
   const normalizedCode = String(code || "").trim();
@@ -739,6 +770,7 @@ module.exports = {
   requestEmailVerification,
   confirmEmailVerification,
   requestPasswordReset,
+  requestPasswordResetForUser,
   verifyPasswordResetOtp,
   resetPasswordWithToken,
 };

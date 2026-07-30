@@ -20,6 +20,8 @@ import StarRating from '../store/components/StarRating';
 import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
 import KeyboardStickyFooter from '../shared/components/KeyboardStickyFooter';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 
 const ACTIONS_BAR_ESTIMATE = 72;
 
@@ -52,26 +54,48 @@ function normalizeReview(item) {
 export default function MyReviewsScreen({ refreshKey = 0 }) {
   const [reviews, setReviews] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [editingReview, setEditingReview] = useState(null);
   const [editComment, setEditComment] = useState('');
   const [editRating, setEditRating] = useState(5);
 
-  const loadReviews = useCallback(async () => {
-    setIsLoading(true);
+  const loadReviews = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     try {
       const idToken = await getCurrentUserIdToken();
       if (idToken) {
-        const rows = await getMyReviewsOnBackend(idToken);
-        if (Array.isArray(rows) && rows.length > 0) {
-          setReviews(rows.map(normalizeReview));
-          return;
-        }
+        const result = await getMyReviewsOnBackend(idToken, {
+          page: nextPage,
+          limit: DEFAULT_PAGE_SIZE,
+        });
+        const rows = Array.isArray(result?.items) ? result.items.map(normalizeReview) : [];
+        setReviews((current) =>
+          nextPage === 1 ? rows : appendUniqueById(current, rows)
+        );
+        setPage(Number(result?.page) || nextPage);
+        setTotalCount(Math.max(0, Number(result?.total) || 0));
+        setHasMore(Boolean(result?.hasMore));
+        return;
       }
       setReviews([]);
+      setTotalCount(0);
+      setHasMore(false);
     } catch {
-      setReviews([]);
+      if (nextPage === 1) {
+        setReviews([]);
+        setTotalCount(0);
+        setHasMore(false);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   }, []);
 
@@ -92,6 +116,7 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
               await deleteBuyerReviewOnBackend(idToken, review.id);
             }
             setReviews((current) => current.filter((item) => item.id !== review.id));
+            setTotalCount((current) => Math.max(0, current - 1));
           } catch (error) {
             Alert.alert('Lỗi', error.message || 'Không xóa được đánh giá.');
           }
@@ -156,7 +181,8 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
           <Text style={styles.emptySubtitle}>Các đánh giá của bạn sẽ hiển thị tại đây.</Text>
         </View>
       ) : (
-        reviews.map((item) => (
+        <>
+        {reviews.map((item) => (
           <View key={item.id} style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={styles.cardHeaderText}>
@@ -197,7 +223,14 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
               </Pressable>
             </View>
           </View>
-        ))
+        ))}
+        <LoadMoreButton
+          currentCount={reviews.length}
+          totalCount={hasMore ? Math.max(totalCount, reviews.length + DEFAULT_PAGE_SIZE) : reviews.length}
+          loading={isLoadingMore}
+          onPress={() => loadReviews({ nextPage: page + 1 })}
+        />
+        </>
       )}
 
       <Modal visible={Boolean(editingReview)} transparent animationType="fade">

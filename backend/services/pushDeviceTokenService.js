@@ -35,7 +35,7 @@ async function registerDeviceToken(userId, { token, platform } = {}) {
       platform: normalizePlatform(platform),
       UpdatedAt: new Date(),
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   ).lean();
 
   return {

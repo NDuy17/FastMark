@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,12 +14,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { getMyProductsOnBackend, setProductPinOnBackend } from '../../api/productApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import {
   getProductImageOverlayLabel,
   resolveIsOutOfStock,
 } from '../../core/utils/productAvailability';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import SellerProductDetailScreen from './SellerProductDetailScreen';
 import SellerBulkPromotionScreen from './SellerBulkPromotionScreen';
@@ -163,31 +165,66 @@ export default function SellerProductsTabScreen({
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const loadingGuardRef = useRef(false);
   const [productDetailId, setProductDetailId] = useState(null);
   const [showBulkPromo, setShowBulkPromo] = useState(false);
   const [bulkPromoTab, setBulkPromoTab] = useState('bulk');
   const [pinningId, setPinningId] = useState('');
 
-  const loadProducts = useCallback(async () => {
-    setIsLoading(true);
+  const loadProducts = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (loadingGuardRef.current) {
+      return;
+    }
+    loadingGuardRef.current = true;
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
         throw new Error('Phiên đăng nhập đã hết hạn.');
       }
-      const data = await getMyProductsOnBackend(idToken);
-      setProducts(data.map(mapApiProductToManageCard));
+      const result = await getMyProductsOnBackend(idToken, {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = (result.items || []).map(mapApiProductToManageCard);
+      setProducts((current) =>
+        nextPage === 1 ? rows : appendUniqueById(current, rows)
+      );
+      setPage(Number(result.page) || nextPage);
+      setHasMore(Boolean(result.hasMore));
+      setTotalCount(Math.max(0, Number(result.total) || 0));
     } catch (loadError) {
       showErrorAlert(loadError.message || 'Không tải được sản phẩm.');
-      setProducts([]);
+      if (nextPage === 1) {
+        setProducts([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingGuardRef.current = false;
     }
   }, []);
 
   useEffect(() => {
-    loadProducts();
+    loadProducts({ nextPage: 1 });
   }, [loadProducts, productRefreshKey]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!hasMore || isLoading || isLoadingMore || loadingGuardRef.current) {
+      return;
+    }
+    loadProducts({ nextPage: page + 1 });
+  }, [hasMore, isLoading, isLoadingMore, loadProducts, page]);
 
   useEffect(() => {
     // Khi mở từ shop/profile đã ẩn tab ở panel cha — chỉ báo nested nếu vẫn được truyền callback.
@@ -220,7 +257,7 @@ export default function SellerProductsTabScreen({
         throw new Error('Phiên đăng nhập đã hết hạn.');
       }
       await setProductPinOnBackend({ idToken, productId, pinProduct });
-      await loadProducts();
+      await loadProducts({ nextPage: 1 });
       onProductChanged?.();
     } catch (pinError) {
       Alert.alert('Lỗi', pinError.message || 'Không ghim được sản phẩm.');
@@ -298,7 +335,7 @@ export default function SellerProductsTabScreen({
         onBack={() => setShowBulkPromo(false)}
         onChanged={() => {
           onProductChanged?.();
-          loadProducts();
+          loadProducts({ nextPage: 1 });
         }}
       />
     );
@@ -310,11 +347,11 @@ export default function SellerProductsTabScreen({
         productId={productDetailId}
         onBack={() => {
           setProductDetailId(null);
-          loadProducts();
+          loadProducts({ nextPage: 1 });
         }}
         onChanged={() => {
           onProductChanged?.();
-          loadProducts();
+          loadProducts({ nextPage: 1 });
         }}
       />
     );
@@ -366,6 +403,22 @@ export default function SellerProductsTabScreen({
           contentContainerStyle={styles.listContent}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          ListFooterComponent={
+            filteredProducts.length > 0 ? (
+              <LoadMoreButton
+                currentCount={filteredProducts.length}
+                totalCount={
+                  search.trim()
+                    ? filteredProducts.length
+                    : hasMore
+                      ? Math.max(totalCount, products.length + DEFAULT_PAGE_SIZE)
+                      : products.length
+                }
+                loading={isLoadingMore}
+                onPress={handleLoadMore}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>

@@ -474,6 +474,13 @@ async function sellerReportBuyer(user, payload = {}) {
     });
   }
 
+  await createNotification(user._id, {
+    title: "Đã gửi báo cáo tranh chấp",
+    content: "Báo cáo về người mua đã được ghi nhận. Cọc đang giữ chờ admin xử lý.",
+    audience: NOTIFICATION_AUDIENCE.SELLER,
+    index: NOTIFICATION_INDEX.ORDER,
+  });
+
   await emitOrderUpdated(reservation, { action: "seller_dispute" });
   return {
     report: toPublicDisputeReport(report, {

@@ -13,7 +13,7 @@ export default function AuthLandingScreen({ onGoLogin, onGoRegister }) {
   return (
     <View style={styles.screen}>
       <Image
-        source={require('../../../assets/auth-landing.png')}
+        source={require('../../../assets/auth-landing.jpg')}
         style={styles.hero}
         resizeMode="cover"
       />

@@ -2,6 +2,12 @@ const Product = require("../models/Product");
 const ShopProfile = require("../models/ShopProfile");
 const ProductVariant = require("../models/ProductVariant");
 const { PRODUCT_STATUS, SHOP_STATUS, isSubscriptionActive } = require("../constants");
+const {
+  buildPaginationMeta,
+  normalizeRandomSeed,
+  parsePagination,
+  seededOffset,
+} = require("../utils/pagination");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -346,6 +352,8 @@ function activePromotionFilter(now = new Date()) {
   return {
     IsPromotion: true,
     Status: PRODUCT_STATUS.ACTIVE,
+    IsDeleted: { $ne: true },
+    SellerRemovedAt: null,
     $and: [
       {
         $or: [
@@ -360,13 +368,47 @@ function activePromotionFilter(now = new Date()) {
   };
 }
 
-async function listActivePromotions({ limit = 40, latitude, longitude } = {}) {
+async function listActivePromotions({
+  page = 1,
+  limit = 20,
+  latitude,
+  longitude,
+  seed = "",
+} = {}) {
   await expireDuePromotions({ limit: 100 });
   const now = new Date();
-  const rows = await Product.find(activePromotionFilter(now))
-    .sort({ DiscountPercent: -1, UpdatedAt: -1 })
-    .limit(Math.min(80, Number(limit) || 40))
-    .lean();
+  const { page: safePage, limit: safeLimit, skip } = parsePagination(
+    { page, limit },
+    { defaultLimit: 20, maxLimit: 80 }
+  );
+
+  const filter = activePromotionFilter(now);
+  const total = await Product.countDocuments(filter);
+  const consumed = (safePage - 1) * safeLimit;
+  const take = Math.min(safeLimit, Math.max(0, total - consumed));
+  const stableSort = { DiscountPercent: -1, UpdatedAt: -1, _id: -1 };
+  let rows = [];
+
+  if (take > 0) {
+    const randomStart = normalizeRandomSeed(seed)
+      ? (seededOffset(seed, total, "home-promotions") + consumed) % total
+      : skip;
+    const firstTake = Math.min(take, total - randomStart);
+    rows = await Product.find(filter)
+      .sort(stableSort)
+      .skip(randomStart)
+      .limit(firstTake)
+      .lean();
+
+    const remaining = take - rows.length;
+    if (remaining > 0) {
+      const wrapped = await Product.find(filter)
+        .sort(stableSort)
+        .limit(remaining)
+        .lean();
+      rows = rows.concat(wrapped);
+    }
+  }
 
   const shopIds = rows.map((row) => row.ShopId).filter(Boolean);
   const shops = shopIds.length
@@ -445,7 +487,11 @@ async function listActivePromotions({ limit = 40, latitude, longitude } = {}) {
     });
   }
 
-  return mapped;
+  return {
+    items: mapped,
+    products: mapped,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function listShopPromotions(shopId, { limit = 80 } = {}) {

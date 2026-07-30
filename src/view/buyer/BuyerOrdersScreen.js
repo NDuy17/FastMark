@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -36,6 +36,8 @@ import {
   VIEWER_ROLE,
 } from '../../constants/sellerOrders';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { formatPrice } from '../../core/utils/productFormat';
 import { getBuyerCancelConfirmMessage } from '../../core/utils/buyerCancelReservation';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
@@ -172,6 +174,11 @@ function BuyerOrdersContent({
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const loadingGuardRef = useRef(false);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [disputeTarget, setDisputeTarget] = useState(null);
@@ -183,36 +190,77 @@ function BuyerOrdersContent({
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  const loadOrders = useCallback(async (refresh = false) => {
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
+  const loadOrders = useCallback(async ({ refresh = false, nextPage = 1 } = {}) => {
+    if (loadingGuardRef.current) {
+      return;
     }
+    loadingGuardRef.current = true;
+
+    if (refresh || nextPage === 1) {
+      if (refresh) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+    } else {
+      setIsLoadingMore(true);
+    }
+
     try {
       const idToken = await getCurrentUserIdToken();
       const data = await getBuyerOrdersOnBackend({
         idToken,
         tab: activeTab,
         search: search.trim() || undefined,
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
       });
-      setItems(data.reservations || []);
+      const rows = data?.reservations || data?.items || [];
+      setItems((current) =>
+        nextPage === 1 ? rows : appendUniqueById(current, rows)
+      );
+      setPage(Number(data?.page) || nextPage);
+      setHasMore(
+        typeof data?.hasMore === 'boolean'
+          ? data.hasMore
+          : rows.length >= DEFAULT_PAGE_SIZE
+      );
+      setTotalCount(
+        Number.isFinite(Number(data?.total))
+          ? Math.max(0, Number(data.total))
+          : (nextPage - 1) * DEFAULT_PAGE_SIZE +
+            rows.length +
+            (data?.hasMore ? DEFAULT_PAGE_SIZE : 0)
+      );
     } catch (loadError) {
       showErrorAlert(loadError.message || 'Không tải được đơn hàng.');
-      setItems([]);
+      if (nextPage === 1) {
+        setItems([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+      setIsLoadingMore(false);
+      loadingGuardRef.current = false;
     }
   }, [activeTab, search, refreshKey]);
 
   useEffect(() => {
-    loadOrders();
+    loadOrders({ nextPage: 1 });
   }, [loadOrders]);
 
   const handleOrderUpdated = useCallback(() => {
-    loadOrders(true);
+    loadOrders({ refresh: true, nextPage: 1 });
   }, [loadOrders]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!hasMore || isLoading || isRefreshing || isLoadingMore || loadingGuardRef.current) {
+      return;
+    }
+    loadOrders({ nextPage: page + 1 });
+  }, [hasMore, isLoading, isRefreshing, isLoadingMore, loadOrders, page]);
 
   useOrderSocket({
     enabled: true,
@@ -240,7 +288,7 @@ function BuyerOrdersContent({
             try {
               const idToken = await getCurrentUserIdToken();
               await cancelBuyerReservationOnBackend(idToken, reservation.id);
-              loadOrders(true);
+              loadOrders({ refresh: true, nextPage: 1 });
             } catch (actionError) {
               Alert.alert('Lỗi', actionError.message || 'Không hủy được đơn.');
             }
@@ -275,7 +323,7 @@ function BuyerOrdersContent({
       });
       setDisputeTarget(null);
       Alert.alert('Đã gửi', 'Khiếu nại đã gửi. Admin sẽ xử lý, cọc tạm giữ.');
-      loadOrders(true);
+      loadOrders({ refresh: true, nextPage: 1 });
     } catch (actionError) {
       Alert.alert('Lỗi', actionError.message || 'Không gửi được khiếu nại.');
       throw actionError;
@@ -296,7 +344,7 @@ function BuyerOrdersContent({
               const idToken = await getCurrentUserIdToken();
               await forfeitBuyerDepositOnBackend(idToken, reservation.id);
               Alert.alert('Xong', 'Cọc đã chuyển cho người bán.');
-              loadOrders(true);
+              loadOrders({ refresh: true, nextPage: 1 });
             } catch (actionError) {
               Alert.alert('Lỗi', actionError.message || 'Không xử lý được mất cọc.');
             }
@@ -577,14 +625,34 @@ function BuyerOrdersContent({
         contentContainerStyle={[styles.listContent, { paddingBottom: listPaddingBottom }]}
         renderItem={renderReservationItem}
         refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={() => loadOrders(true)} tintColor="#076F32" />
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadOrders({ refresh: true, nextPage: 1 })}
+            tintColor="#076F32"
+          />
+        }
+        ListFooterComponent={
+          items.length > 0 ? (
+            <LoadMoreButton
+              currentCount={items.length}
+              totalCount={
+                hasMore ? Math.max(totalCount, items.length + DEFAULT_PAGE_SIZE) : items.length
+              }
+              loading={isLoadingMore}
+              onPress={handleLoadMore}
+            />
+          ) : null
         }
         ListEmptyComponent={
-          <OrderTabEmptyState
-            message={
-              search.trim() ? ORDER_TAB_SEARCH_EMPTY_MESSAGE : ORDER_TAB_EMPTY_MESSAGE
-            }
-          />
+          isLoading ? (
+            <ActivityIndicator style={{ marginTop: 24 }} color="#076F32" />
+          ) : (
+            <OrderTabEmptyState
+              message={
+                search.trim() ? ORDER_TAB_SEARCH_EMPTY_MESSAGE : ORDER_TAB_EMPTY_MESSAGE
+              }
+            />
+          )
         }
       />
 
@@ -643,6 +711,7 @@ export default function BuyerOrdersScreen({
   const [scanTarget, setScanTarget] = useState(null);
   const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0);
   const [orderReviewPatches, setOrderReviewPatches] = useState({});
+  const lastTabRequestKeyRef = useRef(0);
   const { reviewedOrderCodes, reviewsByOrderId, markReviewed, unmarkReviewed } =
     useReviewedOrderCodes(reviewsRefreshKey);
 
@@ -663,12 +732,18 @@ export default function BuyerOrdersScreen({
   }, [isScreenActive]);
 
   useEffect(() => {
-    if (!tabRequestKey) {
+    if (!tabRequestKey || lastTabRequestKeyRef.current === tabRequestKey) {
       return;
     }
-    setActiveTab(resolveInitialTab(initialTab));
+
+    lastTabRequestKeyRef.current = tabRequestKey;
+    const nextTab = resolveInitialTab(initialTab);
+    if (controlledActiveTab === undefined) {
+      setInternalActiveTab(nextTab);
+    }
+    onActiveTabChange?.(nextTab);
     setListRefreshKey((value) => value + 1);
-  }, [initialTab, setActiveTab, tabRequestKey]);
+  }, [controlledActiveTab, initialTab, onActiveTabChange, tabRequestKey]);
 
   const tabBar = (
     <OrderStatusTabBar

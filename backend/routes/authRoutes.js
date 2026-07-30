@@ -13,6 +13,7 @@ router.post("/register/email", asyncHandler(authController.registerEmail));
 router.post("/register/availability", asyncHandler(authController.checkRegisterAvailability));
 router.post("/login/email", asyncHandler(authController.loginEmail));
 router.post("/google", asyncHandler(authController.registerOrLoginGoogle));
+router.post("/forgot-password/request-me", verifyFirebaseToken, asyncHandler(authController.requestPasswordResetForMe));
 router.post("/forgot-password/request", asyncHandler(authController.requestPasswordReset));
 router.post("/forgot-password/verify", asyncHandler(authController.verifyPasswordResetOtp));
 router.post("/forgot-password/reset", asyncHandler(authController.resetPassword));

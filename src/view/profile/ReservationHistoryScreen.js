@@ -17,9 +17,11 @@ import {
   hasOrderReviewSubmitted,
   submitShopReview,
 } from '../../core/utils/orderReview';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
 import { useOrderSocket } from '../../hooks/useOrderSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { ReviewedBadge, ReviewNowButton } from '../shared/components/ReviewOrderAction';
 import ShopReviewModal from '../shared/components/ShopReviewModal';
 import ProfileSubScreen from './ProfileSubScreen';
@@ -120,22 +122,34 @@ export default function ReservationHistoryScreen({
   const [localRefreshKey, setLocalRefreshKey] = useState(0);
   const [reservations, setReservations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const { reviewedOrderCodes: internalReviewedCodes, markReviewed } =
     useReviewedOrderCodes(localRefreshKey);
   const reviewedOrderCodes = externalReviewedCodes || internalReviewedCodes;
 
-  const loadReservations = useCallback(async () => {
-    setIsLoading(true);
+  const loadReservations = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
         setReservations([]);
+        setHasMore(false);
+        setTotalCount(0);
         return;
       }
 
       const data = await getBuyerOrdersOnBackend({
         idToken,
         tab: RESERVATION_TAB.PENDING,
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
       });
       const rows = (data?.reservations || []).map((reservation) => ({
         id: String(reservation.id),
@@ -154,20 +168,40 @@ export default function ReservationHistoryScreen({
         expiresAt: reservation.expiresAt || reservation.pickupDeadline,
         status: reservation.status,
       }));
-      setReservations(rows);
+      setReservations((current) =>
+        nextPage === 1 ? rows : appendUniqueById(current, rows)
+      );
+      setPage(Number(data?.page) || nextPage);
+      setHasMore(
+        typeof data?.hasMore === 'boolean'
+          ? data.hasMore
+          : rows.length >= DEFAULT_PAGE_SIZE
+      );
+      setTotalCount(
+        Number.isFinite(Number(data?.total))
+          ? Math.max(0, Number(data.total))
+          : (nextPage - 1) * DEFAULT_PAGE_SIZE +
+            rows.length +
+            (data?.hasMore ? DEFAULT_PAGE_SIZE : 0)
+      );
     } catch {
-      setReservations([]);
+      if (nextPage === 1) {
+        setReservations([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    loadReservations();
+    loadReservations({ nextPage: 1 });
   }, [loadReservations, localRefreshKey]);
 
   const handleOrderUpdated = useCallback(() => {
-    loadReservations();
+    loadReservations({ nextPage: 1 });
   }, [loadReservations]);
 
   useOrderSocket({
@@ -211,13 +245,27 @@ export default function ReservationHistoryScreen({
       {isLoading ? (
         <ActivityIndicator size="large" color="#076F32" style={styles.loader} />
       ) : (
-        <ReservationList
-          items={reservations}
-          onOpenOrderDetail={onOpenOrderDetail}
-          onOpenStore={onOpenStore}
-          onReviewStore={setReviewTarget}
-          reviewedOrderCodes={reviewedOrderCodes}
-        />
+        <>
+          <ReservationList
+            items={reservations}
+            onOpenOrderDetail={onOpenOrderDetail}
+            onOpenStore={onOpenStore}
+            onReviewStore={setReviewTarget}
+            reviewedOrderCodes={reviewedOrderCodes}
+          />
+          {reservations.length > 0 ? (
+            <LoadMoreButton
+              currentCount={reservations.length}
+              totalCount={
+                hasMore
+                  ? Math.max(totalCount, reservations.length + DEFAULT_PAGE_SIZE)
+                  : reservations.length
+              }
+              loading={isLoadingMore}
+              onPress={() => loadReservations({ nextPage: page + 1 })}
+            />
+          ) : null}
+        </>
       )}
       <ShopReviewModal
         visible={Boolean(reviewTarget)}

@@ -25,8 +25,12 @@ async function authHeaders(idToken) {
   };
 }
 
-export async function getBuyerOrdersOnBackend({ idToken, tab, search }) {
-  const params = new URLSearchParams({ tab: tab || 'pending' });
+export async function getBuyerOrdersOnBackend({ idToken, tab, search, page = 1, limit = 20 }) {
+  const params = new URLSearchParams({
+    tab: tab || 'pending',
+    page: String(page),
+    limit: String(limit),
+  });
   if (search) {
     params.set('search', search);
   }

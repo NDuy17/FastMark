@@ -18,9 +18,9 @@ export async function loadWithdrawBanksViewModel() {
   return listWalletBanksOnBackend(idToken);
 }
 
-export async function loadMyWithdrawsViewModel() {
+export async function loadMyWithdrawsViewModel({ page = 1, limit = 20 } = {}) {
   const idToken = await requireToken();
-  return listWalletWithdrawsOnBackend(idToken, { limit: 40 });
+  return listWalletWithdrawsOnBackend(idToken, { page, limit });
 }
 
 export async function createWithdrawViewModel(payload) {

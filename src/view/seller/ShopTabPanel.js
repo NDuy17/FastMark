@@ -16,8 +16,11 @@ import {
 } from '../../viewmodel/auth/authSlice';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
-import { getMyNotificationsOnBackend } from '../../api/notificationApi';
-import { notificationMatchesAudience } from '../../core/utils/notificationRealtime';
+import { getUnreadNotificationCountOnBackend } from '../../api/notificationApi';
+import {
+  notificationMatchesAudience,
+  resolveUnreadCountFromReadEvent,
+} from '../../core/utils/notificationRealtime';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useResourceSocket } from '../../hooks/useResourceSocket';
 import SellerPhoneSetupScreen from './SellerPhoneSetupScreen';
@@ -112,10 +115,8 @@ export default function ShopTabPanel({
     }
 
     try {
-      const notifications = await getMyNotificationsOnBackend('seller');
-      setUnreadNotificationsCount(
-        (notifications || []).filter((item) => !item.isRead).length
-      );
+      // Đếm từ backend theo toàn bộ thông báo, không dựa vào trang 20 item đang tải.
+      setUnreadNotificationsCount(await getUnreadNotificationCountOnBackend('seller'));
     } catch {
       // Keep previous badge on transient failures.
     }
@@ -139,8 +140,9 @@ export default function ShopTabPanel({
       return;
     }
 
-    if (Number.isFinite(Number(payload?.unreadCount))) {
-      setUnreadNotificationsCount(Math.max(0, Number(payload.unreadCount)));
+    const unreadCount = resolveUnreadCountFromReadEvent(payload, 'seller');
+    if (unreadCount != null) {
+      setUnreadNotificationsCount(unreadCount);
       return;
     }
 

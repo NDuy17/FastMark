@@ -483,6 +483,14 @@ exports.setShopPresenceOffline = async (req, res) => {
   });
 };
 
+exports.requestPasswordResetForMe = async (req, res) => {
+  const result = await authService.requestPasswordResetForUser(req.currentUser);
+  return success(res, {
+    message: "Đã gửi mã OTP đến email của bạn.",
+    data: result,
+  });
+};
+
 exports.requestPasswordReset = async (req, res) => {
   const email = pickBodyValue(req.body, ["email", "Email"]);
   if (!email) {
