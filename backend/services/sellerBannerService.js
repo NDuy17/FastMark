@@ -29,6 +29,7 @@ const {
   appendUniqueOrConditions,
 } = require("../utils/adminSearchHelpers");
 const { applyCreatedAtRange } = require("../utils/dateRangeFilter");
+const { sliceSeededPage } = require("../utils/pagination");
 
 function addDays(date, days) {
   const next = new Date(date);
@@ -48,16 +49,6 @@ function resolveDurationDays(payload = {}) {
     return Number(payload.durationMonths) * 30;
   }
   return NaN;
-}
-
-function shuffleInPlace(items) {
-  for (let i = items.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = items[i];
-    items[i] = items[j];
-    items[j] = tmp;
-  }
-  return items;
 }
 
 function isWithinDisplayWindow(doc, now = new Date()) {
@@ -631,7 +622,7 @@ async function listAdminSellerBanners({
 
   const [rows, total] = await Promise.all([
     SellerBannerPlan.find(query)
-      .sort({ ngayMua: -1, CreatedAt: -1 })
+      .sort({ ngayMua: -1, CreatedAt: -1, _id: -1 })
       .skip(skip)
       .limit(pageSize)
       .lean(),
@@ -688,8 +679,8 @@ async function listAdminSellerBanners({
   };
 }
 
-/** Home: lấy SellerBannerPlan ACTIVE còn hạn, random thứ tự. */
-async function listActiveSellerBannersForHome({ limit = 10 } = {}) {
+/** Home: lấy banner theo thứ tự ổn định trong cùng một seed phiên. */
+async function listActiveSellerBannersForHome({ limit = 10, seed = "" } = {}) {
   const now = new Date();
   const max = Math.min(20, Number(limit) || 10);
   const rows = await SellerBannerPlan.find({
@@ -698,7 +689,7 @@ async function listActiveSellerBannersForHome({ limit = 10 } = {}) {
     endDate: { $gte: now },
     image: { $nin: [null, ""] },
   })
-    .sort({ CreatedAt: -1 })
+    .sort({ CreatedAt: -1, _id: -1 })
     .limit(80)
     .lean();
 
@@ -717,9 +708,14 @@ async function listActiveSellerBannersForHome({ limit = 10 } = {}) {
   const eligible = rows.filter(
     (row) => activeShopIds.has(String(row.shopId)) && isWithinDisplayWindow(row, now)
   );
-  shuffleInPlace(eligible);
+  const selected = sliceSeededPage(eligible, {
+    page: 1,
+    limit: max,
+    seed,
+    namespace: "home-banners",
+  }).items;
 
-  return eligible.slice(0, max).map((row) => ({
+  return selected.map((row) => ({
     id: String(row._id),
     image: row.image || "",
     shopId: row.shopId ? String(row.shopId) : "",
@@ -734,8 +730,8 @@ async function listActiveSellerBannersForHome({ limit = 10 } = {}) {
   }));
 }
 
-async function listActiveBanners({ limit = 10 } = {}) {
-  return listActiveSellerBannersForHome({ limit });
+async function listActiveBanners({ limit = 10, seed = "" } = {}) {
+  return listActiveSellerBannersForHome({ limit, seed });
 }
 
 async function recordBannerClick(bannerId) {
@@ -749,7 +745,7 @@ async function recordBannerClick(bannerId) {
       status: SELLER_BANNER_STATUS.ACTIVE,
     },
     { $inc: { clickCount: 1 }, $set: { UpdatedAt: new Date() } },
-    { new: true }
+    { returnDocument: "after" }
   ).lean();
   if (!updated) {
     throw createServiceError("Không tìm thấy banner đang hoạt động.", 404);

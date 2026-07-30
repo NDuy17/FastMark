@@ -8,6 +8,7 @@ const ShopProfile = require("../models/ShopProfile");
 const User = require("../models/User");
 const { RESERVATION_STATUS } = require("../constants");
 const { uploadImageToSupabase, resolveFileExtension } = require("./uploadService");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 
 const REVIEWABLE_STATUSES = [
   RESERVATION_STATUS.COMPLETED,
@@ -266,14 +267,16 @@ async function assertPurchasedProduct(user, { productId, reservationId, shopId }
   return { product, reservation, shopId: reservation.shopId || product.ShopId };
 }
 
-async function listBuyerReviews(user) {
-  const rows = await Review.find({
+async function listBuyerReviews(user, { page, limit } = {}) {
+  const filter = {
     userId: user._id,
     isDeleted: { $ne: true },
-  })
-    .sort({ CreatedAt: -1 })
-    .limit(100)
-    .lean();
+  };
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const [rows, total] = await Promise.all([
+    Review.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(safeLimit).lean(),
+    Review.countDocuments(filter),
+  ]);
 
   const imagesByReview = await loadReviewImagesMap(rows.map((row) => row._id));
   const productIds = rows.map((row) => row.productId).filter(Boolean);
@@ -294,7 +297,7 @@ async function listBuyerReviews(user) {
   const shopById = new Map(shops.map((item) => [String(item._id), item]));
   const ownerById = new Map(owners.map((item) => [String(item._id), item]));
 
-  return Promise.all(
+  const items = await Promise.all(
     rows.map((row) => {
       const shop = shopById.get(String(row.shopId));
       return toPublicReview(row, {
@@ -306,6 +309,12 @@ async function listBuyerReviews(user) {
       });
     })
   );
+
+  return {
+    reviews: items,
+    items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function createBuyerReview(user, payload = {}) {

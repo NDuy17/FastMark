@@ -6,14 +6,14 @@ export async function loadStoreById(storeId, originLocation = null) {
   return fetchStoreById(storeId, originLocation);
 }
 
-export async function loadProductsByStoreId(storeId) {
-  return fetchProductsByStoreId(storeId);
+export async function loadProductsByStoreId(storeId, options = {}) {
+  return fetchProductsByStoreId(storeId, options);
 }
 
 export async function loadProductById(productId) {
   return fetchProductById(productId);
 }
 
-export async function loadReviewsByStoreId(storeId) {
-  return fetchReviewsByStoreId(storeId);
+export async function loadReviewsByStoreId(storeId, options = {}) {
+  return fetchReviewsByStoreId(storeId, options);
 }

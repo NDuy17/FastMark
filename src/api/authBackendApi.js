@@ -1,5 +1,6 @@
 import { apiRequest, AUTH_TIMEOUT_MS, hasApiBaseUrl } from './client';
 import { API_ENDPOINTS } from './endpoints';
+import { callWithAuthToken } from './authTokenHelper';
 
 async function parseApiResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -215,6 +216,27 @@ export async function requestPasswordResetOnBackend({ email }) {
   );
 
   return parseApiResponse(response);
+}
+
+export async function requestPasswordResetForMeOnBackend() {
+  ensureBackendApiConfigured();
+
+  return callWithAuthToken(async (token) => {
+    const response = await apiRequest(
+      API_ENDPOINTS.authForgotPasswordRequestMe,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      },
+      AUTH_TIMEOUT_MS
+    );
+
+    return parseApiResponse(response);
+  });
 }
 
 export async function verifyPasswordResetOtpOnBackend({ email, code }) {

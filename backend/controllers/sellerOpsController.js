@@ -110,8 +110,12 @@ exports.uploadShopAvatar = async (req, res) => {
 
 exports.listOrders = async (req, res) => {
   const tab = req.query.tab || "pending";
-  const reservations = await reservationService.listSellerReservations(req.currentUser, { tab });
-  return success(res, { data: { reservations, tab } });
+  const result = await reservationService.listSellerReservations(req.currentUser, {
+    tab,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  return success(res, { data: { tab, ...result } });
 };
 
 exports.getReservationDetail = async (req, res) => {

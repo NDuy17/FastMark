@@ -4,20 +4,24 @@ import { normalizeReview } from '../model/reviewModel';
 
 const log = createLogger('ReviewRepository');
 
-export async function fetchReviewsByStoreId(storeId) {
-  log.info('fetchReviewsByStoreId:start', { storeId });
+export async function fetchReviewsByStoreId(storeId, { page = 1, limit = 20 } = {}) {
+  log.info('fetchReviewsByStoreId:start', { storeId, page, limit });
 
   if (!hasStoreNodeApi()) {
     log.warn('fetchReviewsByStoreId:no-api', { storeId });
-    return [];
+    return { items: [], page, limit, total: 0, hasMore: false };
   }
 
   try {
-    const reviews = await fetchReviewsFromNode(storeId);
+    const reviewsPage = await fetchReviewsFromNode(storeId, { page, limit });
+    const reviews = reviewsPage.items || [];
     log.ok('fetchReviewsByStoreId:node-api', { storeId, count: reviews.length });
-    return reviews.map(normalizeReview);
+    return {
+      ...reviewsPage,
+      items: reviews.map(normalizeReview),
+    };
   } catch (error) {
     log.warn('fetchReviewsByStoreId:node-api-failed', error?.message || error);
-    return [];
+    return { items: [], page, limit, total: 0, hasMore: false };
   }
 }

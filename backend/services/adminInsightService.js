@@ -38,6 +38,14 @@ const {
   resolveShopUsername,
 } = require("../utils/shopIdentity");
 const { buildAdminProductPriceFields } = require("./productPromotionService");
+const {
+  isAdminRemovedProduct,
+  isSellerRemovedProduct,
+  isRemovedProduct,
+  removedProductConditions,
+  notRemovedProductMatch,
+  resolveAdminProductStatusLabel,
+} = require("./adminCatalogService");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -109,13 +117,21 @@ function applyHistoryStatusFilter(baseFilter, tab, statusGroup) {
 
   if (tab === "products") {
     if (group === "active") {
-      return { ...baseFilter, Status: PRODUCT_STATUS.ACTIVE, IsDeleted: { $ne: true } };
+      return {
+        ...baseFilter,
+        ...notRemovedProductMatch(),
+        Status: PRODUCT_STATUS.ACTIVE,
+      };
     }
     if (group === "hidden") {
-      return { ...baseFilter, Status: PRODUCT_STATUS.HIDDEN, IsDeleted: { $ne: true } };
+      return {
+        ...baseFilter,
+        ...notRemovedProductMatch(),
+        Status: PRODUCT_STATUS.HIDDEN,
+      };
     }
     if (group === "removed") {
-      return { ...baseFilter, IsDeleted: true };
+      return { ...baseFilter, $or: removedProductConditions() };
     }
     return baseFilter;
   }
@@ -334,15 +350,14 @@ function toProductHistoryItem(product, shopId, imagesByProduct) {
     categoryName: category?.name || category?.categoryName || "",
     donVi: product.DonVi || "",
     ...buildAdminProductPriceFields(product),
-    isDeleted: Boolean(product.IsDeleted),
+    isDeleted: isRemovedProduct(product),
+    isAdminRemoved: isAdminRemovedProduct(product),
+    isSellerRemoved: isSellerRemovedProduct(product),
+    sellerRemovedAt: product.SellerRemovedAt || null,
     adminRemovalReason: product.AdminRemovalReason || "",
     adminRemovedAt: product.AdminRemovedAt || null,
     status: product.Status,
-    statusLabel: product.IsDeleted
-      ? "Đã gỡ"
-      : product.Status === 1
-        ? "Đang hiện"
-        : "Đã ẩn",
+    statusLabel: resolveAdminProductStatusLabel(product),
     viewCount: Number(product.ViewCount) || 0,
     likeCount: Number(product.LikeCount) || 0,
     soldCount: Number(product.SoldCount) || 0,

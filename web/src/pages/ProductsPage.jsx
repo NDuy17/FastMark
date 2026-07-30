@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
-import { Eye, EyeOff, Package, Trash2 } from 'lucide-react';
+import { Eye, Package, Trash2 } from 'lucide-react';
 
 
 
@@ -51,6 +51,8 @@ const STATUS_OPTIONS = [
 
   { value: '0', label: 'Đã ẩn' },
 
+  { value: 'removed', label: 'Đã xóa' },
+
 ];
 
 
@@ -84,6 +86,8 @@ export default function ProductsPage() {
     totalPages: 1,
 
   });
+
+  const [summary, setSummary] = useState({ total: 0, visible: 0, removed: 0 });
 
   const [loading, setLoading] = useState(true);
 
@@ -129,6 +133,18 @@ export default function ProductsPage() {
     if (statusFromUrl === '0') {
 
       return { title: 'Sản phẩm đã ẩn', description: 'Danh sách sản phẩm đang bị ẩn khỏi người mua.' };
+
+    }
+
+    if (statusFromUrl === 'removed') {
+
+      return {
+
+        title: 'Sản phẩm đã xóa',
+
+        description: 'Danh sách sản phẩm đã bị admin gỡ vi phạm hoặc người bán tự gỡ.',
+
+      };
 
     }
 
@@ -232,6 +248,12 @@ export default function ProductsPage() {
 
       setItems(payload.data?.items || []);
 
+      setSummary(
+
+        payload.data?.summary || { total: 0, visible: 0, removed: 0 },
+
+      );
+
       setPagination(
 
         payload.data?.pagination || {
@@ -253,6 +275,8 @@ export default function ProductsPage() {
       setError(loadError.message || 'Không tải được danh sách sản phẩm.');
 
       setItems([]);
+
+      setSummary({ total: 0, visible: 0, removed: 0 });
 
     } finally {
 
@@ -372,9 +396,9 @@ export default function ProductsPage() {
 
 
 
-  const visibleCount = items.filter((product) => product.status === 1).length;
+  const visibleCount = summary.visible;
 
-  const hiddenCount = items.filter((product) => product.status !== 1).length;
+  const removedCount = summary.removed;
 
 
 
@@ -390,11 +414,11 @@ export default function ProductsPage() {
 
       stats={[
 
-        { label: 'Tổng sản phẩm', value: loading ? '…' : pagination.total, icon: Package, tone: 'green' },
+        { label: 'Tổng sản phẩm', value: loading ? '…' : summary.total, icon: Package, tone: 'green' },
 
-        { label: 'Đang hiện (trang)', value: loading ? '…' : visibleCount, icon: Eye, tone: 'blue' },
+        { label: 'Đang hiện', value: loading ? '…' : visibleCount, icon: Eye, tone: 'blue' },
 
-        { label: 'Đã ẩn (trang)', value: loading ? '…' : hiddenCount, icon: EyeOff, tone: 'amber' },
+        { label: 'Đã xóa', value: loading ? '…' : removedCount, icon: Trash2, tone: 'red' },
 
       ]}
 

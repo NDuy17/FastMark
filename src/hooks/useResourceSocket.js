@@ -64,6 +64,8 @@ async function ensureSharedSocket() {
     socket.on('product_updated', notifyListeners);
     socket.on('order_updated', notifyListeners);
     socket.on('verification_updated', notifyListeners);
+    socket.on('account_updated', notifyListeners);
+    socket.on('shop_updated', notifyListeners);
 
     socket.on('disconnect', () => {
       if (listenerCount === 0) {

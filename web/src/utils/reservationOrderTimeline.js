@@ -149,8 +149,30 @@ function resolveFinalStatusLabel(reservation) {
   if (status === 3 || status === 5) return 'Hoàn thành';
   if (status === 4) return 'Tranh chấp';
   if (status === 0) return 'Chờ xác nhận';
-  if (status === 2) return 'Giữ hàng';
+  if (status === 2) {
+    return isPastPickup(reservation) ? 'Quá giờ nhận' : 'Giữ hàng';
+  }
   return 'Đã hủy';
+}
+
+export function resolveAdminListStatusMeta(reservation) {
+  const status = Number(reservation?.status);
+  if (status === 3 || status === 5) {
+    return { label: 'Hoàn thành', className: 'badge badge-success' };
+  }
+  if (status === 4) {
+    return { label: 'Tranh chấp', className: 'badge badge-warning' };
+  }
+  if (status === 0) {
+    return { label: 'Chờ xác nhận', className: 'badge badge-warning' };
+  }
+  if (status === 2) {
+    if (isPastPickup(reservation)) {
+      return { label: 'Quá giờ nhận', className: 'badge badge-warning' };
+    }
+    return { label: 'Giữ hàng', className: 'badge badge-warning' };
+  }
+  return { label: 'Đã hủy', className: 'badge badge-danger' };
 }
 
 function resolveActorLabel(reservation, reasonCode) {

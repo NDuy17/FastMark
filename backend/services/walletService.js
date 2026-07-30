@@ -17,6 +17,7 @@ const {
 } = require("../constants");
 const { createNotification } = require("./notificationService");
 const { emitAdminUpdated, emitUserResourceUpdated } = require("./realtimeService");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -271,12 +272,18 @@ async function createTopup(user, amountInput) {
   };
 }
 
-async function listTransactions(userId, { limit = 30 } = {}) {
-  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
-  const rows = await WalletTransaction.find({ userId })
-    .sort({ CreatedAt: -1 })
-    .limit(safeLimit);
-  return rows.map(toPublicTransaction);
+async function listTransactions(userId, { page, limit } = {}) {
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const filter = { userId };
+  const [rows, total] = await Promise.all([
+    WalletTransaction.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(safeLimit),
+    WalletTransaction.countDocuments(filter),
+  ]);
+  return {
+    transactions: rows.map(toPublicTransaction),
+    items: rows.map(toPublicTransaction),
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function getTransaction(userId, transactionId) {

@@ -29,7 +29,9 @@ import {
 import { selectAuthProfile, selectAuthUser } from '../../viewmodel/auth/authSelectors';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
+import { DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_TABS = [
@@ -40,6 +42,32 @@ const SEARCH_TABS = [
 
 const SUGGEST_DEBOUNCE_MS = 300;
 const SUGGEST_LIMIT = 6;
+const RESULT_LIMIT = DEFAULT_PAGE_SIZE;
+
+function appendUniqueByKey(existing, incoming, getKey) {
+  const merged = new Map();
+  [...(existing || []), ...(incoming || [])].forEach((item) => {
+    const key = String(getKey(item) || '');
+    if (!key || merged.has(key)) {
+      return;
+    }
+    merged.set(key, item);
+  });
+  return Array.from(merged.values());
+}
+
+function resolveUserItemKey(user) {
+  return user?.userId || user?.id || user?._id || '';
+}
+
+function resolveUsersHasMore(result, page, limit) {
+  const meta = result?.pagination || {};
+  const total = Number(meta.total);
+  if (Number.isFinite(total)) {
+    return page * limit < total;
+  }
+  return (Array.isArray(result?.items) ? result.items.length : 0) >= limit;
+}
 
 function productDistance(product) {
   const value = Number(product?.distanceMeters);
@@ -308,7 +336,19 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
   const [history, setHistory] = useState([]);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [productsHasMore, setProductsHasMore] = useState(false);
+  const [shopsHasMore, setShopsHasMore] = useState(false);
+  const [usersHasMore, setUsersHasMore] = useState(false);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [shopsTotal, setShopsTotal] = useState(0);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const productsPageRef = useRef(1);
+  const shopsPageRef = useRef(1);
+  const usersPageRef = useRef(1);
+  const promoRowsRef = useRef([]);
+  const loadingMoreRef = useRef(false);
 
   const locationReady = hasValidLocation(currentLocation);
   const trimmedQuery = query.trim();
@@ -348,6 +388,17 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       setSuggestions([]);
       setErrorText('');
       setIsSearching(true);
+      productsPageRef.current = 1;
+      shopsPageRef.current = 1;
+      usersPageRef.current = 1;
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+      setProductsHasMore(false);
+      setShopsHasMore(false);
+      setUsersHasMore(false);
+      setProductsTotal(0);
+      setShopsTotal(0);
+      setUsersTotal(0);
 
       if (historyUserId) {
         const nextHistory = await addSearchHistory(historyUserId, keyword);
@@ -357,44 +408,71 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       const requestId = ++searchRequestIdRef.current;
       try {
         const idToken = await getCurrentUserIdToken();
-        const [rows, promoRows, shopResult, userResult] = await Promise.all([
+        const [productPage, promoPage, shopResult, userResult] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             radiusMeters: 0,
             search: keyword,
-            limit: 50,
+            page: 1,
+            limit: RESULT_LIMIT,
           }),
           listPromotionProductsOnBackend({
-            limit: 80,
+            page: 1,
+            limit: RESULT_LIMIT,
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
-          }).catch(() => []),
+          }).catch(() => ({ items: [] })),
           fetchSearchShopsFromNode({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             radiusMeters: 0,
             shopQuery: keyword,
             identityOnly: true,
-            limit: 50,
+            page: 1,
+            limit: RESULT_LIMIT,
           }),
-          searchUsersOnBackend(idToken, { search: keyword, limit: 50 }).catch(() => ({ items: [] })),
+          searchUsersOnBackend(idToken, {
+            search: keyword,
+            page: 1,
+            limit: RESULT_LIMIT,
+          }).catch(() => ({ items: [] })),
         ]);
 
         if (searchRequestIdRef.current !== requestId) {
           return;
         }
 
-        setProducts(mergePromoIntoProducts(rows, promoRows));
+        promoRowsRef.current = Array.isArray(promoPage?.items) ? promoPage.items : [];
+        setProducts(mergePromoIntoProducts(productPage.items || [], promoRowsRef.current));
         setShops(
-          sortByDistanceAsc(Array.isArray(shopResult?.shops) ? shopResult.shops : [], shopDistance)
+          sortByDistanceAsc(
+            Array.isArray(shopResult?.items)
+              ? shopResult.items
+              : Array.isArray(shopResult?.shops)
+                ? shopResult.shops
+                : [],
+            shopDistance
+          )
         );
         setUsers(Array.isArray(userResult?.items) ? userResult.items : []);
+        setProductsHasMore(Boolean(productPage?.hasMore));
+        setShopsHasMore(Boolean(shopResult?.hasMore));
+        setUsersHasMore(resolveUsersHasMore(userResult, 1, RESULT_LIMIT));
+        setProductsTotal(Math.max(0, Number(productPage?.total) || 0));
+        setShopsTotal(Math.max(0, Number(shopResult?.total) || 0));
+        setUsersTotal(Math.max(0, Number(userResult?.pagination?.total) || 0));
       } catch (error) {
         if (searchRequestIdRef.current === requestId) {
           setProducts([]);
           setShops([]);
           setUsers([]);
+          setProductsHasMore(false);
+          setShopsHasMore(false);
+          setUsersHasMore(false);
+          setProductsTotal(0);
+          setShopsTotal(0);
+          setUsersTotal(0);
           showErrorAlert(error.message || 'Không tìm kiếm được. Vui lòng thử lại.');
         }
       } finally {
@@ -405,6 +483,117 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
     },
     [currentLocation?.latitude, currentLocation?.longitude, historyUserId, locationReady]
   );
+
+  const loadMoreResults = useCallback(async () => {
+    if (!committedQuery || !locationReady || isSearching || loadingMoreRef.current) {
+      return;
+    }
+
+    const wantProducts = activeTab !== 'users' && productsHasMore;
+    const wantShops = activeTab === 'all' && shopsHasMore;
+    const wantUsers = activeTab !== 'products' && usersHasMore;
+    if (!wantProducts && !wantShops && !wantUsers) {
+      return;
+    }
+
+    const requestId = searchRequestIdRef.current;
+    const nextProductPage = productsPageRef.current + 1;
+    const nextShopPage = shopsPageRef.current + 1;
+    const nextUserPage = usersPageRef.current + 1;
+
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    try {
+      const [productPage, shopResult, userResult] = await Promise.all([
+        wantProducts
+          ? discoverProductsOnBackend({
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              radiusMeters: 0,
+              search: committedQuery,
+              page: nextProductPage,
+              limit: RESULT_LIMIT,
+            }).catch(() => null)
+          : Promise.resolve(null),
+        wantShops
+          ? fetchSearchShopsFromNode({
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              radiusMeters: 0,
+              shopQuery: committedQuery,
+              identityOnly: true,
+              page: nextShopPage,
+              limit: RESULT_LIMIT,
+            }).catch(() => null)
+          : Promise.resolve(null),
+        wantUsers
+          ? getCurrentUserIdToken()
+              .then((idToken) =>
+                searchUsersOnBackend(idToken, {
+                  search: committedQuery,
+                  page: nextUserPage,
+                  limit: RESULT_LIMIT,
+                })
+              )
+              .catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      if (searchRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      if (productPage) {
+        const rows = mergePromoIntoProducts(productPage.items || [], promoRowsRef.current);
+        if (rows.length > 0) {
+          productsPageRef.current = nextProductPage;
+          setProducts((prev) => appendUniqueByKey(prev, rows, (item) => item?.id));
+        }
+        setProductsHasMore(Boolean(productPage.hasMore) && rows.length > 0);
+      }
+
+      if (shopResult) {
+        const rows = sortByDistanceAsc(
+          Array.isArray(shopResult.items)
+            ? shopResult.items
+            : Array.isArray(shopResult.shops)
+              ? shopResult.shops
+              : [],
+          shopDistance
+        );
+        if (rows.length > 0) {
+          shopsPageRef.current = nextShopPage;
+          setShops((prev) => appendUniqueByKey(prev, rows, (item) => item?.id));
+        }
+        setShopsHasMore(Boolean(shopResult.hasMore) && rows.length > 0);
+      }
+
+      if (userResult) {
+        const rows = Array.isArray(userResult.items) ? userResult.items : [];
+        if (rows.length > 0) {
+          usersPageRef.current = nextUserPage;
+          setUsers((prev) => appendUniqueByKey(prev, rows, resolveUserItemKey));
+        }
+        setUsersHasMore(
+          rows.length > 0 && resolveUsersHasMore(userResult, nextUserPage, RESULT_LIMIT)
+        );
+      }
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [
+    activeTab,
+    committedQuery,
+    currentLocation?.latitude,
+    currentLocation?.longitude,
+    isSearching,
+    locationReady,
+    productsHasMore,
+    shopsHasMore,
+    usersHasMore,
+  ]);
 
   useEffect(() => {
     if (showResults || !trimmedQuery) {
@@ -426,12 +615,13 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
     const timer = setTimeout(async () => {
       try {
         const idToken = await getCurrentUserIdToken().catch(() => null);
-        const [productRows, shopResult, userResult] = await Promise.all([
+        const [productPage, shopResult, userResult] = await Promise.all([
           discoverProductsOnBackend({
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             radiusMeters: 0,
             search: trimmedQuery,
+            page: 1,
             limit: SUGGEST_LIMIT,
           }),
           fetchSearchShopsFromNode({
@@ -440,6 +630,7 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
             radiusMeters: 0,
             shopQuery: trimmedQuery,
             identityOnly: true,
+            page: 1,
             limit: SUGGEST_LIMIT,
           }),
           idToken
@@ -454,7 +645,7 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
         }
 
         const productSuggestions = sortByDistanceAsc(
-          (Array.isArray(productRows) ? productRows : []).map((row) => normalizeProduct(row)),
+          (productPage.items || []).map((row) => normalizeProduct(row)),
           productDistance
         )
           .slice(0, SUGGEST_LIMIT)
@@ -466,7 +657,11 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
           }));
 
         const shopSuggestions = sortByDistanceAsc(
-          Array.isArray(shopResult?.shops) ? shopResult.shops : [],
+          Array.isArray(shopResult?.items)
+            ? shopResult.items
+            : Array.isArray(shopResult?.shops)
+              ? shopResult.shops
+              : [],
           shopDistance
         )
           .slice(0, SUGGEST_LIMIT)
@@ -517,6 +712,13 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
       setCommittedQuery('');
       setProducts([]);
       setShops([]);
+      setUsers([]);
+      setProductsHasMore(false);
+      setShopsHasMore(false);
+      setUsersHasMore(false);
+      setProductsTotal(0);
+      setShopsTotal(0);
+      setUsersTotal(0);
       setErrorText('');
     }
   }
@@ -603,6 +805,26 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
     return allItems;
   }, [activeTab, allItems, products, users]);
 
+  const hasMoreForTab = useMemo(() => {
+    if (activeTab === 'products') {
+      return productsHasMore;
+    }
+    if (activeTab === 'users') {
+      return usersHasMore;
+    }
+    return productsHasMore || shopsHasMore || usersHasMore;
+  }, [activeTab, productsHasMore, shopsHasMore, usersHasMore]);
+
+  const totalForTab = useMemo(() => {
+    if (activeTab === 'products') {
+      return productsTotal;
+    }
+    if (activeTab === 'users') {
+      return usersTotal;
+    }
+    return productsTotal + shopsTotal + usersTotal;
+  }, [activeTab, productsTotal, shopsTotal, usersTotal]);
+
   const emptyText = useMemo(() => {
     if (!showResults || isSearching) {
       return '';
@@ -669,6 +891,20 @@ export default function SearchScreen({ currentLocation, onBack, onOpenProduct, o
                   <Text style={styles.emptyIcon}>🔍</Text>
                   <Text style={styles.emptyTitle}>{emptyText}</Text>
                 </View>
+              ) : null
+            }
+            ListFooterComponent={
+              listData.length > 0 ? (
+                <LoadMoreButton
+                  currentCount={listData.length}
+                  totalCount={
+                    hasMoreForTab
+                      ? Math.max(totalForTab, listData.length + RESULT_LIMIT)
+                      : listData.length
+                  }
+                  loading={isLoadingMore}
+                  onPress={loadMoreResults}
+                />
               ) : null
             }
             renderItem={({ item }) =>

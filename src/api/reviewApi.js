@@ -1,5 +1,6 @@
 import { apiRequest, AUTH_TIMEOUT_MS, SELLER_UPLOAD_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
+import { DEFAULT_PAGE_SIZE, normalizePageResult } from '../core/utils/pagination';
 
 async function parseApiResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -20,14 +21,27 @@ async function authHeaders(idToken) {
   };
 }
 
-export async function getMyReviewsOnBackend(idToken) {
+export async function getMyReviewsOnBackend(
+  idToken,
+  { page = 1, limit = DEFAULT_PAGE_SIZE } = {}
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   const response = await apiRequest(
-    API_ENDPOINTS.buyerReviews,
+    `${API_ENDPOINTS.buyerReviews}?${params.toString()}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
-  return payload.data?.reviews || [];
+  return normalizePageResult(
+    {
+      ...(payload.data || {}),
+      items: payload.data?.reviews || payload.data?.items || [],
+    },
+    'items'
+  );
 }
 
 export async function submitBuyerReviewOnBackend({

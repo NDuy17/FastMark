@@ -2,7 +2,10 @@ const bannerService = require("../services/bannerService");
 const { success, fail } = require("../utils/apiResponse");
 
 exports.listActive = async (req, res) => {
-  const banners = await bannerService.listActiveBanners({ limit: req.query.limit });
+  const banners = await bannerService.listActiveBanners({
+    limit: req.query.limit,
+    seed: req.query.seed,
+  });
   return success(res, { data: { banners } });
 };
 

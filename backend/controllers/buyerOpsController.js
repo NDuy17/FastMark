@@ -13,7 +13,12 @@ function pickBodyValue(body, keys) {
 exports.listOrders = async (req, res) => {
   const tab = req.query.tab || "pending";
   const search = pickBodyValue(req.query, ["search", "q"]);
-  const data = await buyerOpsService.listBuyerOrders(req.currentUser, { tab, search });
+  const data = await buyerOpsService.listBuyerOrders(req.currentUser, {
+    tab,
+    search,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
   return success(res, { data });
 };
 

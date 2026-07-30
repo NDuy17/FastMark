@@ -1,6 +1,7 @@
 import { apiRequest, AUTH_TIMEOUT_MS, SELLER_UPLOAD_TIMEOUT_MS } from './client';
 import { API_ENDPOINTS } from './endpoints';
 import { normalizeCategoryId } from '../core/utils/categoryId';
+import { normalizePageResult } from '../core/utils/pagination';
 
 async function parseApiResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -45,12 +46,15 @@ export async function discoverProductsOnBackend({
   radiusMeters = 5000,
   categoryId = '',
   search = '',
-  limit = 80,
+  page = 1,
+  limit = 20,
+  seed = '',
 }) {
   const params = new URLSearchParams({
     lat: String(latitude),
     lng: String(longitude),
     radius: String(radiusMeters),
+    page: String(page),
     limit: String(limit),
   });
 
@@ -62,6 +66,9 @@ export async function discoverProductsOnBackend({
   if (trimmedCategoryId) {
     params.set('categoryId', trimmedCategoryId);
   }
+  if (seed) {
+    params.set('seed', String(seed));
+  }
 
   const response = await apiRequest(
     `${API_ENDPOINTS.productsDiscover}?${params.toString()}`,
@@ -70,7 +77,7 @@ export async function discoverProductsOnBackend({
   );
 
   const payload = await parseApiResponse(response);
-  return payload.data?.products || [];
+  return normalizePageResult(payload.data || {}, 'products');
 }
 
 export async function getShopCategoriesOnBackend() {
@@ -90,9 +97,13 @@ export async function getShopCategoriesOnBackend() {
   })).filter((category) => category.id && category.categoryName);
 }
 
-export async function getMyProductsOnBackend(idToken) {
+export async function getMyProductsOnBackend(idToken, { page = 1, limit = 20 } = {}) {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   const response = await apiRequest(
-    API_ENDPOINTS.products,
+    `${API_ENDPOINTS.products}?${params.toString()}`,
     {
       method: 'GET',
       headers: await authHeaders(idToken),
@@ -101,7 +112,13 @@ export async function getMyProductsOnBackend(idToken) {
   );
 
   const parsed = await parseApiResponse(response);
-  return parsed.data?.products || [];
+  return normalizePageResult(
+    {
+      ...(parsed.data || {}),
+      items: parsed.data?.products || parsed.data?.items || [],
+    },
+    'items'
+  );
 }
 
 export async function getMyProductOnBackend(idToken, productId) {
@@ -179,14 +196,22 @@ export async function setProductPinOnBackend({ idToken, productId, pinProduct })
 }
 
 export async function listPromotionProductsOnBackend({
-  limit = 40,
+  page = 1,
+  limit = 20,
   latitude,
   longitude,
+  seed = '',
 } = {}) {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
   if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
     params.set('lat', String(latitude));
     params.set('lng', String(longitude));
+  }
+  if (seed) {
+    params.set('seed', String(seed));
   }
   const response = await apiRequest(
     `${API_ENDPOINTS.productsPromotions}?${params.toString()}`,
@@ -194,7 +219,7 @@ export async function listPromotionProductsOnBackend({
     AUTH_TIMEOUT_MS
   );
   const payload = await parseApiResponse(response);
-  return payload.data?.products || [];
+  return normalizePageResult(payload.data || {}, 'products');
 }
 
 export async function listShopPromotionProductsOnBackend(shopId, { limit = 80 } = {}) {

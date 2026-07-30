@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Reservation = require("../models/Reservation");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 const Product = require("../models/Product");
 const ProductVariant = require("../models/ProductVariant");
 const ShopProfile = require("../models/ShopProfile");
@@ -217,7 +218,7 @@ async function createReservation(user, payload) {
   }
 }
 
-async function listBuyerReservations(user, { tab = "pending", search } = {}) {
+async function listBuyerReservations(user, { tab = "pending", search, page, limit } = {}) {
   await processReservationLifecycle();
   let statusFilter = null;
 
@@ -256,9 +257,12 @@ async function listBuyerReservations(user, { tab = "pending", search } = {}) {
       ? { completedAt: -1, CreatedAt: -1 }
       : { UpdatedAt: -1 };
 
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const total = await Reservation.countDocuments(reservationQuery);
   const reservations = await Reservation.find(reservationQuery)
     .sort(sort)
-    .limit(100);
+    .skip(skip)
+    .limit(safeLimit);
 
   const activeReviewByReservation = await loadActiveReviewsByReservationIds(
     reservations.map((doc) => doc._id),
@@ -292,12 +296,15 @@ async function listBuyerReservations(user, { tab = "pending", search } = {}) {
     );
   }
 
-  return mapped;
+  return {
+    reservations: mapped,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
-async function listBuyerOrders(user, { tab = "pending", search } = {}) {
-  const reservations = await listBuyerReservations(user, { tab, search });
-  return { tab, reservations };
+async function listBuyerOrders(user, { tab = "pending", search, page, limit } = {}) {
+  const result = await listBuyerReservations(user, { tab, search, page, limit });
+  return { tab, ...result };
 }
 
 async function getBuyerReservation(user, reservationId) {
@@ -357,6 +364,13 @@ async function cancelReservationByBuyer(user, reservationId) {
       content: `${user.FullName || user.UserName} đã hủy đơn giữ hàng. Cọc đã chuyển vào ví shop.`,
     });
 
+    await createNotification(user._id, {
+      title: "Bạn đã hủy đơn giữ hàng",
+      content: "Đơn giữ hàng đã bị hủy. Cọc đã chuyển vào ví shop theo quy định.",
+      audience: NOTIFICATION_AUDIENCE.BUYER,
+      index: NOTIFICATION_INDEX.ORDER,
+    });
+
     await emitOrderUpdated(reservation, { action: "buyer_cancelled_holding" });
     return toPublicReservation(reservation);
   }
@@ -378,6 +392,13 @@ async function cancelReservationByBuyer(user, reservationId) {
   await notifyShopOwner(shop, {
     title: "Khách hủy giữ hàng",
     content: `${user.FullName || user.UserName} đã hủy yêu cầu giữ hàng.`,
+  });
+
+  await createNotification(user._id, {
+    title: "Bạn đã hủy yêu cầu giữ hàng",
+    content: "Yêu cầu giữ hàng đã bị hủy. Tiền cọc (nếu có) đã hoàn về ví của bạn.",
+    audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
   });
 
   await emitOrderUpdated(reservation, { action: "buyer_cancelled_pending" });
@@ -597,6 +618,13 @@ async function forfeitDepositByBuyer(user, reservationId) {
     index: NOTIFICATION_INDEX.ORDER,
     });
   }
+
+  await createNotification(user._id, {
+    title: "Bạn đã đồng ý mất cọc",
+    content: "Bạn đã đồng ý mất cọc sau giờ nhận hàng. Cọc đã chuyển vào ví người bán.",
+    audience: NOTIFICATION_AUDIENCE.BUYER,
+    index: NOTIFICATION_INDEX.ORDER,
+  });
 
   return result;
 }

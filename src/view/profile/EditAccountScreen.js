@@ -10,7 +10,12 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import KeyboardFormScreen from '../shared/components/KeyboardFormScreen';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
-import { checkRegisterAvailabilityOnBackend } from '../../api/authBackendApi';
+import {
+  checkRegisterAvailabilityOnBackend,
+  requestPasswordResetForMeOnBackend,
+  resetPasswordOnBackend,
+  verifyPasswordResetOtpOnBackend,
+} from '../../api/authBackendApi';
 
 import {
   selectAuthProfile,
@@ -21,8 +26,15 @@ import {
   applyProfileWithCache,
   changePassword,
   clearAuthFeedback,
+  logoutUser,
   updateUserProfile,
 } from '../../viewmodel/auth/authSlice';
+
+const FORGOT_STEPS = {
+  REQUEST: 'request',
+  OTP: 'otp',
+  PASSWORD: 'password',
+};
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,20}$/;
 
@@ -116,6 +128,19 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isCheckingUserName, setIsCheckingUserName] = useState(false);
+  const [passwordMode, setPasswordMode] = useState('change');
+  const [forgotStep, setForgotStep] = useState(FORGOT_STEPS.REQUEST);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotResetToken, setForgotResetToken] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  const accountEmail = String(profile?.email || user?.email || '').trim().toLowerCase();
 
   const isProfileLoading = profileStatus === 'loading';
   const currentUserName = normalizeUserName(profile?.userName || '');
@@ -148,6 +173,153 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
       dispatch(clearAuthFeedback());
     };
   }, [dispatch]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      setResendCooldown((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    if (section !== 'security') {
+      setPasswordMode('change');
+      setForgotStep(FORGOT_STEPS.REQUEST);
+      setForgotOtp('');
+      setForgotResetToken('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotError('');
+      setForgotMessage('');
+    }
+  }, [section]);
+
+  function resetForgotPasswordFlow() {
+    setForgotStep(FORGOT_STEPS.REQUEST);
+    setForgotOtp('');
+    setForgotResetToken('');
+    setForgotNewPassword('');
+    setForgotConfirmPassword('');
+    setForgotError('');
+    setForgotMessage('');
+    setResendCooldown(0);
+  }
+
+  function enterForgotPasswordMode() {
+    if (!accountEmail) {
+      Alert.alert('Lỗi', 'Tài khoản chưa có email để gửi OTP.');
+      return;
+    }
+    setPasswordMode('forgot');
+    setForgotEmail(accountEmail);
+    resetForgotPasswordFlow();
+  }
+
+  function exitForgotPasswordMode() {
+    setPasswordMode('change');
+    resetForgotPasswordFlow();
+  }
+
+  async function handleRequestForgotOtp() {
+    if (!accountEmail) {
+      setForgotError('Tài khoản chưa có email.');
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotError('');
+    try {
+      const payload = await requestPasswordResetForMeOnBackend();
+      const email = payload.data?.email || accountEmail;
+      setForgotEmail(email);
+      setResendCooldown(
+        Number(payload.data?.verification?.resendCooldownSeconds) || 120
+      );
+      setForgotMessage('Đã gửi mã OTP đến email của bạn.');
+      setForgotStep(FORGOT_STEPS.OTP);
+    } catch (requestError) {
+      setForgotError(requestError.message || 'Không gửi được OTP.');
+    } finally {
+      setForgotLoading(false);
+    }
+  }
+
+  async function handleVerifyForgotOtp() {
+    if (!forgotOtp.trim() || forgotOtp.trim().length < 6) {
+      setForgotError('Vui lòng nhập mã OTP 6 số.');
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotError('');
+    try {
+      const data = await verifyPasswordResetOtpOnBackend({
+        email: forgotEmail || accountEmail,
+        code: forgotOtp.trim(),
+      });
+      setForgotResetToken(data.resetToken);
+      setForgotMessage('Xác thực OTP thành công. Nhập mật khẩu mới.');
+      setForgotStep(FORGOT_STEPS.PASSWORD);
+    } catch (verifyError) {
+      const errData = verifyError?.data || {};
+      if (errData.mustUseNewCode) {
+        setForgotOtp('');
+        setResendCooldown(
+          Number(errData.resendCooldownSeconds) ||
+            (errData.resendAvailableAt
+              ? Math.max(
+                  0,
+                  Math.ceil((new Date(errData.resendAvailableAt).getTime() - Date.now()) / 1000)
+                )
+              : 120)
+        );
+        setForgotError(
+          verifyError.message ||
+            'Bạn đã nhập sai 5 lần. Hệ thống đã gửi mã mới — vui lòng nhập mã mới.'
+        );
+        return;
+      }
+      setForgotError(verifyError.message || 'Mã OTP không đúng.');
+    } finally {
+      setForgotLoading(false);
+    }
+  }
+
+  async function handleResetForgotPassword() {
+    const newPasswordError = getNewPasswordError(forgotNewPassword);
+    const confirmPasswordError = getConfirmPasswordError(
+      forgotConfirmPassword,
+      forgotNewPassword
+    );
+
+    if (newPasswordError || confirmPasswordError) {
+      setForgotError(newPasswordError || confirmPasswordError);
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotError('');
+    try {
+      await resetPasswordOnBackend({
+        email: forgotEmail || accountEmail,
+        resetToken: forgotResetToken,
+        newPassword: forgotNewPassword,
+      });
+      await dispatch(logoutUser()).unwrap().catch(() => {});
+      Alert.alert(
+        'Thành công',
+        'Đã đặt lại mật khẩu. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+        [{ text: 'OK', onPress: () => onBack?.() }]
+      );
+    } catch (resetError) {
+      setForgotError(resetError.message || 'Không đặt lại được mật khẩu.');
+    } finally {
+      setForgotLoading(false);
+    }
+  }
 
   function updateProfileField(field, value) {
     setProfileForm((current) => ({ ...current, [field]: value }));
@@ -435,6 +607,98 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
               onPress={handleSaveProfile}
             />
           </>
+        ) : passwordMode === 'forgot' ? (
+          <>
+            <Pressable onPress={exitForgotPasswordMode} style={styles.forgotBackLink}>
+              <Text style={styles.forgotBackLinkText}>← Quay lại đổi mật khẩu</Text>
+            </Pressable>
+
+            <Text style={styles.forgotIntro}>
+              Quên mật khẩu hiện tại? Hệ thống gửi mã OTP về email tài khoản để đặt lại mật khẩu.
+            </Text>
+
+            <View style={styles.emailReadonlyBlock}>
+              <Text style={styles.label}>Email nhận OTP</Text>
+              <Text style={styles.emailReadonlyValue}>{forgotEmail || accountEmail || '—'}</Text>
+            </View>
+
+            {forgotStep === FORGOT_STEPS.REQUEST ? (
+              <ActionButton
+                disabled={forgotLoading || !accountEmail}
+                label={forgotLoading ? 'Đang gửi OTP...' : 'Gửi mã OTP'}
+                onPress={handleRequestForgotOtp}
+              />
+            ) : null}
+
+            {forgotStep === FORGOT_STEPS.OTP ? (
+              <>
+                <LabeledInput
+                  label="Mã OTP"
+                  value={forgotOtp}
+                  onChangeText={(value) => {
+                    setForgotOtp(value.replace(/\D/g, '').slice(0, 6));
+                    setForgotError('');
+                  }}
+                  keyboardType="number-pad"
+                  placeholder="6 số"
+                  editable={!forgotLoading}
+                />
+                <Pressable
+                  disabled={forgotLoading || resendCooldown > 0}
+                  onPress={handleRequestForgotOtp}
+                  style={styles.resendOtpLink}
+                >
+                  <Text style={styles.resendOtpText}>
+                    {resendCooldown > 0 ? `Gửi lại sau ${resendCooldown}s` : 'Gửi lại mã OTP'}
+                  </Text>
+                </Pressable>
+                <ActionButton
+                  disabled={forgotLoading}
+                  label={forgotLoading ? 'Đang xác thực...' : 'Xác thực OTP'}
+                  onPress={handleVerifyForgotOtp}
+                />
+              </>
+            ) : null}
+
+            {forgotStep === FORGOT_STEPS.PASSWORD ? (
+              <>
+                <LabeledInput
+                  label="Mật khẩu mới"
+                  value={forgotNewPassword}
+                  onChangeText={(value) => {
+                    setForgotNewPassword(value);
+                    setForgotError('');
+                  }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoComplete="new-password"
+                  placeholder="Tối thiểu 6 ký tự"
+                  editable={!forgotLoading}
+                />
+                <LabeledInput
+                  label="Xác nhận mật khẩu mới"
+                  value={forgotConfirmPassword}
+                  onChangeText={(value) => {
+                    setForgotConfirmPassword(value);
+                    setForgotError('');
+                  }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoComplete="new-password"
+                  placeholder="Nhập lại mật khẩu mới"
+                  editable={!forgotLoading}
+                />
+                <ActionButton
+                  disabled={forgotLoading}
+                  label={forgotLoading ? 'Đang cập nhật...' : 'Đặt lại mật khẩu'}
+                  onPress={handleResetForgotPassword}
+                />
+              </>
+            ) : null}
+
+            {forgotError ? <Text style={styles.forgotErrorText}>{forgotError}</Text> : null}
+            {forgotMessage ? <Text style={styles.forgotSuccessText}>{forgotMessage}</Text> : null}
+          </>
         ) : (
           <>
             <LabeledInput
@@ -450,6 +714,9 @@ export default function EditAccountScreen({ onBack, onChangePhone }) {
               editable={!isChangingPassword}
               error={fieldErrors.currentPassword}
             />
+            <Pressable onPress={enterForgotPasswordMode} style={styles.forgotPasswordLink}>
+              <Text style={styles.forgotPasswordLinkText}>Quên mật khẩu hiện tại?</Text>
+            </Pressable>
             <LabeledInput
               label="Mật khẩu mới"
               value={passwordForm.newPassword}
@@ -685,6 +952,66 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '900',
+  },
+  forgotPasswordLink: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+  },
+  forgotPasswordLinkText: {
+    color: '#076F32',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  forgotBackLink: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  forgotBackLinkText: {
+    color: '#076F32',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  forgotIntro: {
+    color: '#64748b',
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  emailReadonlyBlock: {
+    marginTop: 8,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  emailReadonlyValue: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  resendOtpLink: {
+    alignSelf: 'flex-end',
+    marginTop: -4,
+    marginBottom: 8,
+  },
+  resendOtpText: {
+    color: '#076F32',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  forgotErrorText: {
+    marginTop: 12,
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  forgotSuccessText: {
+    marginTop: 12,
+    color: '#076F32',
+    fontSize: 13,
+    fontWeight: '700',
   },
   infoText: {
     marginTop: 14,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -14,6 +14,7 @@ import {
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
 import { showErrorAlert } from '../../core/utils/appAlert';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import {
@@ -22,6 +23,7 @@ import {
   filterNotificationsByTab,
   resolveNotificationIndex,
 } from '../../constants/notifications';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import OrderStatusTabBar from '../shared/components/OrderStatusTabBar';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import NotificationDetailScreen from './NotificationDetailScreen';
@@ -77,6 +79,11 @@ export default function NotificationsScreen({
   const insets = useScreenInsets();
   const [notifications, setNotifications] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const loadingGuardRef = useRef(false);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [activeTab, setActiveTab] = useState(NOTIFICATION_TAB.ALL);
 
@@ -85,24 +92,52 @@ export default function NotificationsScreen({
     [notifications, activeTab]
   );
 
-  const loadNotifications = useCallback(async () => {
-    setIsLoading(true);
+  const loadNotifications = useCallback(async ({ nextPage = 1, refresh = false } = {}) => {
+    if (loadingGuardRef.current) {
+      return;
+    }
+    loadingGuardRef.current = true;
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
 
     try {
-      const items = await getMyNotificationsOnBackend(audience);
-      setNotifications(
-        (Array.isArray(items) ? items : []).map((item) => ({
-          ...item,
-          index: resolveNotificationIndex(item),
-        }))
+      const result = await getMyNotificationsOnBackend(audience, {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const items = (result.items || []).map((item) => ({
+        ...item,
+        index: resolveNotificationIndex(item),
+      }));
+      setNotifications((current) =>
+        nextPage === 1 ? items : appendUniqueById(current, items)
       );
+      setPage(Number(result.page) || nextPage);
+      setHasMore(Boolean(result.hasMore));
+      setTotalCount(Math.max(0, Number(result.total) || 0));
     } catch (error) {
-      setNotifications([]);
+      if (nextPage === 1) {
+        setNotifications([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
       showErrorAlert(error.message || 'Không tải được thông báo.');
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingGuardRef.current = false;
     }
   }, [audience]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!hasMore || isLoading || isLoadingMore || loadingGuardRef.current) {
+      return;
+    }
+    loadNotifications({ nextPage: page + 1 });
+  }, [hasMore, isLoading, isLoadingMore, loadNotifications, page]);
 
   const handleRealtimeNotification = useCallback(
     (notification) => {
@@ -125,7 +160,7 @@ export default function NotificationsScreen({
       setSelectedNotification(null);
       return;
     }
-    loadNotifications();
+    loadNotifications({ nextPage: 1 });
   }, [isScreenActive, loadNotifications]);
 
   useEffect(() => {
@@ -139,7 +174,7 @@ export default function NotificationsScreen({
         audience={audience}
         onBack={() => {
           setSelectedNotification(null);
-          loadNotifications();
+          loadNotifications({ nextPage: 1, refresh: true });
         }}
         onMarkedRead={(id) => {
           setNotifications((current) =>
@@ -180,7 +215,23 @@ export default function NotificationsScreen({
             },
           ]}
           refreshing={isLoading}
-          onRefresh={loadNotifications}
+          onRefresh={() => loadNotifications({ nextPage: 1, refresh: true })}
+          ListFooterComponent={
+            filteredNotifications.length > 0 ? (
+              <LoadMoreButton
+                currentCount={filteredNotifications.length}
+                totalCount={
+                  activeTab === NOTIFICATION_TAB.ALL
+                    ? Math.max(totalCount, filteredNotifications.length)
+                    : hasMore
+                      ? filteredNotifications.length + DEFAULT_PAGE_SIZE
+                      : filteredNotifications.length
+                }
+                loading={isLoadingMore}
+                onPress={handleLoadMore}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Text style={styles.emptyIcon}>🔔</Text>

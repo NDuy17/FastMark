@@ -28,8 +28,8 @@ export const firebaseConfig = {
   appId: env.EXPO_PUBLIC_FIREBASE_APP_ID || googleServicesFirebase.appId,
 };
 
-export const nodeApiUrl = env.EXPO_PUBLIC_NODE_API_URL || '';
-
+export const nodeApiUrl =
+  process.env.EXPO_PUBLIC_NODE_API_URL?.trim() || '';
 function readSupabaseEnv(...keys) {
   for (const key of keys) {
     const value = env[key];

@@ -12,8 +12,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { formatPrice } from '../../core/utils/productFormat';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import {
@@ -59,6 +61,10 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
   const [banks, setBanks] = useState([]);
   const [withdraws, setWithdraws] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [selectedBankId, setSelectedBankId] = useState('');
   const [bankPickerOpen, setBankPickerOpen] = useState(false);
@@ -77,30 +83,53 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
     [banks, selectedBankId]
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (nextPage === 1) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     try {
-      const [bankRows, withdrawRows] = await Promise.all([
-        loadWithdrawBanksViewModel(),
-        loadMyWithdrawsViewModel(),
-      ]);
-      setBanks(Array.isArray(bankRows) ? bankRows : []);
-      setWithdraws(Array.isArray(withdrawRows) ? withdrawRows : []);
-      setSelectedBankId((current) => {
-        if (current) return current;
-        return bankRows?.[0]?.id ? String(bankRows[0].id) : '';
-      });
+      const requests = [
+        loadMyWithdrawsViewModel({ page: nextPage, limit: DEFAULT_PAGE_SIZE }),
+      ];
+      if (nextPage === 1) {
+        requests.unshift(loadWithdrawBanksViewModel());
+      }
+      const results = await Promise.all(requests);
+      const bankRows = nextPage === 1 ? results[0] : null;
+      const withdrawPage = nextPage === 1 ? results[1] : results[0];
+      const withdrawRows =
+        withdrawPage?.items || (Array.isArray(withdrawPage) ? withdrawPage : []);
+      if (nextPage === 1) {
+        setBanks(Array.isArray(bankRows) ? bankRows : []);
+        setSelectedBankId((current) => {
+          if (current) return current;
+          return bankRows?.[0]?.id ? String(bankRows[0].id) : '';
+        });
+      }
+      setWithdraws((current) =>
+        nextPage === 1 ? withdrawRows : appendUniqueById(current, withdrawRows)
+      );
+      setPage(Number(withdrawPage?.page) || nextPage);
+      setHasMore(Boolean(withdrawPage?.hasMore));
+      setTotalCount(Math.max(0, Number(withdrawPage?.total) || 0));
     } catch (error) {
       Alert.alert('Lỗi', error.message || 'Không tải được dữ liệu rút tiền.');
-      setBanks([]);
-      setWithdraws([]);
+      if (nextPage === 1) {
+        setBanks([]);
+        setWithdraws([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
+    load({ nextPage: 1 });
   }, [load]);
 
   async function handleSubmit() {
@@ -147,7 +176,7 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
               setAmountText('');
               setAccountNumber('');
               setAccountName('');
-              await load();
+              await load({ nextPage: 1 });
             } catch (error) {
               Alert.alert('Không rút được', error.message || 'Vui lòng thử lại.');
             } finally {
@@ -376,7 +405,8 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
           {withdraws.length === 0 ? (
             <Text style={styles.empty}>Chưa có yêu cầu rút tiền.</Text>
           ) : (
-            withdraws.map((item) => (
+            <>
+            {withdraws.map((item) => (
               <Pressable
                 key={item.id}
                 onPress={() => setSelectedWithdraw(item)}
@@ -410,7 +440,18 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
                   <Text style={styles.historyNote}>Ghi chú: {item.adminNote}</Text>
                 ) : null}
               </Pressable>
-            ))
+            ))}
+            <LoadMoreButton
+              currentCount={withdraws.length}
+              totalCount={
+                hasMore
+                  ? Math.max(totalCount, withdraws.length + DEFAULT_PAGE_SIZE)
+                  : withdraws.length
+              }
+              loading={loadingMore}
+              onPress={() => load({ nextPage: page + 1 })}
+            />
+            </>
           )}
         </KeyboardAwareScrollView>
       )}

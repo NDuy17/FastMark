@@ -94,6 +94,43 @@ function pickString(value) {
   return String(value || "").trim();
 }
 
+function isAdminRemovedProduct(product) {
+  return Boolean(product?.IsDeleted) && Boolean(pickString(product?.AdminRemovalReason));
+}
+
+function isSellerRemovedProduct(product) {
+  if (product?.SellerRemovedAt) {
+    return true;
+  }
+  // Data cũ: seller gỡ từng ghi IsDeleted mà không có lý do vi phạm.
+  return Boolean(product?.IsDeleted) && !pickString(product?.AdminRemovalReason);
+}
+
+/** Đã xóa = admin gỡ vi phạm hoặc seller tự gỡ. */
+function isRemovedProduct(product) {
+  return isAdminRemovedProduct(product) || isSellerRemovedProduct(product);
+}
+
+/** Điều kiện Mongo cho nhóm "đã xóa". */
+function removedProductConditions() {
+  return [{ IsDeleted: true }, { SellerRemovedAt: { $ne: null } }];
+}
+
+/** Điều kiện Mongo cho nhóm "chưa xóa". */
+function notRemovedProductMatch() {
+  return { IsDeleted: { $ne: true }, SellerRemovedAt: null };
+}
+
+function resolveAdminProductStatusLabel(product) {
+  if (isAdminRemovedProduct(product)) {
+    return "Đã gỡ";
+  }
+  if (isSellerRemovedProduct(product)) {
+    return "Seller đã gỡ";
+  }
+  return Number(product?.Status) === PRODUCT_STATUS.ACTIVE ? "Đang hiện" : "Đã ẩn";
+}
+
 function toObjectId(value) {
   if (!mongoose.Types.ObjectId.isValid(String(value || ""))) {
     return null;
@@ -312,9 +349,9 @@ async function getShopDetail(shopId) {
           .sort({ CreatedAt: -1 })
           .lean()
       : null,
-    Product.countDocuments({ ShopId: objectId, IsDeleted: { $ne: true } }),
+    Product.countDocuments({ ShopId: objectId, ...notRemovedProductMatch() }),
     Product.aggregate([
-      { $match: { ShopId: objectId, IsDeleted: { $ne: true } } },
+      { $match: { ShopId: objectId, ...notRemovedProductMatch() } },
       {
         $group: {
           _id: null,
@@ -541,6 +578,18 @@ async function setShopStatus(shopId, nextStatus) {
     }
   }
 
+  emitUserResourceUpdated(shop.userId, "shop", {
+    shopId: String(shop._id),
+    shopStatus: nextStatus,
+    locked: nextStatus === SHOP_STATUS.BLOCKED,
+  });
+  emitAdminUpdated("shop", {
+    shopId: String(shop._id),
+    userId: shop.userId ? String(shop.userId) : "",
+    status: nextStatus,
+    locked: nextStatus === SHOP_STATUS.BLOCKED,
+  });
+
   return getShopDetail(shopId);
 }
 
@@ -567,20 +616,60 @@ async function deleteShop(shopId) {
     { $set: { Status: PRODUCT_STATUS.HIDDEN, UpdatedAt: new Date() } }
   );
 
+  emitUserResourceUpdated(shop.userId, "shop", {
+    shopId: String(shop._id),
+    shopStatus: SHOP_STATUS.BLOCKED,
+    locked: true,
+  });
+  emitAdminUpdated("shop", {
+    shopId: String(shop._id),
+    userId: shop.userId ? String(shop.userId) : "",
+    status: SHOP_STATUS.BLOCKED,
+    locked: true,
+  });
+
   return { id: String(shop._id), deleted: true };
+}
+
+/** Nhóm trạng thái sản phẩm cho admin: active | hidden | removed. */
+function resolveProductStatusGroup(status) {
+  const raw = pickString(status).toLowerCase();
+  if (raw === "removed" || raw === "deleted") {
+    return "removed";
+  }
+  if (raw === "1" || raw === "active") {
+    return "active";
+  }
+  if (raw === "0" || raw === "hidden") {
+    return "hidden";
+  }
+  return "";
+}
+
+function withProductStatusGroup(baseFilter, group) {
+  const extras = [];
+  if (group === "removed") {
+    extras.push({ $or: removedProductConditions() });
+  } else if (group === "active") {
+    extras.push(notRemovedProductMatch(), { Status: PRODUCT_STATUS.ACTIVE });
+  } else if (group === "hidden") {
+    extras.push(notRemovedProductMatch(), { Status: PRODUCT_STATUS.HIDDEN });
+  }
+
+  if (extras.length === 0) {
+    return { ...baseFilter };
+  }
+  return { $and: [baseFilter, ...extras] };
 }
 
 async function listProducts(query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const search = pickString(query.search).replace(/^@+/, "");
-  const status = pickString(query.status);
+  const statusGroup = resolveProductStatusGroup(query.status);
   const shopId = toObjectId(query.shopId);
   const categoryId = toObjectId(query.categoryId);
 
   const filter = {};
-  if (status !== "" && Number.isFinite(Number(status))) {
-    filter.Status = Number(status);
-  }
   if (shopId) {
     filter.ShopId = shopId;
   }
@@ -635,9 +724,14 @@ async function listProducts(query = {}) {
 
   applyCreatedAtRange(filter, query);
 
-  const [total, products] = await Promise.all([
+  const listFilter = withProductStatusGroup(filter, statusGroup);
+
+  const [total, products, summaryTotal, summaryVisible, summaryRemoved] = await Promise.all([
+    Product.countDocuments(listFilter),
+    Product.find(listFilter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
     Product.countDocuments(filter),
-    Product.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    Product.countDocuments(withProductStatusGroup(filter, "active")),
+    Product.countDocuments(withProductStatusGroup(filter, "removed")),
   ]);
 
   const shopIds = [...new Set(products.map((item) => String(item.ShopId || "")).filter(Boolean))];
@@ -702,14 +796,13 @@ async function listProducts(query = {}) {
       donVi: product.DonVi || "",
       ...buildAdminProductPriceFields(product),
       status: product.Status,
-      isDeleted: Boolean(product.IsDeleted),
+      isDeleted: isRemovedProduct(product),
+      isAdminRemoved: isAdminRemovedProduct(product),
+      isSellerRemoved: isSellerRemovedProduct(product),
+      sellerRemovedAt: product.SellerRemovedAt || null,
       adminRemovalReason: product.AdminRemovalReason || "",
       adminRemovedAt: product.AdminRemovedAt || null,
-      statusLabel: product.IsDeleted
-        ? "Đã gỡ"
-        : product.Status === 1
-          ? "Đang hiện"
-          : "Đã ẩn",
+      statusLabel: resolveAdminProductStatusLabel(product),
       viewCount: Number(product.ViewCount) || 0,
       likeCount: Number(product.LikeCount) || 0,
       soldCount: Number(product.SoldCount) || 0,
@@ -724,6 +817,11 @@ async function listProducts(query = {}) {
 
   return {
     items,
+    summary: {
+      total: summaryTotal,
+      visible: summaryVisible,
+      removed: summaryRemoved,
+    },
     pagination: {
       page,
       limit,
@@ -836,14 +934,13 @@ async function getProductDetail(productId) {
     donVi: product.DonVi || "",
     ...buildAdminProductPriceFields(product),
     status: product.Status,
-    isDeleted: Boolean(product.IsDeleted),
+    isDeleted: isRemovedProduct(product),
+    isAdminRemoved: isAdminRemovedProduct(product),
+    isSellerRemoved: isSellerRemovedProduct(product),
+    sellerRemovedAt: product.SellerRemovedAt || null,
     adminRemovalReason: product.AdminRemovalReason || "",
     adminRemovedAt: product.AdminRemovedAt || null,
-    statusLabel: product.IsDeleted
-      ? "Đã gỡ"
-      : product.Status === 1
-        ? "Đang hiện"
-        : "Đã ẩn",
+    statusLabel: resolveAdminProductStatusLabel(product),
     viewCount,
     likeCount: likeCount,
     likeRate,
@@ -943,8 +1040,11 @@ async function removeProductForViolation(productId, reason = "") {
   if (!product) {
     throw createServiceError("Không tìm thấy sản phẩm.", 404);
   }
-  if (product.IsDeleted) {
+  if (isAdminRemovedProduct(product)) {
     throw createServiceError("Sản phẩm đã được gỡ trước đó.", 400);
+  }
+  if (isSellerRemovedProduct(product)) {
+    throw createServiceError("Người bán đã gỡ sản phẩm này, không cần gỡ thêm.", 400);
   }
 
   const now = new Date();
@@ -952,6 +1052,7 @@ async function removeProductForViolation(productId, reason = "") {
   product.IsDeleted = true;
   product.AdminRemovalReason = violationReason;
   product.AdminRemovedAt = now;
+  product.SellerRemovedAt = product.SellerRemovedAt || now;
   product.pinProduct = 0;
   product.IsPromotion = false;
   product.DiscountPercent = 0;
@@ -1260,4 +1361,10 @@ module.exports = {
   cancelReservation,
   SHOP_STATUS,
   PRODUCT_STATUS,
+  isAdminRemovedProduct,
+  isSellerRemovedProduct,
+  isRemovedProduct,
+  removedProductConditions,
+  notRemovedProductMatch,
+  resolveAdminProductStatusLabel,
 };

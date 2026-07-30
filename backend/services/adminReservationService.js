@@ -40,6 +40,10 @@ const {
   resolveShopAvatar,
   resolveShopUsername,
 } = require("../utils/shopIdentity");
+const {
+  notifyAdminDisputeResolution,
+  notifyReservationBoth,
+} = require("./orderNotificationHelper");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -694,17 +698,24 @@ async function writeAuditLog(adminUser, reservationId, { action, decision, note 
   });
 }
 
-function canRefundReservation(reservation) {
-  const status = Number(reservation.status);
-  if (status === RESERVATION_STATUS.DISPUTED) {
-    return true;
-  }
+function canAdminProcessDispute(reservation) {
   return (
-    status === RESERVATION_STATUS.WAITING_PICKUP &&
-    (Boolean(reservation.disputeByBuyer) ||
-      Boolean(reservation.disputeBySeller) ||
-      Boolean(reservation.disputedAt))
+    Number(reservation.status) === RESERVATION_STATUS.DISPUTED &&
+    Boolean(reservation.disputeByBuyer) &&
+    Boolean(reservation.disputeBySeller)
   );
+}
+
+function requireAdminResolutionNote(note) {
+  const text = pickString(note);
+  if (text.length < 5) {
+    throw createServiceError("Vui lòng nhập nội dung xử lý (ít nhất 5 ký tự).", 400);
+  }
+  return text;
+}
+
+function canRefundReservation(reservation) {
+  return canAdminProcessDispute(reservation);
 }
 
 async function closePendingDisputeReports(adminUser, reservationId, decision, note) {
@@ -741,27 +752,35 @@ async function refundToBuyer(adminUser, reservationId, { note } = {}) {
 
   if (!canRefundReservation(reservation)) {
     throw createServiceError(
-      "Chỉ có thể hoàn cọc cho đơn đang tranh chấp (hoặc chờ nhận hàng đã báo cáo).",
+      "Chỉ xử lý tranh chấp khi cả buyer và seller đã gửi báo cáo. Nếu mới một bên báo cáo, hệ thống tự xử lý sau 24 giờ.",
       400
     );
   }
+
+  const resolutionNote = requireAdminResolutionNote(note);
 
   await refundDepositIfHeld(reservation);
   await releaseVariantInventory(reservation);
 
   reservation.status = RESERVATION_STATUS.REFUNDED;
   reservation.cancelledAt = reservation.cancelledAt || new Date();
-  reservation.cancelReason = pickString(note) || "Admin hoàn cọc cho người mua.";
+  reservation.cancelReason = resolutionNote || "Admin hoàn cọc cho người mua.";
   reservation.UpdatedAt = new Date();
   await reservation.save();
 
-  await closePendingDisputeReports(adminUser, reservation._id, "approve_buyer", note);
+  await closePendingDisputeReports(adminUser, reservation._id, "approve_buyer", resolutionNote);
 
   await writeAuditLog(adminUser, reservation._id, {
     action: RESERVATION_AUDIT_ACTION.ADMIN_REFUND_BUYER,
     decision: "buyer_win",
-    note,
+    note: resolutionNote,
   });
+
+  await notifyAdminDisputeResolution(
+    reservation,
+    resolutionNote,
+    "Admin quyết định hoàn cọc cho người mua"
+  );
 
   await emitOrderUpdated(reservation, { action: "admin_refund_buyer" });
   return getReservationDetail(reservation._id);
@@ -778,9 +797,14 @@ async function releaseToSeller(adminUser, reservationId, { note } = {}) {
     throw createServiceError("Không tìm thấy đơn giữ hàng.", 404);
   }
 
-  if (Number(reservation.status) !== RESERVATION_STATUS.DISPUTED) {
-    throw createServiceError("Chỉ có thể giải phóng cọc cho đơn đang tranh chấp.", 400);
+  if (!canAdminProcessDispute(reservation)) {
+    throw createServiceError(
+      "Chỉ xử lý tranh chấp khi cả buyer và seller đã gửi báo cáo. Nếu mới một bên báo cáo, hệ thống tự xử lý sau 24 giờ.",
+      400
+    );
   }
+
+  const resolutionNote = requireAdminResolutionNote(note);
 
   const shop = reservation.shopId ? await ShopProfile.findById(reservation.shopId) : null;
   if (!shop) {
@@ -795,20 +819,26 @@ async function releaseToSeller(adminUser, reservationId, { note } = {}) {
   reservation.status = RESERVATION_STATUS.DISPUTE_RESOLVED;
   reservation.cancelledAt = now;
   reservation.cancelReason =
-    pickString(note) || "Admin xử lý tranh chấp: đền cọc cho người bán.";
+    resolutionNote || "Admin xử lý tranh chấp: đền cọc cho người bán.";
   reservation.UpdatedAt = now;
-  if (pickString(note)) {
-    reservation.note = [reservation.note, pickString(note)].filter(Boolean).join(" | ");
+  if (resolutionNote) {
+    reservation.note = [reservation.note, resolutionNote].filter(Boolean).join(" | ");
   }
   await reservation.save();
 
-  await closePendingDisputeReports(adminUser, reservation._id, "approve_seller", note);
+  await closePendingDisputeReports(adminUser, reservation._id, "approve_seller", resolutionNote);
 
   await writeAuditLog(adminUser, reservation._id, {
     action: RESERVATION_AUDIT_ACTION.ADMIN_RELEASE_SELLER,
     decision: "seller_win",
-    note,
+    note: resolutionNote,
   });
+
+  await notifyAdminDisputeResolution(
+    reservation,
+    resolutionNote,
+    "Admin quyết định chuyển cọc cho người bán"
+  );
 
   await emitOrderUpdated(reservation, { action: "admin_release_seller" });
   return getReservationDetail(reservation._id);
@@ -844,6 +874,14 @@ async function cancelReservation(adminUser, reservationId, reason = "") {
   reservation.cancelReason = pickString(reason) || "Admin hủy đơn.";
   reservation.UpdatedAt = new Date();
   await reservation.save();
+
+  const cancelNote = reservation.cancelReason;
+  await notifyReservationBoth(reservation, {
+    title: "Admin đã hủy đơn giữ hàng",
+    content: `Đơn giữ hàng đã bị admin hủy. Tiền cọc (nếu có) đã được hoàn về ví người mua.\n\nLý do: ${cancelNote}`,
+    buyerContent: `Đơn giữ hàng đã bị admin hủy. Tiền cọc (nếu có) đã được hoàn về ví của bạn.\n\nLý do: ${cancelNote}`,
+    sellerContent: `Đơn giữ hàng đã bị admin hủy.\n\nLý do: ${cancelNote}`,
+  });
 
   if (adminUser?._id) {
     await writeAuditLog(adminUser, reservation._id, {

@@ -5,19 +5,28 @@ exports.listNearbyShops = async (req, res) => {
   const latitude = req.query.lat ?? req.query.latitude;
   const longitude = req.query.lng ?? req.query.longitude;
   const radiusMeters = req.query.radius ?? req.query.radiusMeters ?? 2000;
-  const limit = req.query.limit ?? 50;
+  const page = req.query.page ?? 1;
+  const limit = req.query.limit ?? 20;
 
-  const shops = await shopDiscoveryService.listNearbyShops({
+  const result = await shopDiscoveryService.listNearbyShops({
     latitude,
     longitude,
     radiusMeters,
+    page,
     limit,
+    seed: req.query.seed,
   });
 
   return success(res, {
     data: {
-      shops,
-      count: shops.length,
+      shops: result.shops || result.items || [],
+      items: result.items || result.shops || [],
+      count: (result.shops || result.items || []).length,
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      totalPages: result.totalPages,
+      hasMore: result.hasMore,
     },
   });
 };
@@ -26,7 +35,8 @@ exports.searchShops = async (req, res) => {
   const latitude = req.query.lat ?? req.query.latitude;
   const longitude = req.query.lng ?? req.query.longitude;
   const radiusMeters = req.query.radius ?? req.query.radiusMeters ?? 2000;
-  const limit = req.query.limit ?? 50;
+  const page = req.query.page ?? 1;
+  const limit = req.query.limit ?? 20;
   const q = req.query.q ?? req.query.shop ?? req.query.shopName ?? "";
   const shopCategoryId = req.query.shopCategoryId ?? req.query.shop_category_id ?? "";
   const productCategoryId =
@@ -38,10 +48,11 @@ exports.searchShops = async (req, res) => {
     String(identityOnlyRaw || "").trim().toLowerCase()
   );
 
-  const shops = await shopDiscoveryService.searchShops({
+  const result = await shopDiscoveryService.searchShops({
     latitude,
     longitude,
     radiusMeters,
+    page,
     limit,
     q,
     shopCategoryId,
@@ -52,8 +63,14 @@ exports.searchShops = async (req, res) => {
 
   return success(res, {
     data: {
-      shops,
-      count: shops.length,
+      shops: result.shops || result.items || [],
+      items: result.items || result.shops || [],
+      count: (result.shops || result.items || []).length,
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      totalPages: result.totalPages,
+      hasMore: result.hasMore,
       radius_meters: shopDiscoveryService.isUnlimitedRadius(radiusMeters)
         ? null
         : Math.min(
@@ -87,21 +104,19 @@ exports.getShop = async (req, res) => {
 };
 
 exports.listShopProducts = async (req, res) => {
-  const products = await shopDiscoveryService.listPublicProductsByShopId(req.params.id);
-
-  return success(res, {
-    data: {
-      products,
-    },
+  const data = await shopDiscoveryService.listPublicProductsByShopId(req.params.id, {
+    page: req.query.page,
+    limit: req.query.limit,
   });
+
+  return success(res, { data });
 };
 
 exports.listShopReviews = async (req, res) => {
-  const reviews = await shopDiscoveryService.listPublicReviewsByShopId(req.params.id);
-
-  return success(res, {
-    data: {
-      reviews,
-    },
+  const data = await shopDiscoveryService.listPublicReviewsByShopId(req.params.id, {
+    page: req.query.page,
+    limit: req.query.limit,
   });
+
+  return success(res, { data });
 };

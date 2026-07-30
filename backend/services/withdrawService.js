@@ -15,6 +15,7 @@ const {
   NOTIFICATION_INDEX,
 } = require("../constants");
 const { buildSearchRegex } = require("../utils/searchText");
+const { buildPaginationMeta, parsePagination } = require("../utils/pagination");
 const {
   findUsersBySearchRegex,
   buildObjectIdSearchConditions,
@@ -162,17 +163,35 @@ async function createWithdrawRequest(user, payload = {}) {
       withdrawId: String(withdraw._id),
       status: WITHDRAW_STATUS.PENDING,
     });
+
+    await createNotification(user._id, {
+      title: "Đã gửi yêu cầu rút tiền",
+      content: `Yêu cầu rút ${amount.toLocaleString("vi-VN")}đ về ${bank.name} · ${accountNumber} đang chờ admin duyệt.`,
+      audience: NOTIFICATION_AUDIENCE.SELLER,
+      index: NOTIFICATION_INDEX.SYSTEM,
+    }).catch((error) => {
+      console.warn("[withdraw] create notification failed:", error?.message || error);
+    });
+
     return response;
   } finally {
     session.endSession();
   }
 }
 
-async function listMyWithdraws(userId, { limit = 30 } = {}) {
-  const rows = await WithdrawRequest.find({ userId })
-    .sort({ CreatedAt: -1 })
-    .limit(Math.min(100, Number(limit) || 30));
-  return rows.map((row) => toPublicWithdraw(row));
+async function listMyWithdraws(userId, { page, limit } = {}) {
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const filter = { userId };
+  const [rows, total] = await Promise.all([
+    WithdrawRequest.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(safeLimit),
+    WithdrawRequest.countDocuments(filter),
+  ]);
+  const items = rows.map((row) => toPublicWithdraw(row));
+  return {
+    withdraws: items,
+    items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function listAdminWithdraws({
@@ -248,7 +267,7 @@ async function listAdminWithdraws({
 
   const [rows, total] = await Promise.all([
     WithdrawRequest.find(filter)
-      .sort({ CreatedAt: -1 })
+      .sort({ CreatedAt: -1, _id: -1 })
       .skip(skip)
       .limit(limitNum)
       .lean(),

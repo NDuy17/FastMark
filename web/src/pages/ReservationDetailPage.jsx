@@ -13,6 +13,7 @@ import { goBackOr } from '../utils/navigation';
 import { formatDate, formatDateActivity, formatDateTimeDetail, formatPrice } from '../utils/format';
 import { formatReservationOrderCode } from '../utils/reservationOrderCode';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
+import { resolveAdminListStatusMeta } from '../utils/reservationOrderTimeline';
 import { reverseGeocode } from '../utils/reverseGeocode';
 
 const AUDIT_ACTION_LABELS = {
@@ -22,18 +23,8 @@ const AUDIT_ACTION_LABELS = {
 
 const DISPUTED_STATUS = 4;
 
-function resolveListStatusMeta(status) {
-  const value = Number(status);
-  if (value === 3 || value === 5) {
-    return { label: 'Hoàn thành', className: 'badge badge-success' };
-  }
-  if (value === 4) {
-    return { label: 'Tranh chấp', className: 'badge badge-warning' };
-  }
-  if (value === 0 || value === 2) {
-    return { label: 'Giữ hàng', className: 'badge badge-warning' };
-  }
-  return { label: 'Đã hủy', className: 'badge badge-danger' };
+function resolveListStatusMeta(reservation) {
+  return resolveAdminListStatusMeta(reservation);
 }
 
 function DetailSkeleton() {
@@ -208,6 +199,49 @@ function OrderProductLine({ product, variant, quantity, unitPrice, originalUnitP
   );
 }
 
+function DisputeResolutionModal({ mode, note, loading, onChangeNote, onClose, onConfirm }) {
+  const isRefund = mode === 'refund';
+  const title = isRefund ? 'Hoàn cọc cho người mua' : 'Giải phóng cọc cho người bán';
+  const description = isRefund
+    ? 'Tiền cọc sẽ hoàn về ví người mua. Nội dung bên dưới sẽ được gửi thông báo cho cả buyer và seller.'
+    : 'Tiền cọc sẽ chuyển vào ví người bán. Nội dung bên dưới sẽ được gửi thông báo cho cả buyer và seller.';
+  const trimmed = String(note || '').trim();
+  const canSubmit = trimmed.length >= 5 && !loading;
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+        <label className="report-reply-field">
+          <strong>Nội dung xử lý (bắt buộc)</strong>
+          <textarea
+            rows={5}
+            value={note}
+            onChange={(event) => onChangeNote(event.target.value)}
+            placeholder="Nhập nội dung gửi thông báo cho cả hai bên..."
+          />
+        </label>
+        <div className="report-action-row">
+          <button type="button" className="ghost-btn" disabled={loading} onClick={onClose}>
+            Hủy
+          </button>
+          <button
+            type="button"
+            className={isRefund ? 'danger-btn' : 'approve-btn'}
+            disabled={!canSubmit}
+            onClick={onConfirm}
+          >
+            {loading ? 'Đang xử lý...' : 'Xác nhận xử lý'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ReservationDetailPage() {
   const { reservationId } = useParams();
   const navigate = useNavigate();
@@ -218,6 +252,8 @@ export default function ReservationDetailPage() {
   const [actionLoading, setActionLoading] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [resolutionModal, setResolutionModal] = useState('');
+  const [resolutionNote, setResolutionNote] = useState('');
 
   const loadDetail = useCallback(async () => {
     setLoading(true);
@@ -260,51 +296,43 @@ export default function ReservationDetailPage() {
     return () => clearTimeout(timeoutId);
   }, [message]);
 
-  async function handleRefund() {
-    if (
-      !window.confirm(
-        'Xác nhận hoàn cọc cho người mua? Tiền cọc sẽ được hoàn về ví buyer.'
-      )
-    ) {
-      return;
-    }
-    const note = window.prompt('Ghi chú xử lý (tuỳ chọn):', 'Admin hoàn cọc cho người mua.');
-    if (note === null) return;
-
-    setActionLoading('refund');
+  function openResolutionModal(mode) {
+    setResolutionModal(mode);
+    setResolutionNote('');
     setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await refundReservation(token, reservationId, note);
-      setReservation(payload.data?.reservation || null);
-      setMessage(payload.message || 'Đã hoàn cọc cho người mua.');
-    } catch (actionError) {
-      setError(actionError.message || 'Không hoàn cọc được.');
-    } finally {
-      setActionLoading('');
-    }
   }
 
-  async function handleRelease() {
-    if (
-      !window.confirm(
-        'Xác nhận giải phóng cọc cho người bán? Tiền cọc sẽ được chuyển vào ví seller.'
-      )
-    ) {
+  function closeResolutionModal() {
+    if (actionLoading) return;
+    setResolutionModal('');
+    setResolutionNote('');
+  }
+
+  async function handleConfirmResolution() {
+    const note = String(resolutionNote || '').trim();
+    if (note.length < 5) {
+      setError('Vui lòng nhập nội dung xử lý (ít nhất 5 ký tự).');
       return;
     }
-    const note = window.prompt('Ghi chú xử lý (tuỳ chọn):', 'Admin giải phóng cọc cho người bán.');
-    if (note === null) return;
 
-    setActionLoading('release');
+    const mode = resolutionModal;
+    setActionLoading(mode);
     setError('');
     try {
       const token = await getIdToken();
-      const payload = await releaseReservation(token, reservationId, note);
+      const payload =
+        mode === 'refund'
+          ? await refundReservation(token, reservationId, note)
+          : await releaseReservation(token, reservationId, note);
       setReservation(payload.data?.reservation || null);
-      setMessage(payload.message || 'Đã giải phóng cọc cho người bán.');
+      setMessage(
+        payload.message ||
+          (mode === 'refund' ? 'Đã hoàn cọc cho người mua.' : 'Đã giải phóng cọc cho người bán.')
+      );
+      setResolutionModal('');
+      setResolutionNote('');
     } catch (actionError) {
-      setError(actionError.message || 'Không giải phóng cọc được.');
+      setError(actionError.message || 'Không xử lý được tranh chấp.');
     } finally {
       setActionLoading('');
     }
@@ -318,9 +346,12 @@ export default function ReservationDetailPage() {
   const sellerStats = reservation?.sellerStats || reservation?.shopStats;
   const auditLogs = reservation?.auditLogs || [];
   const isDisputed = Number(reservation?.status) === DISPUTED_STATUS;
+  const bothReported = Boolean(reservation?.disputeByBuyer) && Boolean(reservation?.disputeBySeller);
+  const canAdminProcessDispute = isDisputed && bothReported;
+  const singleSideDispute = isDisputed && !bothReported;
 
   const orderCode = formatReservationOrderCode(reservation);
-  const statusMeta = resolveListStatusMeta(reservation?.status);
+  const statusMeta = resolveListStatusMeta(reservation);
   const quantity = Number(reservation?.quantity) || 0;
   const unitPrice = resolveUnitPrice(reservation);
   const originalUnitPrice = resolveOriginalUnitPrice(reservation);
@@ -362,13 +393,13 @@ export default function ReservationDetailPage() {
           >
             Làm mới
           </button>
-          {isDisputed ? (
+          {canAdminProcessDispute ? (
             <>
               <button
                 type="button"
                 className="danger-btn"
                 disabled={Boolean(actionLoading)}
-                onClick={handleRefund}
+                onClick={() => openResolutionModal('refund')}
               >
                 {actionLoading === 'refund' ? '...' : 'Hoàn cọc buyer'}
               </button>
@@ -376,7 +407,7 @@ export default function ReservationDetailPage() {
                 type="button"
                 className="approve-btn"
                 disabled={Boolean(actionLoading)}
-                onClick={handleRelease}
+                onClick={() => openResolutionModal('release')}
               >
                 {actionLoading === 'release' ? '...' : 'Giải phóng seller'}
               </button>
@@ -561,6 +592,21 @@ export default function ReservationDetailPage() {
             <section className="reservation-order-info-card reservation-order-dispute-card">
               <h2>Tranh chấp</h2>
 
+              {singleSideDispute ? (
+                <p className="cell-sub reservation-dispute-hint">
+                  Chỉ một bên đã báo cáo. Admin chỉ xử lý khi cả buyer và seller đều gửi báo cáo.
+                  Nếu sau 24 giờ kể từ giờ nhận hàng vẫn chỉ một bên báo cáo, hệ thống tự hoàn
+                  cọc cho bên đã báo cáo.
+                </p>
+              ) : null}
+
+              {canAdminProcessDispute ? (
+                <p className="cell-sub reservation-dispute-hint">
+                  Cả hai bên đã báo cáo. Bạn có thể xử lý tranh chấp — bắt buộc nhập nội dung gửi
+                  thông báo cho buyer và seller.
+                </p>
+              ) : null}
+
               {(reservation.disputeReports || []).map((report) => {
                 const isSellerReport = report.reporterSide === 'seller';
                 const title = isSellerReport
@@ -645,6 +691,17 @@ export default function ReservationDetailPage() {
             )}
           </section>
         </div>
+      ) : null}
+
+      {resolutionModal ? (
+        <DisputeResolutionModal
+          mode={resolutionModal}
+          note={resolutionNote}
+          loading={Boolean(actionLoading)}
+          onChangeNote={setResolutionNote}
+          onClose={closeResolutionModal}
+          onConfirm={handleConfirmResolution}
+        />
       ) : null}
     </div>
   );

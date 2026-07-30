@@ -20,22 +20,28 @@ export async function loadWalletViewModel() {
     throw new Error('Vui lòng đăng nhập để xem ví.');
   }
 
-  const [wallet, transactions] = await Promise.all([
+  const [wallet, txPage] = await Promise.all([
     getWalletOnBackend(idToken),
-    getWalletTransactionsOnBackend(idToken, { limit: 20 }),
+    getWalletTransactionsOnBackend(idToken, { page: 1, limit: 20 }),
   ]);
 
-  return { wallet, transactions };
+  return { wallet, transactions: txPage.transactions || txPage.items || [] };
 }
 
-export async function loadWalletTransactionsViewModel({ limit = 50 } = {}) {
+export async function loadWalletTransactionsViewModel({ page = 1, limit = 20 } = {}) {
   const idToken = await getCurrentUserIdToken();
   if (!idToken) {
     throw new Error('Vui lòng đăng nhập để xem giao dịch.');
   }
 
-  const transactions = await getWalletTransactionsOnBackend(idToken, { limit });
-  return { transactions };
+  const result = await getWalletTransactionsOnBackend(idToken, { page, limit });
+  return {
+    transactions: result.transactions || result.items || [],
+    page: result.page,
+    limit: result.limit,
+    total: result.total,
+    hasMore: result.hasMore,
+  };
 }
 
 export async function loadWalletTransactionDetailViewModel(transactionId) {

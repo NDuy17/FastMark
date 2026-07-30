@@ -20,6 +20,7 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import ProductCard from '../shared/components/ProductCard';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
@@ -225,12 +226,6 @@ export default function FavoriteProductsScreen({
               }}
             />
           }
-          onEndReached={() => {
-            if (!isLoadingMore && page < (pagination.totalPages || 1)) {
-              loadFavorites({ nextPage: page + 1 });
-            }
-          }}
-          onEndReachedThreshold={0.35}
           ListEmptyComponent={
             <View style={styles.centerState}>
               <Text style={styles.emptyEmoji}>🤍</Text>
@@ -241,8 +236,17 @@ export default function FavoriteProductsScreen({
             </View>
           }
           ListFooterComponent={
-            isLoadingMore ? (
-              <ActivityIndicator style={{ marginVertical: 16 }} color="#277068" />
+            favorites.length > 0 ? (
+              <LoadMoreButton
+                currentCount={favorites.length}
+                totalCount={pagination.total}
+                loading={isLoadingMore}
+                onPress={() => {
+                  if (!isLoadingMore && page < (pagination.totalPages || 1)) {
+                    loadFavorites({ nextPage: page + 1 });
+                  }
+                }}
+              />
             ) : null
           }
           renderItem={({ item }) => {

@@ -13,9 +13,13 @@ async function parseApiResponse(response) {
   return payload;
 }
 
-export async function listActiveBannersOnBackend({ limit = 8 } = {}) {
+export async function listActiveBannersOnBackend({ limit = 8, seed = '' } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (seed) {
+    params.set('seed', String(seed));
+  }
   const response = await apiRequest(
-    `${API_ENDPOINTS.bannersActive}?limit=${limit}`,
+    `${API_ENDPOINTS.bannersActive}?${params.toString()}`,
     { method: 'GET' },
     AUTH_TIMEOUT_MS
   );

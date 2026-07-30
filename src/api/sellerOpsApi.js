@@ -79,9 +79,14 @@ export async function uploadShopAvatarOnBackend({ idToken, imageBase64, mimeType
   return parsed.data?.shop || null;
 }
 
-export async function getSellerOrdersOnBackend({ idToken, tab }) {
+export async function getSellerOrdersOnBackend({ idToken, tab, page = 1, limit = 20 }) {
+  const params = new URLSearchParams({
+    tab: tab || 'pending',
+    page: String(page),
+    limit: String(limit),
+  });
   const response = await apiRequest(
-    `${API_ENDPOINTS.sellerOrders}?tab=${encodeURIComponent(tab)}`,
+    `${API_ENDPOINTS.sellerOrders}?${params.toString()}`,
     { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
     AUTH_TIMEOUT_MS
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -16,6 +16,8 @@ import {
   reportBuyerNoShowOnBackend,
 } from '../../api/sellerOpsApi';
 import { showErrorAlert } from '../../core/utils/appAlert';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import {
   RESERVATION_TAB,
   RESERVATION_STATUS,
@@ -130,31 +132,76 @@ export default function SellerOrdersScreen({
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const loadingGuardRef = useRef(false);
   const [disputeTarget, setDisputeTarget] = useState(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  const loadOrders = useCallback(async () => {
-    setIsLoading(true);
+  const loadOrders = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (loadingGuardRef.current) {
+      return;
+    }
+    loadingGuardRef.current = true;
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     try {
       const idToken = await getCurrentUserIdToken();
-      const data = await getSellerOrdersOnBackend({ idToken, tab: activeTab });
-      setItems(data.reservations || []);
+      const data = await getSellerOrdersOnBackend({
+        idToken,
+        tab: activeTab,
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = data?.reservations || data?.items || [];
+      setItems((current) => (nextPage === 1 ? rows : appendUniqueById(current, rows)));
+      setPage(Number(data?.page) || nextPage);
+      setHasMore(
+        typeof data?.hasMore === 'boolean'
+          ? data.hasMore
+          : rows.length >= DEFAULT_PAGE_SIZE
+      );
+      setTotalCount(
+        Number.isFinite(Number(data?.total))
+          ? Math.max(0, Number(data.total))
+          : (nextPage - 1) * DEFAULT_PAGE_SIZE +
+            rows.length +
+            (data?.hasMore ? DEFAULT_PAGE_SIZE : 0)
+      );
     } catch (loadError) {
       showErrorAlert(loadError.message || 'Không tải được đơn hàng.');
-      setItems([]);
+      if (nextPage === 1) {
+        setItems([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingGuardRef.current = false;
     }
   }, [activeTab]);
 
   useEffect(() => {
     setSearch('');
-    loadOrders();
+    loadOrders({ nextPage: 1 });
   }, [loadOrders, onRefreshKey]);
 
   const handleOrderUpdated = useCallback(() => {
-    loadOrders();
+    loadOrders({ nextPage: 1 });
   }, [loadOrders]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!hasMore || isLoading || isLoadingMore || loadingGuardRef.current) {
+      return;
+    }
+    loadOrders({ nextPage: page + 1 });
+  }, [hasMore, isLoading, isLoadingMore, loadOrders, page]);
 
   useOrderSocket({
     enabled: true,
@@ -223,7 +270,7 @@ export default function SellerOrdersScreen({
               'Thành công',
               'Đã xác nhận giữ hàng. Đưa QR gian hàng cho khách quét khi nhận.'
             );
-            loadOrders();
+            loadOrders({ nextPage: 1 });
           } catch (actionError) {
             Alert.alert('Lỗi', actionError.message || 'Không xác nhận được đơn.');
           }
@@ -246,7 +293,7 @@ export default function SellerOrdersScreen({
               reservationId: reservation.id,
               reason: 'Shop hủy',
             });
-            loadOrders();
+            loadOrders({ nextPage: 1 });
           } catch (actionError) {
             Alert.alert('Lỗi', actionError.message || 'Không từ chối được đơn.');
           }
@@ -274,7 +321,7 @@ export default function SellerOrdersScreen({
       });
       setDisputeTarget(null);
       Alert.alert('Đã gửi', 'Đã báo cáo người mua không đến. Cọc đang giữ chờ admin.');
-      loadOrders();
+      loadOrders({ nextPage: 1 });
     } catch (actionError) {
       Alert.alert('Lỗi', actionError.message || 'Không gửi được báo cáo.');
       throw actionError;
@@ -419,6 +466,22 @@ export default function SellerOrdersScreen({
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           renderItem={renderReservationItem}
+          ListFooterComponent={
+            filteredItems.length > 0 ? (
+              <LoadMoreButton
+                currentCount={filteredItems.length}
+                totalCount={
+                  search.trim()
+                    ? filteredItems.length
+                    : hasMore
+                      ? Math.max(totalCount, items.length + DEFAULT_PAGE_SIZE)
+                      : items.length
+                }
+                loading={isLoadingMore}
+                onPress={handleLoadMore}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <OrderTabEmptyState
               message={

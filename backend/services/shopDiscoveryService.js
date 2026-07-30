@@ -21,6 +21,11 @@ const {
   resolveShopUsername,
   resolveShopAvatar,
 } = require("../utils/shopIdentity");
+const {
+  buildPaginationMeta,
+  parsePagination,
+  sliceSeededPage,
+} = require("../utils/pagination");
 
 const EARTH_RADIUS_METERS = 6371000;
 const MAX_SEARCH_RADIUS_METERS = 30000;
@@ -107,13 +112,8 @@ function calculateDistanceMeters(lat1, lng1, lat2, lng2) {
 }
 
 function activeProductFilter(extra = {}) {
-  return {
-    ...extra,
-    $or: [
-      { Status: PRODUCT_STATUS.ACTIVE },
-      { Status: { $exists: false }, IsDeleted: { $ne: true } },
-    ],
-  };
+  const { publicProductFilter } = require("./productService");
+  return publicProductFilter(extra);
 }
 
 function normalizeSearchText(value) {
@@ -352,11 +352,21 @@ function toPublicStore(
   };
 }
 
-async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit = 50 }) {
+async function listNearbyShops({
+  latitude,
+  longitude,
+  radiusMeters = 2000,
+  page = 1,
+  limit = 20,
+  seed = "",
+}) {
   const lat = Number(latitude);
   const lng = Number(longitude);
   const radius = resolveSearchRadius(radiusMeters, 2000);
-  const maxResults = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const { page: safePage, limit: safeLimit } = parsePagination(
+    { page, limit },
+    { defaultLimit: 20, maxLimit: 100 }
+  );
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     const error = new Error("Thiếu tọa độ hợp lệ.");
@@ -369,7 +379,11 @@ async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit
     longitude: { $ne: null },
     status: { $ne: 0 },
     ...activeSubscriptionFilter(),
-  }).lean();
+  })
+    .select(
+      "userId shopName shopUsername avatar latitude longitude addressHeThong address description categoryId isOpen openTime closeTime totalProducts followersCount averageRating totalReviews soldCount status"
+    )
+    .lean();
 
   const sellerIds = shops
     .map((shop) => shop.userId)
@@ -378,7 +392,9 @@ async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit
   const sellers = await User.find({
     _id: { $in: sellerIds },
     Role: USER_ROLE.SELLER,
-  }).lean();
+  })
+    .select("FullName UserName Role")
+    .lean();
   const sellerMap = new Map(sellers.map((seller) => [String(seller._id), seller]));
   const categoryNameMap = await getShopCategoryNameMap(shops.map((shop) => shop.categoryId));
 
@@ -405,38 +421,59 @@ async function listNearbyShops({ latitude, longitude, radiusMeters = 2000, limit
       continue;
     }
 
-    const productCount = await Product.countDocuments(
-      activeProductFilter({ ShopId: shop._id })
-    );
-
     nearby.push({
       shop,
       seller,
-      productCount,
       distanceMeters,
     });
   }
 
-  nearby.sort((left, right) => left.distanceMeters - right.distanceMeters);
-
-  return nearby.slice(0, maxResults).map(({ shop, seller, productCount, distanceMeters }) => {
-    const category = resolveShopCategory(categoryNameMap, shop.categoryId);
-    return toPublicStore(
-      shop,
-      seller,
-      productCount,
-      distanceMeters,
-      category.name,
-      0
-    );
+  nearby.sort((left, right) => {
+    if (left.distanceMeters !== right.distanceMeters) {
+      return left.distanceMeters - right.distanceMeters;
+    }
+    return String(left.shop._id).localeCompare(String(right.shop._id));
   });
+  const seededPage = sliceSeededPage(nearby, {
+    page: safePage,
+    limit: safeLimit,
+    seed,
+    namespace: "home-nearby-shops",
+  });
+  const total = seededPage.total;
+  const pageRows = seededPage.items;
+
+  const pageShopIds = pageRows.map((row) => row.shop._id);
+  const productCounts = pageShopIds.length
+    ? await Product.aggregate([
+        { $match: activeProductFilter({ ShopId: { $in: pageShopIds } }) },
+        { $group: { _id: "$ShopId", count: { $sum: 1 } } },
+      ])
+    : [];
+  const productCountMap = new Map(
+    productCounts.map((row) => [String(row._id), Number(row.count) || 0])
+  );
+
+  const items = pageRows.map(({ shop, seller, distanceMeters }) => {
+    const category = resolveShopCategory(categoryNameMap, shop.categoryId);
+    const productCount =
+      productCountMap.get(String(shop._id)) ?? (Number(shop.totalProducts) || 0);
+    return toPublicStore(shop, seller, productCount, distanceMeters, category.name, 0);
+  });
+
+  return {
+    items,
+    shops: items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function searchShops({
   latitude,
   longitude,
   radiusMeters = 2000,
-  limit = 50,
+  page = 1,
+  limit = 20,
   q = "",
   shopCategoryId = "",
   productCategoryId = "",
@@ -446,7 +483,10 @@ async function searchShops({
   const lat = Number(latitude);
   const lng = Number(longitude);
   const radius = resolveSearchRadius(radiusMeters, 2000);
-  const maxResults = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const { page: safePage, limit: safeLimit, skip } = parsePagination(
+    { page, limit },
+    { defaultLimit: 20, maxLimit: 200 }
+  );
   const shopKeyword = normalizeSearchText(String(q || "").replace(/^@+/, ""));
   const productKeyword = identityOnly ? "" : normalizeSearchText(productQuery);
   const normalizedShopCategoryId = String(shopCategoryId || "").trim();
@@ -569,19 +609,25 @@ async function searchShops({
     return (left.shop.shopName || "").localeCompare(right.shop.shopName || "", "vi");
   });
 
-  const sliced = results.slice(0, maxResults);
-  const productCounts = await Promise.all(
-    sliced.map(({ shop }) =>
-      Product.countDocuments(activeProductFilter({ ShopId: shop._id }))
-    )
+  const total = results.length;
+  const sliced = results.slice(skip, skip + safeLimit);
+  const pageShopIds = sliced.map(({ shop }) => shop._id);
+  const productCountRows = pageShopIds.length
+    ? await Product.aggregate([
+        { $match: activeProductFilter({ ShopId: { $in: pageShopIds } }) },
+        { $group: { _id: "$ShopId", count: { $sum: 1 } } },
+      ])
+    : [];
+  const productCountMap = new Map(
+    productCountRows.map((row) => [String(row._id), Number(row.count) || 0])
   );
 
-  return sliced.map(({ shop, seller, distanceMeters, matchedProducts }, index) => {
+  const items = sliced.map(({ shop, seller, distanceMeters, matchedProducts }) => {
     const category = resolveShopCategory(categoryNameMap, shop.categoryId);
     const store = toPublicStore(
       shop,
       seller,
-      productCounts[index],
+      productCountMap.get(String(shop._id)) || Number(shop.totalProducts) || 0,
       distanceMeters,
       category.name,
       0
@@ -592,6 +638,12 @@ async function searchShops({
       match_score: Math.round(distanceMeters),
     };
   });
+
+  return {
+    items,
+    shops: items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function getPublicShopById(shopId, { latitude, longitude } = {}) {
@@ -668,7 +720,7 @@ async function getPublicShopById(shopId, { latitude, longitude } = {}) {
   return store;
 }
 
-async function listPublicProductsByShopId(shopId) {
+async function listPublicProductsByShopId(shopId, { page, limit } = {}) {
   const shop = await ShopProfile.findById(shopId).lean();
   if (!shop || !isSubscriptionActive(shop)) {
     const error = new Error("Không tìm thấy gian hàng.");
@@ -678,11 +730,21 @@ async function listPublicProductsByShopId(shopId) {
 
   const { SHOP_STATUS } = require("../constants");
   if (Number(shop.status) === SHOP_STATUS.BLOCKED) {
-    return [];
+    const { page: safePage, limit: safeLimit } = parsePagination({ page, limit });
+    return {
+      products: [],
+      items: [],
+      ...buildPaginationMeta({ page: safePage, limit: safeLimit, total: 0 }),
+    };
   }
 
-  const products = await Product.find(activeProductFilter({ ShopId: shop._id }))
-    .sort({ pinProduct: -1, CreatedAt: -1 })
+  const filter = activeProductFilter({ ShopId: shop._id });
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const total = await Product.countDocuments(filter);
+  const products = await Product.find(filter)
+    .sort({ pinProduct: -1, CreatedAt: -1, _id: -1 })
+    .skip(skip)
+    .limit(safeLimit)
     .lean();
 
   const { sortProductsByPin } = require("./productService");
@@ -704,7 +766,7 @@ async function listPublicProductsByShopId(shopId) {
 
   const { attachPromotionDto } = require("./productPromotionService");
 
-  return ordered.map((product) => {
+  const items = ordered.map((product) => {
     const productVariants = variantsByProduct.get(String(product._id)) || [];
     const thumbnails = resolveProductGallery(
       product,
@@ -742,6 +804,12 @@ async function listPublicProductsByShopId(shopId) {
     };
     return attachPromotionDto(dto, product);
   });
+
+  return {
+    products: items,
+    items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 async function discoverProducts({
@@ -750,12 +818,17 @@ async function discoverProducts({
   radiusMeters = 5000,
   categoryId = "",
   search = "",
-  limit = 80,
+  page = 1,
+  limit = 20,
+  seed = "",
 }) {
   const lat = Number(latitude);
   const lng = Number(longitude);
   const radius = resolveSearchRadius(radiusMeters, 5000);
-  const maxResults = Math.min(Math.max(Number(limit) || 80, 1), 200);
+  const { page: safePage, limit: safeLimit } = parsePagination(
+    { page, limit },
+    { defaultLimit: 20, maxLimit: 100 }
+  );
   const keyword = normalizeSearchText(search);
   const normalizedCategoryId = String(categoryId || "").trim();
 
@@ -765,12 +838,22 @@ async function discoverProducts({
     throw error;
   }
 
+  const empty = {
+    items: [],
+    products: [],
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total: 0 }),
+  };
+
   const shops = await ShopProfile.find({
     latitude: { $ne: null },
     longitude: { $ne: null },
     status: { $ne: 0 },
     ...activeSubscriptionFilter(),
-  }).lean();
+  })
+    .select(
+      "userId shopName shopUsername latitude longitude addressHeThong address status"
+    )
+    .lean();
 
   const sellerIds = shops
     .map((shop) => shop.userId)
@@ -779,7 +862,9 @@ async function discoverProducts({
   const sellers = await User.find({
     _id: { $in: sellerIds },
     Role: USER_ROLE.SELLER,
-  }).lean();
+  })
+    .select("FullName UserName Role")
+    .lean();
   const sellerMap = new Map(sellers.map((seller) => [String(seller._id), seller]));
 
   const shopDistanceMap = new Map();
@@ -814,7 +899,7 @@ async function discoverProducts({
   }
 
   if (eligibleShopIds.length === 0) {
-    return [];
+    return empty;
   }
 
   const productFilter = activeProductFilter({ ShopId: { $in: eligibleShopIds } });
@@ -822,26 +907,84 @@ async function discoverProducts({
     productFilter.CategoryId = normalizedCategoryId;
   }
 
-  // Khi có keyword: lấy SP rồi lọc bỏ dấu + lowercase ở bộ nhớ (regex DB không match tiếng Việt bỏ dấu).
-  let productsQuery = Product.find(productFilter);
-  if (keyword || radius == null) {
-    productsQuery = productsQuery.lean();
-  } else {
-    productsQuery = productsQuery.sort({ CreatedAt: -1 }).limit(maxResults).lean();
-  }
-  let products = await productsQuery;
+  // Lấy danh sách nhẹ để sort/filter trước, chỉ enrich trang hiện tại.
+  let products = await Product.find(productFilter)
+    .select(
+      "ShopId ProductName CategoryId MinPrice MaxPrice SoldCount LikeCount DonVi Description Thumbnail IsPromotion DiscountPercent PromotionStartDate PromotionEndDate Status IsDeleted SellerRemovedAt CreatedAt"
+    )
+    .lean();
+
   if (keyword) {
     products = products.filter((product) => textMatchesKeyword(product.ProductName, keyword));
   }
 
   if (products.length === 0) {
-    return [];
+    return empty;
   }
 
+  // Cần tồn kho để loại hết hàng — chỉ lấy quantity theo product id.
   const productIds = products.map((product) => product._id);
+  const stockRows = await ProductVariant.aggregate([
+    { $match: { ProductId: { $in: productIds } } },
+    {
+      $group: {
+        _id: "$ProductId",
+        remainingQuantity: { $sum: { $ifNull: ["$Quantity", 0] } },
+        variantCount: { $sum: 1 },
+      },
+    },
+  ]);
+  const stockMap = new Map(
+    stockRows.map((row) => [
+      String(row._id),
+      {
+        remainingQuantity: Math.max(0, Number(row.remainingQuantity) || 0),
+        variantCount: Number(row.variantCount) || 0,
+      },
+    ])
+  );
+
+  const ranked = products
+    .map((product) => {
+      const stock = stockMap.get(String(product._id)) || {
+        remainingQuantity: 0,
+        variantCount: 0,
+      };
+      const isOutOfStock = stock.variantCount > 0 && stock.remainingQuantity <= 0;
+      return {
+        product,
+        distanceMeters: shopDistanceMap.get(String(product.ShopId))?.distanceMeters ?? null,
+        isOutOfStock,
+      };
+    })
+    .filter((row) => !row.isOutOfStock)
+    .sort((left, right) => {
+      const leftDistance = Number(left.distanceMeters) || Number.MAX_SAFE_INTEGER;
+      const rightDistance = Number(right.distanceMeters) || Number.MAX_SAFE_INTEGER;
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+      return String(right.product._id).localeCompare(String(left.product._id));
+    });
+
+  const seededPage = sliceSeededPage(ranked, {
+    page: safePage,
+    limit: safeLimit,
+    seed,
+    namespace: `home-discover-products:${normalizedCategoryId}:${radius ?? "all"}`,
+  });
+  const total = seededPage.total;
+  const pageRows = seededPage.items;
+  const pageProducts = pageRows.map((row) => row.product);
+  const pageProductIds = pageProducts.map((product) => product._id);
+
   const [variants, imagesByProduct] = await Promise.all([
-    ProductVariant.find({ ProductId: { $in: productIds } }).lean(),
-    loadProductImagesByProductIds(productIds),
+    pageProductIds.length
+      ? ProductVariant.find({ ProductId: { $in: pageProductIds } }).lean()
+      : Promise.resolve([]),
+    pageProductIds.length
+      ? loadProductImagesByProductIds(pageProductIds)
+      : Promise.resolve(new Map()),
   ]);
   const variantsByProduct = variants.reduce((map, variant) => {
     const key = String(variant.ProductId);
@@ -855,10 +998,10 @@ async function discoverProducts({
   const { getProductCategoryNameMap } = require("./productCategoryService");
   const { attachPromotionDto } = require("./productPromotionService");
   const categoryNameMap = await getProductCategoryNameMap(
-    products.map((product) => product.CategoryId)
+    pageProducts.map((product) => product.CategoryId)
   );
 
-  const enriched = products.map((product) => {
+  const items = pageProducts.map((product) => {
     const shopMeta = shopDistanceMap.get(String(product.ShopId));
     const shop = shopMeta?.shop;
     const seller = shop ? sellerMap.get(String(shop.userId)) : null;
@@ -907,19 +1050,14 @@ async function discoverProducts({
     );
   });
 
-  enriched.sort((left, right) => {
-    const leftDistance = Number(left.distanceMeters) || Number.MAX_SAFE_INTEGER;
-    const rightDistance = Number(right.distanceMeters) || Number.MAX_SAFE_INTEGER;
-    if (leftDistance !== rightDistance) {
-      return leftDistance - rightDistance;
-    }
-    return String(right.id).localeCompare(String(left.id));
-  });
-
-  return enriched.filter((product) => !product.isOutOfStock).slice(0, maxResults);
+  return {
+    items,
+    products: items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
-async function listPublicReviewsByShopId(shopId) {
+async function listPublicReviewsByShopId(shopId, { page, limit } = {}) {
   const shop = await ShopProfile.findById(shopId).lean();
   if (!shop) {
     const error = new Error("Không tìm thấy gian hàng.");
@@ -932,13 +1070,16 @@ async function listPublicReviewsByShopId(shopId) {
     toPublicReview,
   } = require("./buyerReviewService");
 
-  const rows = await Review.find({
+  const filter = {
     shopId,
     isDeleted: { $ne: true },
     isHidden: { $ne: true },
-  })
-    .sort({ CreatedAt: -1 })
-    .lean();
+  };
+  const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
+  const [rows, total] = await Promise.all([
+    Review.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(safeLimit).lean(),
+    Review.countDocuments(filter),
+  ]);
 
   const imagesByReview = await loadReviewImagesMap(rows.map((row) => row._id));
   const userIds = rows.map((row) => row.userId).filter(Boolean);
@@ -956,7 +1097,7 @@ async function listPublicReviewsByShopId(shopId) {
   const userById = new Map(users.map((user) => [String(user._id), user]));
   const productById = new Map(products.map((product) => [String(product._id), product]));
 
-  return Promise.all(
+  const items = await Promise.all(
     rows.map((row) =>
       toPublicReview(row, {
         user: userById.get(String(row.userId)),
@@ -966,6 +1107,12 @@ async function listPublicReviewsByShopId(shopId) {
       })
     )
   );
+
+  return {
+    reviews: items,
+    items,
+    ...buildPaginationMeta({ page: safePage, limit: safeLimit, total }),
+  };
 }
 
 module.exports = {

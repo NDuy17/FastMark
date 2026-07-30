@@ -17,8 +17,10 @@ import {
   hasOrderReviewSubmitted,
   submitShopReview,
 } from '../../core/utils/orderReview';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { ReviewedBadge, ReviewNowButton } from '../shared/components/ReviewOrderAction';
 import ShopReviewModal from '../shared/components/ShopReviewModal';
 import ProfileSubScreen from './ProfileSubScreen';
@@ -132,22 +134,34 @@ export default function PurchasedProductsScreen({
   const [localRefreshKey, setLocalRefreshKey] = useState(0);
   const [purchases, setPurchases] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const { reviewedOrderCodes: internalReviewedCodes, markReviewed } =
     useReviewedOrderCodes(localRefreshKey);
   const reviewedOrderCodes = externalReviewedCodes || internalReviewedCodes;
 
-  const loadPurchases = useCallback(async () => {
-    setIsLoading(true);
+  const loadPurchases = useCallback(async ({ nextPage = 1 } = {}) => {
+    if (nextPage === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
     try {
       const idToken = await getCurrentUserIdToken();
       if (!idToken) {
         setPurchases([]);
+        setHasMore(false);
+        setTotalCount(0);
         return;
       }
 
       const data = await getBuyerOrdersOnBackend({
         idToken,
         tab: RESERVATION_TAB.COMPLETED,
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
       });
       const rows = (data?.reservations || []).map((reservation) => ({
         id: String(reservation.id),
@@ -168,16 +182,36 @@ export default function PurchasedProductsScreen({
         status: reservation.status,
         type: 'purchase',
       }));
-      setPurchases(rows);
+      setPurchases((current) =>
+        nextPage === 1 ? rows : appendUniqueById(current, rows)
+      );
+      setPage(Number(data?.page) || nextPage);
+      setHasMore(
+        typeof data?.hasMore === 'boolean'
+          ? data.hasMore
+          : rows.length >= DEFAULT_PAGE_SIZE
+      );
+      setTotalCount(
+        Number.isFinite(Number(data?.total))
+          ? Math.max(0, Number(data.total))
+          : (nextPage - 1) * DEFAULT_PAGE_SIZE +
+            rows.length +
+            (data?.hasMore ? DEFAULT_PAGE_SIZE : 0)
+      );
     } catch {
-      setPurchases([]);
+      if (nextPage === 1) {
+        setPurchases([]);
+        setHasMore(false);
+        setTotalCount(0);
+      }
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    loadPurchases();
+    loadPurchases({ nextPage: 1 });
   }, [loadPurchases, localRefreshKey]);
 
   async function handleSubmitReview({ rating, comment, images, imageUrl }) {
@@ -216,13 +250,27 @@ export default function PurchasedProductsScreen({
       {isLoading ? (
         <ActivityIndicator size="large" color="#076F32" style={styles.loader} />
       ) : (
-        <PurchaseList
-          items={purchases}
-          onOpenOrderDetail={onOpenOrderDetail}
-          onOpenStore={onOpenStore}
-          onReviewStore={setReviewTarget}
-          reviewedOrderCodes={reviewedOrderCodes}
-        />
+        <>
+          <PurchaseList
+            items={purchases}
+            onOpenOrderDetail={onOpenOrderDetail}
+            onOpenStore={onOpenStore}
+            onReviewStore={setReviewTarget}
+            reviewedOrderCodes={reviewedOrderCodes}
+          />
+          {purchases.length > 0 ? (
+            <LoadMoreButton
+              currentCount={purchases.length}
+              totalCount={
+                hasMore
+                  ? Math.max(totalCount, purchases.length + DEFAULT_PAGE_SIZE)
+                  : purchases.length
+              }
+              loading={isLoadingMore}
+              onPress={() => loadPurchases({ nextPage: page + 1 })}
+            />
+          ) : null}
+        </>
       )}
       <ShopReviewModal
         visible={Boolean(reviewTarget)}

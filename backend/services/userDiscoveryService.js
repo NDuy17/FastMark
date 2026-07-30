@@ -67,7 +67,7 @@ async function searchUsers(currentUser, query = {}) {
   const [rows, total] = await Promise.all([
     User.find(filter)
       .select("FullName UserName Avatar FollowersCount FollowingCount Role")
-      .sort({ FollowersCount: -1, CreatedAt: -1 })
+      .sort({ FollowersCount: -1, CreatedAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
@@ -158,7 +158,7 @@ async function listPublicUserFollowing(userIdInput, query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const filter = { followerId: user._id };
   const [rows, total] = await Promise.all([
-    Follow.find(filter).sort({ CreatedAt: -1 }).skip(skip).limit(limit).lean(),
+    Follow.find(filter).sort({ CreatedAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
     Follow.countDocuments(filter),
   ]);
 

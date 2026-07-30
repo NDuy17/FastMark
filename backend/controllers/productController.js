@@ -21,11 +21,11 @@ exports.createProduct = async (req, res) => {
 };
 
 exports.listMyProducts = async (req, res) => {
-  const products = await productService.listMyProducts(req.currentUser);
-
-  return success(res, {
-    data: { products },
+  const data = await productService.listMyProducts(req.currentUser, {
+    page: req.query.page,
+    limit: req.query.limit,
   });
+  return success(res, { data });
 };
 
 exports.getMyProduct = async (req, res) => {
@@ -78,32 +78,53 @@ exports.listCategories = async (req, res) => {
 
 exports.discoverProducts = async (req, res) => {
   const shopDiscoveryService = require("../services/shopDiscoveryService");
-  const products = await shopDiscoveryService.discoverProducts({
+  const result = await shopDiscoveryService.discoverProducts({
     latitude: req.query.lat ?? req.query.latitude,
     longitude: req.query.lng ?? req.query.longitude,
     radiusMeters: req.query.radius ?? req.query.radiusMeters ?? 5000,
     categoryId:
       req.query.categoryId ?? req.query.productCategoryId ?? req.query.product_category_id ?? "",
     search: req.query.search ?? req.query.q ?? req.query.product ?? "",
-    limit: req.query.limit ?? 80,
+    page: req.query.page ?? 1,
+    limit: req.query.limit ?? 20,
+    seed: req.query.seed,
   });
 
   return success(res, {
     data: {
-      products,
-      count: products.length,
+      products: result.products || result.items || [],
+      items: result.items || result.products || [],
+      count: (result.products || result.items || []).length,
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      totalPages: result.totalPages,
+      hasMore: result.hasMore,
     },
   });
 };
 
 exports.listPromotions = async (req, res) => {
   const productPromotionService = require("../services/productPromotionService");
-  const products = await productPromotionService.listActivePromotions({
-    limit: req.query.limit ?? 40,
+  const result = await productPromotionService.listActivePromotions({
+    page: req.query.page ?? 1,
+    limit: req.query.limit ?? 20,
     latitude: req.query.lat ?? req.query.latitude,
     longitude: req.query.lng ?? req.query.longitude,
+    seed: req.query.seed,
   });
-  return success(res, { data: { products, count: products.length } });
+  return success(res, {
+    data: {
+      products: result.products || result.items || [],
+      items: result.items || result.products || [],
+      count: (result.products || result.items || []).length,
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      totalPages: result.totalPages,
+      hasMore: result.hasMore,
+    },
+  });
 };
 
 exports.listShopPromotions = async (req, res) => {

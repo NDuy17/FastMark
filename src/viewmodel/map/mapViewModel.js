@@ -6,12 +6,18 @@ export async function loadNearbyRegisteredShops({
   longitude,
   radiusMeters,
   shopCategoryId = '',
+  page = 1,
+  limit = 20,
+  seed = '',
 }) {
   return fetchNearbyRegisteredShops({
     latitude,
     longitude,
     radiusMeters,
     shopCategoryId,
+    page,
+    limit,
+    seed,
   });
 }
 

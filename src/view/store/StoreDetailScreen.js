@@ -34,7 +34,9 @@ import { getAvatarInitial } from '../../core/utils/avatarInitial';
 import { storeLogger as log } from '../../core/utils/logger';
 import CircularBackButton from '../shared/components/CircularBackButton';
 import AvatarBadge from '../shared/components/AvatarBadge';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import FollowConnectionsScreen from '../profile/FollowConnectionsScreen';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import ContactActions from './components/ContactActions';
 import ProductDetailScreen from './ProductDetailScreen';
 import StarRating from './components/StarRating';
@@ -126,6 +128,14 @@ export default function StoreDetailScreen({
   const [reviews, setReviews] = useState([]);
   const [activeTab, setActiveTab] = useState('products');
   const [loading, setLoading] = useState(true);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
+  const [productsPage, setProductsPage] = useState(1);
+  const [reviewsPage, setReviewsPage] = useState(1);
+  const [productsHasMore, setProductsHasMore] = useState(false);
+  const [reviewsHasMore, setReviewsHasMore] = useState(false);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [reviewsTotal, setReviewsTotal] = useState(0);
   const [reportVisible, setReportVisible] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [composeVisible, setComposeVisible] = useState(false);
@@ -428,14 +438,23 @@ export default function StoreDetailScreen({
   useEffect(() => {
     let isCurrent = true;
     setLoading(true);
+    setProductsPage(1);
+    setReviewsPage(1);
 
     log.info('StoreDetailScreen:load', { storeId });
 
-    Promise.all([loadStoreById(storeId), loadProductsByStoreId(storeId)])
-      .then(async ([storeData, productData]) => {
+    Promise.all([
+      loadStoreById(storeId),
+      loadProductsByStoreId(storeId, { page: 1, limit: DEFAULT_PAGE_SIZE }),
+    ])
+      .then(async ([storeData, productPage]) => {
         if (!isCurrent) return;
 
-        const reviewData = storeData ? await loadReviewsByStoreId(storeId) : [];
+        const productData = productPage?.items || (Array.isArray(productPage) ? productPage : []);
+        const reviewPage = storeData
+          ? await loadReviewsByStoreId(storeId, { page: 1, limit: DEFAULT_PAGE_SIZE })
+          : { items: [], hasMore: false, total: 0 };
+        const reviewData = reviewPage?.items || (Array.isArray(reviewPage) ? reviewPage : []);
 
         log.ok('StoreDetailScreen:loaded', {
           storeId,
@@ -446,6 +465,10 @@ export default function StoreDetailScreen({
         setStore(storeData);
         setProducts(productData);
         setReviews(reviewData);
+        setProductsHasMore(Boolean(productPage?.hasMore));
+        setReviewsHasMore(Boolean(reviewPage?.hasMore));
+        setProductsTotal(Math.max(0, Number(productPage?.total) || 0));
+        setReviewsTotal(Math.max(0, Number(reviewPage?.total) || 0));
         setLoading(false);
       })
       .catch((error) => {
@@ -457,6 +480,52 @@ export default function StoreDetailScreen({
       isCurrent = false;
     };
   }, [storeId]);
+
+  const loadMoreProducts = useCallback(async () => {
+    if (loadingMoreProducts || !productsHasMore) {
+      return;
+    }
+    setLoadingMoreProducts(true);
+    try {
+      const nextPage = productsPage + 1;
+      const pageResult = await loadProductsByStoreId(storeId, {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = pageResult?.items || (Array.isArray(pageResult) ? pageResult : []);
+      setProducts((current) => appendUniqueById(current, rows));
+      setProductsPage(nextPage);
+      setProductsHasMore(Boolean(pageResult?.hasMore));
+      setProductsTotal(Math.max(0, Number(pageResult?.total) || productsTotal));
+    } catch (error) {
+      log.fail('StoreDetailScreen:load-more-products-failed', error);
+    } finally {
+      setLoadingMoreProducts(false);
+    }
+  }, [loadingMoreProducts, productsHasMore, productsPage, productsTotal, storeId]);
+
+  const loadMoreReviews = useCallback(async () => {
+    if (loadingMoreReviews || !reviewsHasMore) {
+      return;
+    }
+    setLoadingMoreReviews(true);
+    try {
+      const nextPage = reviewsPage + 1;
+      const pageResult = await loadReviewsByStoreId(storeId, {
+        page: nextPage,
+        limit: DEFAULT_PAGE_SIZE,
+      });
+      const rows = pageResult?.items || (Array.isArray(pageResult) ? pageResult : []);
+      setReviews((current) => appendUniqueById(current, rows));
+      setReviewsPage(nextPage);
+      setReviewsHasMore(Boolean(pageResult?.hasMore));
+      setReviewsTotal(Math.max(0, Number(pageResult?.total) || reviewsTotal));
+    } catch (error) {
+      log.fail('StoreDetailScreen:load-more-reviews-failed', error);
+    } finally {
+      setLoadingMoreReviews(false);
+    }
+  }, [loadingMoreReviews, reviewsHasMore, reviewsPage, reviewsTotal, storeId]);
 
   if (loading) {
     return (
@@ -790,7 +859,8 @@ export default function StoreDetailScreen({
             {reviews.length === 0 ? (
               <Text style={styles.emptyText}>Chưa có đánh giá nào</Text>
             ) : (
-              reviews.map((review) => (
+              <>
+              {reviews.map((review) => (
                 <View key={review.id} style={styles.reviewCard}>
                   <View style={styles.reviewHeader}>
                     <AvatarBadge
@@ -832,7 +902,18 @@ export default function StoreDetailScreen({
                     />
                   ) : null}
                 </View>
-              ))
+              ))}
+              <LoadMoreButton
+                currentCount={reviews.length}
+                totalCount={
+                  reviewsHasMore
+                    ? Math.max(reviewsTotal, reviews.length + DEFAULT_PAGE_SIZE)
+                    : reviews.length
+                }
+                loading={loadingMoreReviews}
+                onPress={loadMoreReviews}
+              />
+              </>
             )}
           </View>
         ) : (
@@ -840,7 +921,8 @@ export default function StoreDetailScreen({
             {products.length === 0 ? (
               <Text style={styles.emptyText}>Chưa có sản phẩm nào</Text>
             ) : (
-              products.map((product) => {
+              <>
+              {products.map((product) => {
                 const overlayLabel = getProductImageOverlayLabel(product);
                 const isPromotion =
                   Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
@@ -925,7 +1007,18 @@ export default function StoreDetailScreen({
                     </View>
                   </Pressable>
                 );
-              })
+              })}
+              <LoadMoreButton
+                currentCount={products.length}
+                totalCount={
+                  productsHasMore
+                    ? Math.max(productsTotal, products.length + DEFAULT_PAGE_SIZE)
+                    : products.length
+                }
+                loading={loadingMoreProducts}
+                onPress={loadMoreProducts}
+              />
+              </>
             )}
           </View>
         )}

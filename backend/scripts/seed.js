@@ -37,7 +37,7 @@ async function seedProductCategories() {
         },
         $setOnInsert: { CreatedAt: new Date() },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
   }
   console.log(`Seeded ${PRODUCT_CATEGORIES.length} product categories.`);
@@ -56,7 +56,7 @@ async function seedShopCategories() {
         $unset: { icon: "" },
         $setOnInsert: { CreatedAt: new Date() },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
   }
   console.log(`Seeded ${SHOP_CATEGORIES.length} shop categories.`);

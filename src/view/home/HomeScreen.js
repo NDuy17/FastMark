@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  AppState,
   Dimensions,
   FlatList,
   Image,
@@ -28,8 +27,10 @@ import { formatDistance, hasValidLocation, normalizeExpoLocation, calculateDista
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { confirmLogout } from '../../core/utils/appAlert';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
+import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { loadNearbyRegisteredShops } from '../../viewmodel/map/mapViewModel';
 import { normalizeProduct } from '../../model/productModel';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
@@ -45,6 +46,11 @@ import BuyerQuickMenu from '../shared/components/BuyerQuickMenu';
 const NEARBY_RADIUS_METERS = 5000;
 const ALL_PRODUCTS_RADIUS_METERS = 20000;
 const PROMOTION_MAX_DISTANCE_METERS = 5000;
+const HOME_PAGE_SIZE = DEFAULT_PAGE_SIZE;
+
+function createHomeSessionSeed() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 
 function isWithinRadiusMeters(distanceMeters, maxMeters) {
   const value = Number(distanceMeters);
@@ -248,29 +254,15 @@ const BANNER_FALLBACK_WIDTH = SCREEN_WIDTH;
 const NEARBY_BANNER_HEIGHT = Math.round(SCREEN_WIDTH * 0.44);
 const HOME_HORIZONTAL_PADDING = 4;
 
-function shuffleBannerList(items = []) {
-  const next = Array.isArray(items) ? [...items] : [];
-  for (let i = next.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const temp = next[i];
-    next[i] = next[j];
-    next[j] = temp;
-  }
-  return next;
-}
-
 function HomeBannerCarousel({ banners, onPressInterest }) {
   const scrollRef = useRef(null);
   const indexRef = useRef(0);
   const slideWidthRef = useRef(BANNER_FALLBACK_WIDTH);
   const resettingRef = useRef(false);
   const [slideWidth, setSlideWidth] = useState(BANNER_FALLBACK_WIDTH);
-  const [shuffleKey, setShuffleKey] = useState(0);
-
   const orderedBanners = useMemo(
-    () => shuffleBannerList(banners),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reshuffle khi đổi list hoặc mở lại app
-    [banners, shuffleKey]
+    () => (Array.isArray(banners) ? banners : []),
+    [banners]
   );
 
   // Nhân bản slide đầu ở cuối để auto-scroll luôn trái → phải, rồi nhảy về đầu không animation.
@@ -305,15 +297,6 @@ function HomeBannerCarousel({ banners, onPressInterest }) {
     resettingRef.current = false;
     scrollRef.current?.scrollTo?.({ x: 0, animated: false });
   }, [orderedBanners, slideWidth]);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        setShuffleKey((value) => value + 1);
-      }
-    });
-    return () => sub.remove();
-  }, []);
 
   useEffect(() => {
     if (orderedBanners.length <= 1 || slideWidth <= 0) return undefined;
@@ -431,6 +414,24 @@ export default function HomeScreen({
   const [categories, setCategories] = useState([]);
   const [banners, setBanners] = useState([]);
   const [promotionProducts, setPromotionProducts] = useState([]);
+  const [productsHasMore, setProductsHasMore] = useState(false);
+  const [shopsHasMore, setShopsHasMore] = useState(false);
+  const [promotionsHasMore, setPromotionsHasMore] = useState(false);
+  const [catalogHasMore, setCatalogHasMore] = useState(false);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [shopsTotal, setShopsTotal] = useState(0);
+  const [promotionsTotal, setPromotionsTotal] = useState(0);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
+  const [loadingMoreShops, setLoadingMoreShops] = useState(false);
+  const [loadingMorePromotions, setLoadingMorePromotions] = useState(false);
+  const [loadingMoreCatalog, setLoadingMoreCatalog] = useState(false);
+  const productsPageRef = useRef(1);
+  const shopsPageRef = useRef(1);
+  const promotionsPageRef = useRef(1);
+  const catalogPageRef = useRef(1);
+  const homeSeedRef = useRef(createHomeSessionSeed());
+  const wasScreenActiveRef = useRef(isScreenActive);
   const [likedProducts, setLikedProducts] = useState({});
   // Trạng thái tym ban đầu từ server — để hiển thị số tym không bị lệch khi user bấm tym.
   const initialLikedRef = useRef({});
@@ -505,11 +506,11 @@ export default function HomeScreen({
     }
   }, []);
 
-  const loadHomeMeta = useCallback(async () => {
+  const loadHomeMeta = useCallback(async ({ seed = homeSeedRef.current } = {}) => {
     try {
       const [categoryRows, bannerRows] = await Promise.all([
         getProductCategoriesOnBackend().catch(() => []),
-        listActiveBannersOnBackend({ limit: 8 }).catch(() => []),
+        listActiveBannersOnBackend({ limit: 8, seed }).catch(() => []),
       ]);
       setCategories(Array.isArray(categoryRows) ? categoryRows : []);
       setBanners(Array.isArray(bannerRows) ? bannerRows : []);
@@ -539,7 +540,12 @@ export default function HomeScreen({
   }, []);
 
   const loadNearbyContent = useCallback(
-    async ({ refresh = false, location = currentLocation, ready = locationChecked } = {}) => {
+    async ({
+      refresh = false,
+      location = currentLocation,
+      ready = locationChecked,
+      seed = homeSeedRef.current,
+    } = {}) => {
       // Chưa xong GPS: giữ loading, đừng clear products (tránh race ghi đè []).
       if (!ready) {
         return;
@@ -557,38 +563,61 @@ export default function HomeScreen({
           setShops([]);
           setCatalogProducts([]);
           setPromotionProducts([]);
+          setProductsHasMore(false);
+          setShopsHasMore(false);
+          setPromotionsHasMore(false);
+          setCatalogHasMore(false);
+          setProductsTotal(0);
+          setShopsTotal(0);
+          setPromotionsTotal(0);
+          setCatalogTotal(0);
           return;
         }
 
-        const [productRows, shopRows, catalogRows, promoRows] = await Promise.all([
+        productsPageRef.current = 1;
+        shopsPageRef.current = 1;
+        promotionsPageRef.current = 1;
+        catalogPageRef.current = 1;
+
+        const [productPage, shopPage, catalogPage, promoPage] = await Promise.all([
           discoverProductsOnBackend({
             latitude: location.latitude,
             longitude: location.longitude,
             radiusMeters: NEARBY_RADIUS_METERS,
             categoryId: selectedCategoryId,
-            limit: 20,
-          }).catch(() => []),
+            page: 1,
+            limit: HOME_PAGE_SIZE,
+            seed,
+          }).catch(() => ({ items: [], hasMore: false })),
           loadNearbyRegisteredShops({
             latitude: location.latitude,
             longitude: location.longitude,
             radiusMeters: NEARBY_RADIUS_METERS,
-          }).catch(() => []),
+            page: 1,
+            limit: HOME_PAGE_SIZE,
+            seed,
+          }).catch(() => ({ items: [], hasMore: false })),
           discoverProductsOnBackend({
             latitude: location.latitude,
             longitude: location.longitude,
             radiusMeters: ALL_PRODUCTS_RADIUS_METERS,
             categoryId: selectedCategoryId,
-            limit: 24,
-          }).catch(() => []),
+            page: 1,
+            limit: HOME_PAGE_SIZE,
+            seed,
+          }).catch(() => ({ items: [], hasMore: false })),
           listPromotionProductsOnBackend({
-            limit: 20,
+            page: 1,
+            limit: HOME_PAGE_SIZE,
             latitude: location.latitude,
             longitude: location.longitude,
-          }).catch(() => []),
+            seed,
+          }).catch(() => ({ items: [], hasMore: false })),
         ]);
 
+        const promoRows = promoPage.items || [];
         const promoById = new Map();
-        (Array.isArray(promoRows) ? promoRows : []).forEach((row) => {
+        promoRows.forEach((row) => {
           const promo = normalizeProduct(row);
           if (promo.id && promo.isPromotion && Number(promo.discountPercent) > 0) {
             promoById.set(promo.id, promo);
@@ -613,29 +642,26 @@ export default function HomeScreen({
           };
         }
 
-        setProducts(
-          Array.isArray(productRows)
-            ? productRows
-                .map((row) => withPromotionFields(normalizeProduct(row)))
-                .slice(0, 12)
-            : []
+        const nearbyProducts = (productPage.items || []).map((row) =>
+          withPromotionFields(normalizeProduct(row))
         );
-        setShops(Array.isArray(shopRows) ? shopRows.slice(0, 12) : []);
-        const normalizedCatalog = Array.isArray(catalogRows)
-          ? catalogRows
-              .map((row) => withPromotionFields(normalizeProduct(row)))
-              .filter((product) => !product.isOutOfStock && !product.isUnavailable)
-              .slice(0, 12)
-          : [];
-        setCatalogProducts(normalizedCatalog);
+        const catalog = (catalogPage.items || [])
+          .map((row) => withPromotionFields(normalizeProduct(row)))
+          .filter((product) => !product.isOutOfStock && !product.isUnavailable);
+
+        setProducts(nearbyProducts);
+        setProductsHasMore(Boolean(productPage.hasMore));
+        setProductsTotal(Math.max(0, Number(productPage.total) || 0));
+        setShops(shopPage.items || shopPage.shops || []);
+        setShopsHasMore(Boolean(shopPage.hasMore));
+        setShopsTotal(Math.max(0, Number(shopPage.total) || 0));
+        setCatalogProducts(catalog);
+        setCatalogHasMore(Boolean(catalogPage.hasMore));
+        setCatalogTotal(Math.max(0, Number(catalogPage.total) || 0));
 
         const distanceByProductId = new Map();
         const distanceByStoreId = new Map();
-        const seedRows = [
-          ...(Array.isArray(productRows) ? productRows : []),
-          ...(Array.isArray(catalogRows) ? catalogRows : []),
-        ];
-        seedRows.forEach((row) => {
+        [...(productPage.items || []), ...(catalogPage.items || [])].forEach((row) => {
           const normalized = normalizeProduct(row);
           if (
             normalized.id &&
@@ -653,9 +679,8 @@ export default function HomeScreen({
           }
         });
 
-        setPromotionProducts(
-          (Array.isArray(promoRows) ? promoRows : [])
-            .map((row) => {
+        const promotions = promoRows
+          .map((row) => {
             const product = normalizeProduct(row);
             const fromDiscover =
               distanceByProductId.get(product.id) ??
@@ -691,10 +716,13 @@ export default function HomeScreen({
 
             return { ...product, distanceMeters };
           })
-            .filter((product) =>
-              isWithinRadiusMeters(product.distanceMeters, PROMOTION_MAX_DISTANCE_METERS)
-            )
-        );
+          .filter((product) =>
+            isWithinRadiusMeters(product.distanceMeters, PROMOTION_MAX_DISTANCE_METERS)
+          );
+
+        setPromotionProducts(promotions);
+        setPromotionsHasMore(Boolean(promoPage.hasMore));
+        setPromotionsTotal(Math.max(0, Number(promoPage.total) || 0));
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -702,6 +730,117 @@ export default function HomeScreen({
     },
     [currentLocation, locationChecked, selectedCategoryId]
   );
+
+  const loadMoreNearbyProducts = useCallback(async () => {
+    if (loadingMoreProducts || !productsHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMoreProducts(true);
+    try {
+      const nextPage = productsPageRef.current + 1;
+      const pageResult = await discoverProductsOnBackend({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        radiusMeters: NEARBY_RADIUS_METERS,
+        categoryId: selectedCategoryId,
+        page: nextPage,
+        limit: HOME_PAGE_SIZE,
+        seed: homeSeedRef.current,
+      });
+      productsPageRef.current = nextPage;
+      setProducts((prev) =>
+        appendUniqueById(prev, (pageResult.items || []).map((row) => normalizeProduct(row)))
+      );
+      setProductsHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // Giữ danh sách hiện tại nếu load thêm thất bại.
+    } finally {
+      setLoadingMoreProducts(false);
+    }
+  }, [currentLocation, loadingMoreProducts, productsHasMore, selectedCategoryId]);
+
+  const loadMoreNearbyShops = useCallback(async () => {
+    if (loadingMoreShops || !shopsHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMoreShops(true);
+    try {
+      const nextPage = shopsPageRef.current + 1;
+      const pageResult = await loadNearbyRegisteredShops({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        radiusMeters: NEARBY_RADIUS_METERS,
+        page: nextPage,
+        limit: HOME_PAGE_SIZE,
+        seed: homeSeedRef.current,
+      });
+      shopsPageRef.current = nextPage;
+      setShops((prev) => appendUniqueById(prev, pageResult.items || pageResult.shops || []));
+      setShopsHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMoreShops(false);
+    }
+  }, [currentLocation, loadingMoreShops, shopsHasMore]);
+
+  const loadMorePromotions = useCallback(async () => {
+    if (loadingMorePromotions || !promotionsHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMorePromotions(true);
+    try {
+      const nextPage = promotionsPageRef.current + 1;
+      const pageResult = await listPromotionProductsOnBackend({
+        page: nextPage,
+        limit: HOME_PAGE_SIZE,
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        seed: homeSeedRef.current,
+      });
+      promotionsPageRef.current = nextPage;
+      const nextItems = (pageResult.items || [])
+        .map((row) => normalizeProduct(row))
+        .filter((product) =>
+          isWithinRadiusMeters(product.distanceMeters, PROMOTION_MAX_DISTANCE_METERS)
+        );
+      setPromotionProducts((prev) => appendUniqueById(prev, nextItems));
+      setPromotionsHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMorePromotions(false);
+    }
+  }, [currentLocation, loadingMorePromotions, promotionsHasMore]);
+
+  const loadMoreCatalogProducts = useCallback(async () => {
+    if (loadingMoreCatalog || !catalogHasMore || !hasValidLocation(currentLocation)) {
+      return;
+    }
+    setLoadingMoreCatalog(true);
+    try {
+      const nextPage = catalogPageRef.current + 1;
+      const pageResult = await discoverProductsOnBackend({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        radiusMeters: ALL_PRODUCTS_RADIUS_METERS,
+        categoryId: selectedCategoryId,
+        page: nextPage,
+        limit: HOME_PAGE_SIZE,
+        seed: homeSeedRef.current,
+      });
+      catalogPageRef.current = nextPage;
+      const nextItems = (pageResult.items || [])
+        .map((row) => normalizeProduct(row))
+        .filter((product) => !product.isOutOfStock && !product.isUnavailable);
+      setCatalogProducts((prev) => appendUniqueById(prev, nextItems));
+      setCatalogHasMore(Boolean(pageResult.hasMore));
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMoreCatalog(false);
+    }
+  }, [catalogHasMore, currentLocation, loadingMoreCatalog, selectedCategoryId]);
 
   useEffect(() => {
     loadLocation();
@@ -711,6 +850,17 @@ export default function HomeScreen({
   useEffect(() => {
     loadNearbyContent();
   }, [loadNearbyContent]);
+
+  useEffect(() => {
+    const wasActive = wasScreenActiveRef.current;
+    wasScreenActiveRef.current = isScreenActive;
+    if (!wasActive && isScreenActive) {
+      const seed = createHomeSessionSeed();
+      homeSeedRef.current = seed;
+      loadHomeMeta({ seed });
+      loadNearbyContent({ refresh: true, seed });
+    }
+  }, [isScreenActive, loadHomeMeta, loadNearbyContent]);
 
   const handlePublicUpdated = useCallback(
     (payload) => {
@@ -871,50 +1021,104 @@ export default function HomeScreen({
           ? products
           : [];
     const seeAllShops = seeAllSection === 'nearbyShops' ? shops : [];
+    const seeAllLoadingMore =
+      seeAllSection === 'promotions'
+        ? loadingMorePromotions
+        : seeAllSection === 'nearbyProducts'
+          ? loadingMoreProducts
+          : loadingMoreShops;
+    const seeAllHasMore =
+      seeAllSection === 'promotions'
+        ? promotionsHasMore
+        : seeAllSection === 'nearbyProducts'
+          ? productsHasMore
+          : shopsHasMore;
+    const onSeeAllLoadMore =
+      seeAllSection === 'promotions'
+        ? loadMorePromotions
+        : seeAllSection === 'nearbyProducts'
+          ? loadMoreNearbyProducts
+          : loadMoreNearbyShops;
+    const seeAllTotal =
+      seeAllSection === 'promotions'
+        ? promotionsTotal
+        : seeAllSection === 'nearbyProducts'
+          ? productsTotal
+          : shopsTotal;
+    const seeAllCount =
+      sectionMeta.type === 'products' ? seeAllProducts.length : seeAllShops.length;
 
     return (
       <View style={[styles.screen, { paddingTop: insets.contentPaddingTop }]}>
         <SubScreenHeader title={sectionMeta.title} onBack={() => setSeeAllSection(null)} />
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={[
-            styles.seeAllContent,
-            { paddingBottom: insets.tabRootScrollPaddingBottom },
-          ]}
-        >
-          {sectionMeta.type === 'products' ? (
-            seeAllProducts.length > 0 ? (
-              <View style={styles.productGrid}>
-                {seeAllProducts.map((item) => (
-                  <HomeProductCard
-                    key={`see-all-${String(item.id)}`}
-                    product={item}
-                    grid
-                    isLiked={Boolean(likedProducts[String(item.id)])}
-                    likeCount={getDisplayLikeCount(item)}
-                    onToggleLike={toggleLikeProduct}
-                    onPress={setSelectedProductId}
-                  />
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.emptyText}>Chưa có sản phẩm nào.</Text>
-            )
-          ) : seeAllShops.length > 0 ? (
-            <View style={styles.shopGrid}>
-              {seeAllShops.map((item) => (
-                <HomeShopCard
-                  key={`see-all-shop-${String(item.id)}`}
-                  shop={item}
-                  grid
-                  onPress={setSelectedStoreId}
+        {sectionMeta.type === 'products' ? (
+          <FlatList
+            data={seeAllProducts}
+            keyExtractor={(item) => `see-all-${String(item.id)}`}
+            numColumns={2}
+            columnWrapperStyle={styles.productGrid}
+            contentContainerStyle={[
+              styles.seeAllContent,
+              { paddingBottom: insets.tabRootScrollPaddingBottom },
+            ]}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={<Text style={styles.emptyText}>Chưa có sản phẩm nào.</Text>}
+            ListFooterComponent={
+              seeAllCount > 0 ? (
+                <LoadMoreButton
+                  currentCount={seeAllCount}
+                  totalCount={
+                    seeAllHasMore
+                      ? Math.max(seeAllTotal, seeAllCount + HOME_PAGE_SIZE)
+                      : seeAllCount
+                  }
+                  loading={seeAllLoadingMore}
+                  onPress={onSeeAllLoadMore}
                 />
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.emptyText}>Chưa có cửa hàng nào.</Text>
-          )}
-        </ScrollView>
+              ) : null
+            }
+            renderItem={({ item }) => (
+              <HomeProductCard
+                product={item}
+                grid
+                isLiked={Boolean(likedProducts[String(item.id)])}
+                likeCount={getDisplayLikeCount(item)}
+                onToggleLike={toggleLikeProduct}
+                onPress={setSelectedProductId}
+              />
+            )}
+          />
+        ) : (
+          <FlatList
+            data={seeAllShops}
+            keyExtractor={(item) => `see-all-shop-${String(item.id)}`}
+            numColumns={2}
+            columnWrapperStyle={styles.shopGrid}
+            contentContainerStyle={[
+              styles.seeAllContent,
+              { paddingBottom: insets.tabRootScrollPaddingBottom },
+            ]}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={<Text style={styles.emptyText}>Chưa có cửa hàng nào.</Text>}
+            ListFooterComponent={
+              seeAllCount > 0 ? (
+                <LoadMoreButton
+                  currentCount={seeAllCount}
+                  totalCount={
+                    seeAllHasMore
+                      ? Math.max(seeAllTotal, seeAllCount + HOME_PAGE_SIZE)
+                      : seeAllCount
+                  }
+                  loading={seeAllLoadingMore}
+                  onPress={onSeeAllLoadMore}
+                />
+              ) : null
+            }
+            renderItem={({ item }) => (
+              <HomeShopCard shop={item} grid onPress={setSelectedStoreId} />
+            )}
+          />
+        )}
       </View>
     );
   }
@@ -935,12 +1139,15 @@ export default function HomeScreen({
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={async () => {
+              const seed = createHomeSessionSeed();
+              homeSeedRef.current = seed;
               const nextLocation = await loadLocation();
-              await loadHomeMeta();
+              await loadHomeMeta({ seed });
               await loadNearbyContent({
                 refresh: true,
                 location: nextLocation,
                 ready: true,
+                seed,
               });
             }}
             tintColor="#076F32"
@@ -1038,6 +1245,21 @@ export default function HomeScreen({
               keyExtractor={(item) => String(item.id)}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hList}
+              ListFooterComponent={
+                <LoadMoreButton
+                  currentCount={visiblePromotionProducts.length}
+                  totalCount={
+                    promotionsHasMore
+                      ? Math.max(
+                          promotionsTotal,
+                          visiblePromotionProducts.length + HOME_PAGE_SIZE
+                        )
+                      : visiblePromotionProducts.length
+                  }
+                  loading={loadingMorePromotions}
+                  onPress={loadMorePromotions}
+                />
+              }
               renderItem={({ item }) => (
                 <HomeProductCard
                   product={item}
@@ -1067,6 +1289,18 @@ export default function HomeScreen({
               keyExtractor={(item) => String(item.id)}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hList}
+              ListFooterComponent={
+                <LoadMoreButton
+                  currentCount={products.length}
+                  totalCount={
+                    productsHasMore
+                      ? Math.max(productsTotal, products.length + HOME_PAGE_SIZE)
+                      : products.length
+                  }
+                  loading={loadingMoreProducts}
+                  onPress={loadMoreNearbyProducts}
+                />
+              }
               renderItem={({ item }) => (
                 <HomeProductCard
                   product={item}
@@ -1092,6 +1326,18 @@ export default function HomeScreen({
               keyExtractor={(item) => String(item.id)}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.hList}
+              ListFooterComponent={
+                <LoadMoreButton
+                  currentCount={shops.length}
+                  totalCount={
+                    shopsHasMore
+                      ? Math.max(shopsTotal, shops.length + HOME_PAGE_SIZE)
+                      : shops.length
+                  }
+                  loading={loadingMoreShops}
+                  onPress={loadMoreNearbyShops}
+                />
+              }
               renderItem={({ item }) => (
                 <HomeShopCard shop={item} onPress={setSelectedStoreId} />
               )}
@@ -1115,6 +1361,16 @@ export default function HomeScreen({
                 />
               ))}
             </View>
+            <LoadMoreButton
+              currentCount={catalogProducts.length}
+              totalCount={
+                catalogHasMore
+                  ? Math.max(catalogTotal, catalogProducts.length + HOME_PAGE_SIZE)
+                  : catalogProducts.length
+              }
+              loading={loadingMoreCatalog}
+              onPress={loadMoreCatalogProducts}
+            />
           </>
         ) : null}
       </ScrollView>
@@ -1409,6 +1665,24 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     paddingRight: 8,
   },
+  hListLoader: {
+    width: 40,
+    alignSelf: 'center',
+    marginHorizontal: 8,
+  },
+  loadMoreBtn: {
+    alignSelf: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#ecfdf3',
+  },
+  loadMoreText: {
+    color: '#076F32',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   productGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1419,8 +1693,10 @@ const styles = StyleSheet.create({
   seeAllContent: {
     paddingHorizontal: HOME_HORIZONTAL_PADDING,
     paddingTop: 4,
+    flexGrow: 1,
   },
   shopGrid: {
+    justifyContent: 'space-between',
     gap: 10,
     paddingBottom: 14,
   },

@@ -1,6 +1,7 @@
 import { apiRequest, AUTH_TIMEOUT_MS } from './client';
 import { callWithAuthToken } from './authTokenHelper';
 import { API_ENDPOINTS } from './endpoints';
+import { DEFAULT_PAGE_SIZE, normalizePageResult } from '../core/utils/pagination';
 
 async function parseApiResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -14,24 +15,69 @@ async function parseApiResponse(response) {
   return payload;
 }
 
-function toAudienceQuery(audience) {
+function toAudienceQuery(audience, { page, limit } = {}) {
+  const params = new URLSearchParams();
+  const value = String(audience || 'buyer').trim().toLowerCase();
+  if (value === 'seller' || value === 'system') {
+    params.set('audience', value);
+  } else {
+    params.set('audience', 'buyer');
+  }
+  if (page != null) {
+    params.set('page', String(page));
+  }
+  if (limit != null) {
+    params.set('limit', String(limit));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+export async function getMyNotificationsOnBackend(
+  audience = 'buyer',
+  { page = 1, limit = DEFAULT_PAGE_SIZE } = {}
+) {
+  return callWithAuthToken(async (idToken) => {
+    const response = await apiRequest(
+      `${API_ENDPOINTS.notifications}${toAudienceQuery(audience, { page, limit })}`,
+      { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+      AUTH_TIMEOUT_MS
+    );
+    const payload = await parseApiResponse(response);
+    const data = payload.data || {};
+    return {
+      ...normalizePageResult(
+        {
+          ...data,
+          ...(data.pagination || {}),
+          items: data.items || [],
+        },
+        'items'
+      ),
+      // Số chưa đọc do backend đếm trên toàn bộ audience, không phải chỉ trang hiện tại.
+      unreadCount: Math.max(0, Number(data.unreadCount) || 0),
+    };
+  });
+}
+
+export async function getUnreadNotificationCountOnBackend(audience = 'buyer') {
+  return callWithAuthToken(async (idToken) => {
+    const response = await apiRequest(
+      `${API_ENDPOINTS.notificationsUnreadCount}${toAudienceOnlyQuery(audience)}`,
+      { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
+      AUTH_TIMEOUT_MS
+    );
+    const payload = await parseApiResponse(response);
+    return Math.max(0, Number(payload.data?.unreadCount) || 0);
+  });
+}
+
+function toAudienceOnlyQuery(audience) {
   const value = String(audience || 'buyer').trim().toLowerCase();
   if (value === 'seller' || value === 'system') {
     return `?audience=${encodeURIComponent(value)}`;
   }
   return '?audience=buyer';
-}
-
-export async function getMyNotificationsOnBackend(audience = 'buyer') {
-  return callWithAuthToken(async (idToken) => {
-    const response = await apiRequest(
-      `${API_ENDPOINTS.notifications}${toAudienceQuery(audience)}`,
-      { method: 'GET', headers: { Authorization: `Bearer ${idToken}` } },
-      AUTH_TIMEOUT_MS
-    );
-    const payload = await parseApiResponse(response);
-    return payload.data?.items || [];
-  });
 }
 
 export async function markNotificationReadOnBackend(notificationId, audience = 'buyer') {
@@ -42,7 +88,7 @@ export async function markNotificationReadOnBackend(notificationId, audience = '
 
   return callWithAuthToken(async (idToken) => {
     const response = await apiRequest(
-      `${API_ENDPOINTS.notificationRead(id)}${toAudienceQuery(audience)}`,
+      `${API_ENDPOINTS.notificationRead(id)}${toAudienceOnlyQuery(audience)}`,
       {
         method: 'POST',
         headers: {
@@ -61,7 +107,7 @@ export async function markNotificationReadOnBackend(notificationId, audience = '
 export async function markAllNotificationsReadOnBackend(audience = 'buyer') {
   return callWithAuthToken(async (idToken) => {
     const response = await apiRequest(
-      `${API_ENDPOINTS.notificationsReadAll}${toAudienceQuery(audience)}`,
+      `${API_ENDPOINTS.notificationsReadAll}${toAudienceOnlyQuery(audience)}`,
       {
         method: 'POST',
         headers: {

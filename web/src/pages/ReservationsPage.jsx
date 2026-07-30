@@ -28,6 +28,7 @@ import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
 import { formatDateActivity, formatPrice } from '../utils/format';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
+import { resolveAdminListStatusMeta } from '../utils/reservationOrderTimeline';
 
 const STATUS_LABELS = {
   0: 'Chờ shop xác nhận',
@@ -113,18 +114,8 @@ function normalizeTab(raw) {
   return 'all';
 }
 
-function resolveListStatusMeta(status) {
-  const value = Number(status);
-  if (value === 3 || value === 5) {
-    return { label: 'Hoàn thành', className: 'badge badge-success' };
-  }
-  if (value === 4) {
-    return { label: 'Tranh chấp', className: 'badge badge-warning' };
-  }
-  if (value === 0 || value === 2) {
-    return { label: 'Giữ hàng', className: 'badge badge-warning' };
-  }
-  return { label: 'Đã hủy', className: 'badge badge-danger' };
+function resolveListStatusMeta(item) {
+  return resolveAdminListStatusMeta(item);
 }
 
 function resolveTotalPrice(item) {
@@ -210,6 +201,12 @@ export default function ReservationsPage() {
   const [datePreset, setDatePreset] = useState('all');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
+  const [, setClockTick] = useState(0);
+
+  useEffect(() => {
+    const timerId = setInterval(() => setClockTick((value) => value + 1), 30000);
+    return () => clearInterval(timerId);
+  }, []);
 
   const activeTabConfig = useMemo(
     () => TABS.find((tab) => tab.id === activeTab) || TABS[0],
@@ -465,7 +462,7 @@ export default function ReservationsPage() {
                   <SkeletonRows />
                 ) : (
                   items.map((item, index) => {
-                    const statusMeta = resolveListStatusMeta(item.status);
+                    const statusMeta = resolveListStatusMeta(item);
                     return (
                       <tr key={item.id} className="orders-table-row">
                         <TableSttCell page={pagination.page} limit={limit} index={index} />

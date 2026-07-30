@@ -18,8 +18,11 @@ function pickBodyValue(body, keys) {
 }
 
 exports.listReviews = async (req, res) => {
-  const reviews = await buyerReviewService.listBuyerReviews(req.currentUser);
-  return success(res, { data: { reviews } });
+  const data = await buyerReviewService.listBuyerReviews(req.currentUser, {
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  return success(res, { data });
 };
 
 exports.createReview = async (req, res) => {

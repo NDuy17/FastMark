@@ -2,6 +2,7 @@ const {
   listNotificationsForUser,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  countUnreadNotifications,
   NOTIFICATION_AUDIENCE,
 } = require("../services/notificationService");
 const {
@@ -27,6 +28,12 @@ exports.listMyNotifications = async (req, res) => {
   });
 
   return success(res, { data });
+};
+
+exports.getUnreadCount = async (req, res) => {
+  const audience = resolveAudience(req);
+  const unreadCount = await countUnreadNotifications(req.currentUser._id, audience);
+  return success(res, { data: { audience, unreadCount } });
 };
 
 exports.markAsRead = async (req, res) => {
