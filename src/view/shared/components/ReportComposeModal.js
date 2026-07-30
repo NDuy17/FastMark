@@ -237,9 +237,10 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     ...BOTTOM_SHEET_BORDER,
-    maxHeight: '88%',
+    height: '88%',
   },
   sheetBody: {
+    flex:1,
     position: 'relative',
     minHeight: 0,
   },
