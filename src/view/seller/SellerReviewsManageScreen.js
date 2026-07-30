@@ -166,7 +166,7 @@ export default function SellerReviewsManageScreen({ onBack }) {
         <FlatList
           style={styles.list}
           data={reviews}
-          keyExtractor={(item, index) => String(item.id || item._id || index)}
+          keyExtractor={(item) => String(item.id || item._id)}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={

@@ -24,6 +24,7 @@ import {
   cancelBuyerReservationOnBackend,
   forfeitBuyerDepositOnBackend,
   getBuyerOrdersOnBackend,
+  getBuyerReservationOnBackend,
   reportBuyerReservationOnBackend,
 } from '../../api/buyerOpsApi';
 import {
@@ -32,11 +33,18 @@ import {
   RESERVATION_TAB,
   ORDER_STATUS_TABS,
   getCancelledReservationReason,
+  getReservationTabForStatus,
   isActiveDisputeOrder,
   VIEWER_ROLE,
 } from '../../constants/sellerOrders';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import {
+  hasItemId,
+  mergeListById,
+  removeById,
+  upsertById,
+} from '../../core/utils/realtimeList';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
 import { formatPrice } from '../../core/utils/productFormat';
 import { getBuyerCancelConfirmMessage } from '../../core/utils/buyerCancelReservation';
@@ -173,6 +181,9 @@ function BuyerOrdersContent({
     (embedded ? insets.tabRootScrollPaddingBottom : insets.nestedScrollPaddingBottom) +
     holdingListExtra;
   const [items, setItems] = useState([]);
+  // Đọc danh sách hiện tại trong handler realtime mà không cần thêm dependency.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -227,7 +238,7 @@ function BuyerOrdersContent({
       });
       const rows = data?.reservations || data?.items || [];
       setItems((current) =>
-        nextPage === 1 ? rows : appendUniqueById(current, rows)
+        nextPage === 1 ? mergeListById(current, rows) : appendUniqueById(current, rows)
       );
       setPage(Number(data?.page) || nextPage);
       setHasMore(
@@ -261,9 +272,54 @@ function BuyerOrdersContent({
     loadOrders({ nextPage: 1 });
   }, [loadOrders]);
 
-  const handleOrderUpdated = useCallback(() => {
-    loadOrders({ refresh: true, nextPage: 1 });
-  }, [loadOrders]);
+  /**
+   * Realtime: chỉ đồng bộ đúng đơn vừa thay đổi (không tải lại cả danh sách).
+   * - Đơn còn thuộc tab đang xem → tải riêng đơn đó và thay tại chỗ.
+   * - Đơn đã chuyển sang tab khác → bỏ khỏi danh sách hiện tại.
+   */
+  const handleOrderUpdated = useCallback(
+    async (payload) => {
+      const reservationId = String(payload?.reservationId || payload?.id || '').trim();
+      if (!reservationId) {
+        return;
+      }
+
+      const eventTab = getReservationTabForStatus(payload?.status);
+      const belongsToTab = activeTab === RESERVATION_TAB.ALL || eventTab === activeTab;
+      const isInList = hasItemId(itemsRef.current, reservationId);
+
+      if (!belongsToTab) {
+        if (isInList) {
+          setItems((current) => removeById(current, reservationId));
+          setTotalCount((current) => Math.max(0, current - 1));
+        }
+        return;
+      }
+
+      // Đang tìm kiếm: không tự chèn đơn mới (có thể không khớp từ khóa).
+      if (!isInList && search.trim()) {
+        return;
+      }
+
+      try {
+        const idToken = await getCurrentUserIdToken();
+        if (!idToken) {
+          return;
+        }
+        const reservation = await getBuyerReservationOnBackend(idToken, reservationId);
+        if (!reservation?.id) {
+          return;
+        }
+        setItems((current) => upsertById(current, reservation, { position: 'start' }));
+        if (!isInList) {
+          setTotalCount((current) => current + 1);
+        }
+      } catch {
+        // Bỏ qua lỗi tạm thời: danh sách hiện tại vẫn giữ nguyên, không nháy.
+      }
+    },
+    [activeTab, search]
+  );
 
   const handleLoadMore = useCallback(() => {
     if (!hasMore || isLoading || isRefreshing || isLoadingMore || loadingGuardRef.current) {

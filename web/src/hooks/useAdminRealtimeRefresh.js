@@ -8,14 +8,33 @@ function normalizeResources(resources) {
   return list.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
 }
 
-export function useAdminRealtimeRefresh(resources, onRefresh, { enabled = true } = {}) {
+/**
+ * @param coalesceMs Gộp các event dồn dập trong khoảng này thành 1 lần refresh
+ *                   (admin nhận event của toàn hệ thống nên rất dễ bị dồn).
+ */
+export function useAdminRealtimeRefresh(
+  resources,
+  onRefresh,
+  { enabled = true, coalesceMs = 0 } = {}
+) {
   const { getIdToken } = useAuth();
   const resourceList = useMemo(() => normalizeResources(resources), [resources]);
   const onRefreshRef = useRef(onRefresh);
+  const coalesceTimerRef = useRef(null);
 
   useEffect(() => {
     onRefreshRef.current = onRefresh;
   }, [onRefresh]);
+
+  useEffect(
+    () => () => {
+      if (coalesceTimerRef.current) {
+        clearTimeout(coalesceTimerRef.current);
+        coalesceTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const handleEvent = useCallback(
     (payload) => {
@@ -24,11 +43,24 @@ export function useAdminRealtimeRefresh(resources, onRefresh, { enabled = true }
         return;
       }
 
-      if (resourceList.includes('*') || resourceList.includes(type)) {
-        onRefreshRef.current?.(payload);
+      if (!resourceList.includes('*') && !resourceList.includes(type)) {
+        return;
       }
+
+      if (coalesceMs <= 0) {
+        onRefreshRef.current?.(payload);
+        return;
+      }
+
+      if (coalesceTimerRef.current) {
+        return;
+      }
+      coalesceTimerRef.current = setTimeout(() => {
+        coalesceTimerRef.current = null;
+        onRefreshRef.current?.(payload);
+      }, coalesceMs);
     },
-    [resourceList]
+    [coalesceMs, resourceList]
   );
 
   useAdminRealtimeSocket({

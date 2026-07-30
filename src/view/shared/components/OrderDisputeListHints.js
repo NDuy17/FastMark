@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StyleSheet, Text } from 'react-native';
 
 import {
@@ -5,7 +6,7 @@ import {
   buildDisputeOrderListDisplay,
 } from '../../../constants/sellerOrders';
 
-export default function OrderDisputeListHints({ item, viewerRole = VIEWER_ROLE.BUYER }) {
+function OrderDisputeListHints({ item, viewerRole = VIEWER_ROLE.BUYER }) {
   const display = buildDisputeOrderListDisplay(item, viewerRole);
   if (!display) {
     return null;
@@ -22,6 +23,8 @@ export default function OrderDisputeListHints({ item, viewerRole = VIEWER_ROLE.B
     </>
   );
 }
+
+export default memo(OrderDisputeListHints);
 
 const styles = StyleSheet.create({
   line: {

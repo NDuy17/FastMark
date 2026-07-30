@@ -20,7 +20,9 @@ import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDate } from '../utils/format';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 const RATING_OPTIONS = [
   { value: '', label: 'Tất cả' },
@@ -98,9 +100,12 @@ export default function ReviewManagement() {
     setPage(1);
   }, [scopeFromUrl, resetDateRange]);
 
-  const loadReviews = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const loadReviews = useCallback(async ({ silent = false } = {}) => {
+    // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const token = await getIdToken();
@@ -114,20 +119,25 @@ export default function ReviewManagement() {
         ...dateQueryParams,
       });
 
-      setReviews(payload.data?.items || []);
-      setPagination(
-        payload.data?.pagination || {
+      setReviews((current) => mergeListById(current, payload.data?.items || []));
+      setPagination((current) =>
+        keepIfSame(current, payload.data?.pagination || {
           page: 1,
           limit: DEFAULT_PAGE_SIZE,
           total: 0,
           totalPages: 1,
-        },
+        }),
       );
     } catch (loadError) {
+      if (silent) {
+        return;
+      }
       setError(loadError.message || 'Không tải được danh sách đánh giá.');
       setReviews([]);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [getIdToken, limit, page, productIdFromUrl, ratingFilter, search, statusFilter, dateFrom, dateTo, dateQueryParams]);
 
@@ -135,7 +145,9 @@ export default function ReviewManagement() {
     loadReviews();
   }, [loadReviews]);
 
-  useAdminRealtimeRefresh('review', loadReviews);
+  useAdminRealtimeRefresh('review', () => loadReviews({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   useEffect(() => {
     if (!snackbar) {

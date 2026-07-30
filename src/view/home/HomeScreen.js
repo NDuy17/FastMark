@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,6 +28,7 @@ import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/p
 import { confirmLogout } from '../../core/utils/appAlert';
 import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
@@ -47,6 +48,8 @@ const NEARBY_RADIUS_METERS = 5000;
 const ALL_PRODUCTS_RADIUS_METERS = 20000;
 const PROMOTION_MAX_DISTANCE_METERS = 5000;
 const HOME_PAGE_SIZE = DEFAULT_PAGE_SIZE;
+/** Gộp các event realtime công khai trong khoảng này để chỉ đồng bộ 1 lần. */
+const PUBLIC_SYNC_DELAY_MS = 1500;
 
 function createHomeSessionSeed() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -73,7 +76,15 @@ function SectionHeader({ title, onSeeAll }) {
   );
 }
 
-function HomeProductCard({ product, isLiked, likeCount = 0, onToggleLike, onPress, grid = false }) {
+/** Memo: chỉ render lại đúng thẻ có props thay đổi (tránh nháy khi realtime). */
+const HomeProductCard = memo(function HomeProductCard({
+  product,
+  isLiked,
+  likeCount = 0,
+  onToggleLike,
+  onPress,
+  grid = false,
+}) {
   const distance = formatDistance(product.distanceMeters);
   const storeName = product.storeName || 'Gian hàng';
   const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
@@ -157,9 +168,9 @@ function HomeProductCard({ product, isLiked, likeCount = 0, onToggleLike, onPres
       </View>
     </Pressable>
   );
-}
+});
 
-function HomeShopCard({ shop, onPress, grid = false }) {
+const HomeShopCard = memo(function HomeShopCard({ shop, onPress, grid = false }) {
   const distance = formatDistance(shop.distance_meters);
   const rating = Number(shop.rating_avg) || 0;
   const isOpen = shop.is_open !== false;
@@ -209,7 +220,7 @@ function HomeShopCard({ shop, onPress, grid = false }) {
       </View>
     </Pressable>
   );
-}
+});
 
 const SEE_ALL_SECTIONS = {
   promotions: {
@@ -431,8 +442,11 @@ export default function HomeScreen({
   const promotionsPageRef = useRef(1);
   const catalogPageRef = useRef(1);
   const homeSeedRef = useRef(createHomeSessionSeed());
+  const publicSyncTimerRef = useRef(null);
   const wasScreenActiveRef = useRef(isScreenActive);
   const [likedProducts, setLikedProducts] = useState({});
+  const likedProductsRef = useRef(likedProducts);
+  likedProductsRef.current = likedProducts;
   // Trạng thái tym ban đầu từ server — để hiển thị số tym không bị lệch khi user bấm tym.
   const initialLikedRef = useRef({});
   const [isLoading, setIsLoading] = useState(true);
@@ -514,8 +528,12 @@ export default function HomeScreen({
         getProductCategoriesOnBackend().catch(() => []),
         listActiveBannersOnBackend({ limit: 8, seed }).catch(() => []),
       ]);
-      setCategories(Array.isArray(categoryRows) ? categoryRows : []);
-      setBanners(Array.isArray(bannerRows) ? bannerRows : []);
+      setCategories((current) =>
+        mergeListById(current, Array.isArray(categoryRows) ? categoryRows : [])
+      );
+      setBanners((current) =>
+        mergeListById(current, Array.isArray(bannerRows) ? bannerRows : [])
+      );
     } catch {
       setCategories([]);
       setBanners([]);
@@ -547,16 +565,20 @@ export default function HomeScreen({
       location = currentLocation,
       ready = locationChecked,
       seed = homeSeedRef.current,
+      silent = false,
     } = {}) => {
       // Chưa xong GPS: giữ loading, đừng clear products (tránh race ghi đè []).
       if (!ready) {
         return;
       }
 
-      if (refresh) {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
+      // silent = cập nhật realtime: không bật spinner/refresh indicator → không nháy.
+      if (!silent) {
+        if (refresh) {
+          setIsRefreshing(true);
+        } else {
+          setIsLoading(true);
+        }
       }
 
       try {
@@ -651,13 +673,13 @@ export default function HomeScreen({
           .map((row) => withPromotionFields(normalizeProduct(row)))
           .filter((product) => !product.isOutOfStock && !product.isUnavailable);
 
-        setProducts(nearbyProducts);
+        setProducts((current) => mergeListById(current, nearbyProducts));
         setProductsHasMore(Boolean(productPage.hasMore));
         setProductsTotal(Math.max(0, Number(productPage.total) || 0));
-        setShops(shopPage.items || shopPage.shops || []);
+        setShops((current) => mergeListById(current, shopPage.items || shopPage.shops || []));
         setShopsHasMore(Boolean(shopPage.hasMore));
         setShopsTotal(Math.max(0, Number(shopPage.total) || 0));
-        setCatalogProducts(catalog);
+        setCatalogProducts((current) => mergeListById(current, catalog));
         setCatalogHasMore(Boolean(catalogPage.hasMore));
         setCatalogTotal(Math.max(0, Number(catalogPage.total) || 0));
 
@@ -722,12 +744,14 @@ export default function HomeScreen({
             isWithinRadiusMeters(product.distanceMeters, PROMOTION_MAX_DISTANCE_METERS)
           );
 
-        setPromotionProducts(promotions);
+        setPromotionProducts((current) => mergeListById(current, promotions));
         setPromotionsHasMore(Boolean(promoPage.hasMore));
         setPromotionsTotal(Math.max(0, Number(promoPage.total) || 0));
       } finally {
-        setIsLoading(false);
-        setIsRefreshing(false);
+        if (!silent) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
       }
     },
     [currentLocation, locationChecked, selectedCategoryId]
@@ -864,23 +888,45 @@ export default function HomeScreen({
     }
   }, [isScreenActive, loadHomeMeta, loadNearbyContent]);
 
+  /**
+   * Realtime công khai (banner/sản phẩm) đến rất dồn dập nên được gộp lại và
+   * đồng bộ im lặng: không spinner, chỉ item nào đổi mới render lại.
+   */
   const handlePublicUpdated = useCallback(
     (payload) => {
       const type = String(payload?.type || '').trim();
-      if (type === 'banner' || type === 'product') {
-        loadHomeMeta();
-        loadNearbyContent({ refresh: true });
+      if (type !== 'banner' && type !== 'product') {
+        return;
       }
+      if (publicSyncTimerRef.current) {
+        return;
+      }
+      publicSyncTimerRef.current = setTimeout(() => {
+        publicSyncTimerRef.current = null;
+        loadHomeMeta();
+        loadNearbyContent({ silent: true });
+      }, PUBLIC_SYNC_DELAY_MS);
     },
     [loadHomeMeta, loadNearbyContent]
   );
 
+  useEffect(
+    () => () => {
+      if (publicSyncTimerRef.current) {
+        clearTimeout(publicSyncTimerRef.current);
+        publicSyncTimerRef.current = null;
+      }
+    },
+    []
+  );
+
   usePublicSocket({ enabled: true, onPublicUpdated: handlePublicUpdated });
 
+  // Handler giữ identity ổn định để thẻ sản phẩm đã memo không render lại theo state tym.
   const toggleLikeProduct = useCallback(
     async (productId) => {
       const normalizedId = String(productId);
-      const wasLiked = Boolean(likedProducts[normalizedId]);
+      const wasLiked = Boolean(likedProductsRef.current[normalizedId]);
       setLikedProducts((prev) => ({ ...prev, [normalizedId]: !wasLiked }));
 
       try {
@@ -899,7 +945,7 @@ export default function HomeScreen({
         setLikedProducts((prev) => ({ ...prev, [normalizedId]: wasLiked }));
       }
     },
-    [likedProducts]
+    []
   );
 
   function getDisplayLikeCount(item) {

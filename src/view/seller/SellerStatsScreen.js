@@ -16,6 +16,7 @@ import { getSellerStatsOnBackend } from '../../api/sellerOpsApi';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import { formatPrice } from '../../core/utils/productFormat';
 import { formatDateString } from '../../core/utils/dateFormat';
+import { isSameData } from '../../core/utils/realtimeList';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import DatePickerField from '../shared/components/DatePickerField';
 import AvatarBadge from '../shared/components/AvatarBadge';
@@ -334,9 +335,12 @@ export default function SellerStatsScreen({ onBack, embedded = false }) {
           throw new Error('Vui lòng chọn đầy đủ khoảng thời gian.');
         }
         const data = await getSellerStatsOnBackend(idToken, params);
-        setStats(data);
+        // Chỉ đổi state khi số liệu thật sự khác → không nháy khối thống kê.
+        setStats((current) => (isSameData(current, data) ? current : data));
       } catch (loadError) {
-        showErrorAlert(loadError.message || 'Không tải được thống kê.');
+        if (!refresh) {
+          showErrorAlert(loadError.message || 'Không tải được thống kê.');
+        }
         if (!refresh) {
           setStats(null);
         }

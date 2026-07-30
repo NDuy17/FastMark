@@ -15,6 +15,7 @@ import {
   syncSellerAccess,
 } from '../../viewmodel/auth/authSlice';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { isSameData } from '../../core/utils/realtimeList';
 import { getSellerShopSettingsOnBackend } from '../../api/sellerOpsApi';
 import { getUnreadNotificationCountOnBackend } from '../../api/notificationApi';
 import {
@@ -101,7 +102,8 @@ export default function ShopTabPanel({
       }
 
       const shop = await getSellerShopSettingsOnBackend(idToken);
-      setShopSettings(shop);
+      // Giữ nguyên state nếu cấu hình shop không đổi → tránh render lại cả panel.
+      setShopSettings((current) => (isSameData(current, shop) ? current : shop));
       dispatch(applyShopSettingsToProfile(shop));
     } catch {
       // Keep last known settings.
@@ -159,9 +161,8 @@ export default function ShopTabPanel({
     enabled: Boolean(isVisible && isSeller),
     onResourceUpdated: (payload) => {
       const type = String(payload?.type || '').trim();
-      if (type === 'order') {
-        setOrdersRefreshKey((current) => current + 1);
-      }
+      // Đơn hàng: SellerOrdersScreen tự cập nhật đúng item qua order_updated,
+      // không bump refresh key để tránh tải lại cả danh sách.
       if (type === 'wallet' || type === 'withdraw') {
         dispatch(loadUserProfile()).catch(() => {});
       }

@@ -25,7 +25,9 @@ import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDateActivity } from '../utils/format';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Tất cả trạng thái' },
@@ -325,9 +327,16 @@ export default function SellerVerificationsPage() {
         ...dateQueryParams,
       });
       const nextItems = payload.data?.verifications || [];
-      setItems(nextItems);
-      setStats(payload.data?.stats || { total: 0, pending: 0, approved: 0, rejected: 0 });
-      setPagination(payload.data?.pagination || { page, limit, total: 0, totalPages: 1 });
+      setItems((current) => mergeListById(current, nextItems));
+      setStats((current) =>
+        keepIfSame(
+          current,
+          payload.data?.stats || { total: 0, pending: 0, approved: 0, rejected: 0 }
+        )
+      );
+      setPagination((current) =>
+        keepIfSame(current, payload.data?.pagination || { page, limit, total: 0, totalPages: 1 })
+      );
       setSelectedId((current) => {
         if (current && nextItems.some((item) => item.id === current)) {
           return current;
@@ -335,6 +344,9 @@ export default function SellerVerificationsPage() {
         return nextItems[0]?.id || '';
       });
     } catch (loadError) {
+      if (silent) {
+        return;
+      }
       setError(loadError.message || 'Không tải được danh sách hồ sơ.');
       setItems([]);
       setSelectedId('');
@@ -349,7 +361,9 @@ export default function SellerVerificationsPage() {
     loadItems();
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('verification', () => loadItems({ silent: true }));
+  useAdminRealtimeRefresh('verification', () => loadItems({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   useEffect(() => {
     let cancelled = false;

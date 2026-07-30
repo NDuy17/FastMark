@@ -24,9 +24,11 @@ import DataTableShell from '../components/admin/DataTableShell';
 import HomeBannerPreviewPanel from '../components/admin/HomeBannerPreviewPanel';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { formatDate, formatDateTimeDetail, formatPrice } from '../utils/format';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 const TABS = [
   { id: 'all', label: 'Tất cả', filter: '' },
@@ -185,32 +187,43 @@ export default function SellerBannersPage() {
       listSellerBanners(token, { page: 1, limit: 1, filter: 'active' }),
       listSellerBanners(token, { page: 1, limit: 1, filter: 'expired' }),
     ]);
-    setSummaryStats({
-      pending: pendingRes.data?.pagination?.total || 0,
-      active: activeRes.data?.pagination?.total || 0,
-      expired: expiredRes.data?.pagination?.total || 0,
-    });
+    setSummaryStats((current) =>
+      keepIfSame(current, {
+        pending: pendingRes.data?.pagination?.total || 0,
+        active: activeRes.data?.pagination?.total || 0,
+        expired: expiredRes.data?.pagination?.total || 0,
+      })
+    );
   }, []);
 
-  const loadActivePreviewBanners = useCallback(async (token) => {
-    setPreviewLoading(true);
+  const loadActivePreviewBanners = useCallback(async (token, { silent = false } = {}) => {
+    if (!silent) {
+      setPreviewLoading(true);
+    }
     try {
       const payload = await listSellerBanners(token, {
         page: 1,
         limit: 100,
         filter: 'active',
       });
-      setActivePreviewBanners(payload.data?.items || []);
+      setActivePreviewBanners((current) => mergeListById(current, payload.data?.items || []));
     } catch {
-      setActivePreviewBanners([]);
+      if (!silent) {
+        setActivePreviewBanners([]);
+      }
     } finally {
-      setPreviewLoading(false);
+      if (!silent) {
+        setPreviewLoading(false);
+      }
     }
   }, []);
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const loadItems = useCallback(async ({ silent = false } = {}) => {
+    // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const token = await getIdToken();
       const payload = await listSellerBanners(token, {
@@ -220,16 +233,22 @@ export default function SellerBannersPage() {
         ...dateQueryParams,
       });
       const nextItems = payload.data?.items || [];
-      setItems(nextItems);
-      setPagination(
-        payload.data?.pagination || {
-          page,
-          limit,
-          total: nextItems.length,
-          totalPages: 1,
-        }
+      setItems((current) => mergeListById(current, nextItems));
+      setPagination((current) =>
+        keepIfSame(
+          current,
+          payload.data?.pagination || {
+            page,
+            limit,
+            total: nextItems.length,
+            totalPages: 1,
+          }
+        )
       );
-      await Promise.all([loadSummaryStats(token), loadActivePreviewBanners(token)]);
+      await Promise.all([
+        loadSummaryStats(token),
+        loadActivePreviewBanners(token, { silent }),
+      ]);
       setPreviewRow((current) => {
         if (current && nextItems.some((row) => row.id === current.id)) {
           return current;
@@ -237,10 +256,15 @@ export default function SellerBannersPage() {
         return nextItems.find((row) => row.image) || nextItems[0] || null;
       });
     } catch (loadError) {
+      if (silent) {
+        return;
+      }
       setError(loadError.message || 'Không tải được danh sách banner.');
       setItems([]);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [
     dateQueryParams,
@@ -256,7 +280,9 @@ export default function SellerBannersPage() {
     loadItems();
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('banner', loadItems);
+  useAdminRealtimeRefresh('banner', () => loadItems({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   useEffect(() => {
     async function loadPlans() {

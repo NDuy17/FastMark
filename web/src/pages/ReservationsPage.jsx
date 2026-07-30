@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -26,8 +26,10 @@ import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
 import { useAdminOrderSocket } from '../hooks/useAdminOrderSocket';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDateActivity, formatPrice } from '../utils/format';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 import { resolveAdminListStatusMeta } from '../utils/reservationOrderTimeline';
 
 const STATUS_LABELS = {
@@ -163,6 +165,56 @@ function ProductCell({ item }) {
   );
 }
 
+/** Hàng đơn hàng được memo: realtime chỉ render lại đúng đơn vừa đổi. */
+const ReservationRow = memo(function ReservationRow({ item, page, limit, index, onView }) {
+  const statusMeta = resolveListStatusMeta(item);
+
+  return (
+    <tr className="orders-table-row">
+      <TableSttCell page={page} limit={limit} index={index} />
+      <td>
+        <div className="cell-title mono-code">
+          #{item.code || String(item.id).slice(-8).toUpperCase()}
+        </div>
+      </td>
+      <td>
+        <PartyNameCell
+          name={item.buyer?.fullName || item.buyer?.userName}
+          handle={item.buyer?.userName}
+        />
+      </td>
+      <td>
+        <PartyNameCell name={item.shop?.shopName} handle={item.shop?.shopUsername} />
+      </td>
+      <td>
+        <ProductCell item={item} />
+      </td>
+      <td className="cell-price">{formatPrice(resolveTotalPrice(item))}</td>
+      <td className="cell-price">{formatPrice(item.depositAmount)}</td>
+      <td>
+        <DateTimeCell value={item.createdAt} />
+      </td>
+      <td>
+        <DateTimeCell value={item.pickupTime} />
+      </td>
+      <td>
+        <span className={statusMeta.className}>{statusMeta.label}</span>
+      </td>
+      <td className="col-actions">
+        <TableIconActions
+          actions={[
+            {
+              icon: Eye,
+              label: 'Xem chi tiết',
+              onClick: () => onView?.(item.id),
+            },
+          ]}
+        />
+      </td>
+    </tr>
+  );
+});
+
 function SkeletonRows() {
   return (
     <>
@@ -202,6 +254,9 @@ export default function ReservationsPage() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
   const [, setClockTick] = useState(0);
+  const realtimeTimerRef = useRef(null);
+  // Ref để handler realtime luôn gọi bản loadItems mới nhất mà không cần re-subscribe.
+  const loadItemsRef = useRef(null);
 
   useEffect(() => {
     const timerId = setInterval(() => setClockTick((value) => value + 1), 30000);
@@ -224,9 +279,12 @@ export default function ReservationsPage() {
     setPage(1);
   }, [activeTab]);
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const loadItems = useCallback(async ({ silent = false } = {}) => {
+    // silent = đồng bộ realtime: không bật skeleton, chỉ hàng nào đổi mới render lại.
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const token = await getIdToken();
       const params = {
@@ -246,49 +304,91 @@ export default function ReservationsPage() {
         listReservations(token, params),
         getReservationStats(token),
       ]);
-      setItems(listPayload.data?.items || []);
-      setPagination(
-        listPayload.data?.pagination || {
-          page: 1,
-          limit: DEFAULT_PAGE_SIZE,
-          total: 0,
-          totalPages: 1,
-        }
+      setItems((current) => mergeListById(current, listPayload.data?.items || []));
+      setPagination((current) =>
+        keepIfSame(
+          current,
+          listPayload.data?.pagination || {
+            page: 1,
+            limit: DEFAULT_PAGE_SIZE,
+            total: 0,
+            totalPages: 1,
+          }
+        )
       );
       const nextStats = statsPayload.data?.stats || EMPTY_STATS;
-      setStats({
-        ...EMPTY_STATS,
-        ...nextStats,
-        completedAll:
-          nextStats.completedAll ??
-          (Number(nextStats.completed) || 0) + (Number(nextStats.autoCompleted) || 0),
-        cancelled:
-          nextStats.cancelled ??
-          (Number(nextStats.rejected) || 0) +
-            (Number(nextStats.refunded) || 0) +
-            (Number(nextStats.disputeResolved) || 0),
-      });
+      setStats((current) =>
+        keepIfSame(current, {
+          ...EMPTY_STATS,
+          ...nextStats,
+          completedAll:
+            nextStats.completedAll ??
+            (Number(nextStats.completed) || 0) + (Number(nextStats.autoCompleted) || 0),
+          cancelled:
+            nextStats.cancelled ??
+            (Number(nextStats.rejected) || 0) +
+              (Number(nextStats.refunded) || 0) +
+              (Number(nextStats.disputeResolved) || 0),
+        })
+      );
     } catch (loadError) {
+      if (silent) {
+        // Đồng bộ nền lỗi: giữ nguyên bảng đang xem, không báo lỗi, không nháy.
+        return;
+      }
       setError(loadError.message || 'Không tải được danh sách đơn giữ hàng.');
       setItems([]);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [activeTabConfig.tabParam, dateFrom, dateTo, getIdToken, limit, page, search, status]);
+
+  useEffect(() => {
+    loadItemsRef.current = loadItems;
+  }, [loadItems]);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
+  /**
+   * Admin nhận event của mọi đơn trong hệ thống → gộp lại và đồng bộ im lặng.
+   * Chỉ dòng có dữ liệu thay đổi (và các ô thống kê) được render lại.
+   */
   const handleOrderUpdated = useCallback(() => {
-    loadItems();
-  }, [loadItems]);
+    if (realtimeTimerRef.current) {
+      return;
+    }
+    realtimeTimerRef.current = setTimeout(() => {
+      realtimeTimerRef.current = null;
+      loadItemsRef.current?.({ silent: true });
+    }, REALTIME_COALESCE_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (realtimeTimerRef.current) {
+        clearTimeout(realtimeTimerRef.current);
+        realtimeTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   useAdminOrderSocket({
     enabled: true,
     getIdToken,
     onOrderUpdated: handleOrderUpdated,
   });
+
+  const handleViewReservation = useCallback(
+    (reservationId) => {
+      navigate(`/reservations/${reservationId}`);
+    },
+    [navigate]
+  );
 
   function setTab(tabId) {
     const next = normalizeTab(tabId);
@@ -461,56 +561,16 @@ export default function ReservationsPage() {
                 {loading ? (
                   <SkeletonRows />
                 ) : (
-                  items.map((item, index) => {
-                    const statusMeta = resolveListStatusMeta(item);
-                    return (
-                      <tr key={item.id} className="orders-table-row">
-                        <TableSttCell page={pagination.page} limit={limit} index={index} />
-                        <td>
-                          <div className="cell-title mono-code">
-                            #{item.code || String(item.id).slice(-8).toUpperCase()}
-                          </div>
-                        </td>
-                        <td>
-                          <PartyNameCell
-                            name={item.buyer?.fullName || item.buyer?.userName}
-                            handle={item.buyer?.userName}
-                          />
-                        </td>
-                        <td>
-                          <PartyNameCell
-                            name={item.shop?.shopName}
-                            handle={item.shop?.shopUsername}
-                          />
-                        </td>
-                        <td>
-                          <ProductCell item={item} />
-                        </td>
-                        <td className="cell-price">{formatPrice(resolveTotalPrice(item))}</td>
-                        <td className="cell-price">{formatPrice(item.depositAmount)}</td>
-                        <td>
-                          <DateTimeCell value={item.createdAt} />
-                        </td>
-                        <td>
-                          <DateTimeCell value={item.pickupTime} />
-                        </td>
-                        <td>
-                          <span className={statusMeta.className}>{statusMeta.label}</span>
-                        </td>
-                        <td className="col-actions">
-                          <TableIconActions
-                            actions={[
-                              {
-                                icon: Eye,
-                                label: 'Xem chi tiết',
-                                onClick: () => navigate(`/reservations/${item.id}`),
-                              },
-                            ]}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })
+                  items.map((item, index) => (
+                    <ReservationRow
+                      key={item.id}
+                      item={item}
+                      page={pagination.page}
+                      limit={limit}
+                      index={index}
+                      onView={handleViewReservation}
+                    />
+                  ))
                 )}
               </tbody>
             </table>

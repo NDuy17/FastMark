@@ -253,10 +253,11 @@ async function listBuyerReservations(user, { tab = "pending", search, page, limi
     reservationQuery.status = { $in: statusFilter };
   }
 
+  // _id là tiebreaker để phân trang không bị trùng/thiếu khi trùng thời gian.
   const sort =
     tab === "completed"
-      ? { completedAt: -1, CreatedAt: -1 }
-      : { UpdatedAt: -1 };
+      ? { completedAt: -1, CreatedAt: -1, _id: -1 }
+      : { UpdatedAt: -1, _id: -1 };
 
   const { page: safePage, limit: safeLimit, skip } = parsePagination({ page, limit });
   const total = await Reservation.countDocuments(reservationQuery);

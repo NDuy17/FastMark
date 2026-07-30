@@ -317,8 +317,9 @@ export default function ProductDetailScreen({
     }
 
     // Chưa chọn biến thể: gallery ProductImage (thumbnail theo Stt).
+    // Bỏ ảnh trùng để key theo URL luôn duy nhất (không cần dùng index).
     const productGallery = Array.isArray(product.thumbnails)
-      ? product.thumbnails.filter(Boolean)
+      ? Array.from(new Set(product.thumbnails.filter(Boolean)))
       : [];
     if (productGallery.length > 0) {
       return productGallery;
@@ -625,7 +626,7 @@ export default function ProductDetailScreen({
             <FlatList
               ref={galleryRef}
               data={galleryImages}
-              keyExtractor={(uri, index) => `${uri}-${index}`}
+              keyExtractor={(uri) => String(uri)}
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}

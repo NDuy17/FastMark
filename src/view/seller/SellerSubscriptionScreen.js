@@ -15,6 +15,7 @@ import {
 } from '../../viewmodel/seller/sellerSubscriptionViewModel';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
+import { isSameData } from '../../core/utils/realtimeList';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
 import { useResourceSocket } from '../../hooks/useResourceSocket';
 import WalletBalanceTopUpBar from '../shared/components/WalletBalanceTopUpBar';
@@ -78,15 +79,22 @@ export default function SellerSubscriptionScreen({ onBack, onOpenWallet, onOpenB
     return 0;
   }, [plans]);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      setIsLoading(true);
+    }
     try {
       const result = await loadSellerSubscriptionViewModel();
-      setData(result);
+      // Giữ nguyên state nếu dữ liệu không đổi → không nháy nội dung.
+      setData((current) => (isSameData(current, result) ? current : result));
     } catch (error) {
-      Alert.alert('Lỗi', error.message || 'Không tải được thông tin gói.');
+      if (!silent) {
+        Alert.alert('Lỗi', error.message || 'Không tải được thông tin gói.');
+      }
     } finally {
-      setIsLoading(false);
+      if (!silent) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -94,14 +102,20 @@ export default function SellerSubscriptionScreen({ onBack, onOpenWallet, onOpenB
     load();
   }, [load]);
 
+  const handleSubscriptionRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'subscription' && type !== 'wallet') {
+        return;
+      }
+      load({ silent: true });
+    },
+    [load]
+  );
+
   useResourceSocket({
     enabled: true,
-    onResourceUpdated: (payload) => {
-      const type = String(payload?.type || '').trim();
-      if (type === 'subscription' || type === 'wallet') {
-        load();
-      }
-    },
+    onResourceUpdated: handleSubscriptionRealtime,
   });
 
   async function handlePurchase(plan) {

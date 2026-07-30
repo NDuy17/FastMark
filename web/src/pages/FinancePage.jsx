@@ -18,7 +18,9 @@ import { getFinanceOverview } from '../api/accountApi';
 import DashboardDateRange, { presetDates } from '../components/DashboardDateRange';
 import { useAuth } from '../context/AuthContext';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDate, formatDateDisplay } from '../utils/format';
+import { keepIfSame } from '../utils/realtimeList';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
@@ -583,26 +585,39 @@ export default function FinancePage() {
     setSelectedKey((prev) => (prev === key ? null : key));
   }, []);
 
-  const load = useCallback(async () => {
-    if (!from || !to) return;
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await getFinanceOverview(token, { from, to });
-      setData(payload.data || null);
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được dữ liệu tài chính.');
-    } finally {
-      setLoading(false);
-    }
-  }, [from, to, getIdToken]);
+  const load = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!from || !to) return;
+      // silent = đồng bộ realtime: giữ nguyên số liệu đang xem, chỉ ô nào đổi mới render lại.
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const payload = await getFinanceOverview(token, { from, to });
+        setData((current) => keepIfSame(current, payload.data || null));
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được dữ liệu tài chính.');
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [from, to, getIdToken]
+  );
 
   useEffect(() => {
     load();
   }, [load]);
 
-  useAdminRealtimeRefresh(['wallet', 'withdraw'], load);
+  useAdminRealtimeRefresh(['wallet', 'withdraw'], () => load({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   const balances = data?.balances || {};
   const inRange = data?.inRange || {};
