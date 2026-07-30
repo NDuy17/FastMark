@@ -28,6 +28,7 @@ import {
   VIEWER_ROLE,
 } from '../../constants/sellerOrders';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { matchesSearchAny, normalizeSearchText } from '../../core/utils/searchText';
 import OrderItemHeader from '../shared/components/OrderItemHeader';
 import OrderStatusTabBar from '../shared/components/OrderStatusTabBar';
 import OrderTabEmptyState, {
@@ -227,30 +228,22 @@ export default function SellerOrdersScreen({
   }, [items, currentTime]);
 
   const filteredItems = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) {
+    if (!normalizeSearchText(search)) {
       return items;
     }
-    return items.filter((item) => {
-      const productName = String(
-        item.product?.productName || item.productName || ''
-      ).toLowerCase();
-      const variantName = String(
-        item.variant?.variantName || item.variantName || ''
-      ).toLowerCase();
-      const buyerName = String(
-        item.buyer?.fullName || item.buyer?.name || item.buyerName || ''
-      ).toLowerCase();
-      const id = String(item.id || item.orderCode || '').toLowerCase();
-      const note = String(item.note || '').toLowerCase();
-      return (
-        productName.includes(keyword) ||
-        variantName.includes(keyword) ||
-        buyerName.includes(keyword) ||
-        id.includes(keyword) ||
-        note.includes(keyword)
-      );
-    });
+    return items.filter((item) =>
+      matchesSearchAny(
+        [
+          item.product?.productName || item.productName,
+          item.variant?.variantName || item.variantName,
+          item.buyer?.fullName || item.buyer?.name || item.buyerName,
+          item.id,
+          item.orderCode,
+          item.note,
+        ],
+        search
+      )
+    );
   }, [items, search]);
 
   function handleConfirmReservation(reservation) {

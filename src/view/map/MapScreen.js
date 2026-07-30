@@ -189,6 +189,8 @@ export default function MapScreen({
     setStoreNav(null);
     setDirectionsSession(null);
     setActiveReservation(null);
+    // Rời bottom tab Bản đồ → reset filter danh mục về mặc định.
+    setSelectedCategory('all');
   }, [isScreenActive, keepNestedAcrossTabs]);
 
   useEffect(() => {

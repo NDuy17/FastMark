@@ -158,6 +158,7 @@ export default function NotificationsScreen({
   useEffect(() => {
     if (!isScreenActive) {
       setSelectedNotification(null);
+      setActiveTab(NOTIFICATION_TAB.ALL);
       return;
     }
     loadNotifications({ nextPage: 1 });

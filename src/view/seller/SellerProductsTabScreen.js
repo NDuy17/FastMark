@@ -21,6 +21,7 @@ import {
   resolveIsOutOfStock,
 } from '../../core/utils/productAvailability';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { matchesSearchAny, normalizeSearchText } from '../../core/utils/searchText';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import SellerProductDetailScreen from './SellerProductDetailScreen';
@@ -238,15 +239,23 @@ export default function SellerProductsTabScreen({
   }, [onNavigationStateChange, productDetailId, showBulkPromo]);
 
   const filteredProducts = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) {
+    if (!normalizeSearchText(search)) {
       return products;
     }
-    return products.filter((product) => {
-      const name = String(product.name || product.productName || '').toLowerCase();
-      const unit = String(product.donVi || '').toLowerCase();
-      return name.includes(keyword) || unit.includes(keyword);
-    });
+    return products.filter((product) =>
+      matchesSearchAny(
+        [
+          product.name,
+          product.productName,
+          product.donVi,
+          product.id,
+          product._id,
+          product.productCode,
+          product.code,
+        ],
+        search
+      )
+    );
   }, [products, search]);
 
   async function applyPin(productId, pinProduct) {

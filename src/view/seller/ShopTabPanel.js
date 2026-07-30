@@ -192,6 +192,8 @@ export default function ShopTabPanel({
       setSellerStep(null);
       setOrderDetailTarget(null);
       setPhoneChangeReturn(null);
+      // Reset tab đơn bán về mặc định khi rời bottom tab Shop.
+      setSellerOrdersTab(RESERVATION_TAB.PENDING);
       return;
     }
     dispatch(syncSellerAccess()).catch(() => {});
@@ -488,7 +490,10 @@ export default function ShopTabPanel({
         activeTab={sellerOrdersTab}
         onActiveTabChange={setSellerOrdersTab}
         onRefreshKey={ordersRefreshKey}
-        onBack={() => setShopNav(null)}
+        onBack={() => {
+          setSellerOrdersTab(RESERVATION_TAB.PENDING);
+          setShopNav(null);
+        }}
         onOpenReservation={(target) => {
           setOrderDetailTarget(target);
           setShopNav('order-detail');

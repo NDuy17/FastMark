@@ -9,6 +9,7 @@ const { PRODUCT_STATUS } = require("../constants");
 const { createNotification } = require("./notificationService");
 const { NOTIFICATION_AUDIENCE, NOTIFICATION_INDEX } = require("../constants");
 const { attachPromotionDto } = require("./productPromotionService");
+const { normalizeSearchText } = require("../utils/searchText");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -303,10 +304,12 @@ async function listFavorites(user, query = {}) {
   const maps = await buildFavoriteMaps(rows);
   let items = mapFavoriteRows(rows, maps, origin);
 
-  const search = pickString(query.search || query.q).toLowerCase();
+  const search = normalizeSearchText(query.search || query.q);
   if (search) {
     items = items.filter((item) => {
-      const haystack = `${item.name} ${item.shopName} ${item.categoryName}`.toLowerCase();
+      const haystack = normalizeSearchText(
+        `${item.name} ${item.shopName} ${item.categoryName} ${item.id || ""} ${item.productCode || ""}`
+      );
       return haystack.includes(search);
     });
   }
