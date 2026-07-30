@@ -13,7 +13,9 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { formatPrice } from '../../core/utils/productFormat';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
 import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
@@ -83,11 +85,13 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
     [banks, selectedBankId]
   );
 
-  const load = useCallback(async ({ nextPage = 1 } = {}) => {
-    if (nextPage === 1) {
-      setLoading(true);
-    } else {
-      setLoadingMore(true);
+  const load = useCallback(async ({ nextPage = 1, silent = false } = {}) => {
+    if (!silent) {
+      if (nextPage === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
     }
     try {
       const requests = [
@@ -109,12 +113,17 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
         });
       }
       setWithdraws((current) =>
-        nextPage === 1 ? withdrawRows : appendUniqueById(current, withdrawRows)
+        nextPage === 1
+          ? mergeListById(current, withdrawRows)
+          : appendUniqueById(current, withdrawRows)
       );
       setPage(Number(withdrawPage?.page) || nextPage);
       setHasMore(Boolean(withdrawPage?.hasMore));
       setTotalCount(Math.max(0, Number(withdrawPage?.total) || 0));
     } catch (error) {
+      if (silent) {
+        return;
+      }
       Alert.alert('Lỗi', error.message || 'Không tải được dữ liệu rút tiền.');
       if (nextPage === 1) {
         setBanks([]);
@@ -123,14 +132,32 @@ export default function WithdrawScreen({ balance = 0, onBack, onSuccess }) {
         setTotalCount(0);
       }
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (!silent) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     load({ nextPage: 1 });
   }, [load]);
+
+  const handleWithdrawRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'withdraw' && type !== 'wallet') {
+        return;
+      }
+      load({ nextPage: 1, silent: true });
+    },
+    [load]
+  );
+
+  useResourceSocket({
+    enabled: true,
+    onResourceUpdated: handleWithdrawRealtime,
+  });
 
   async function handleSubmit() {
     if (submitting) return;

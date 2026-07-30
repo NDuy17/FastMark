@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert,
   ActivityIndicator,
+  Alert,
   Image,
   Modal,
   Pressable,
@@ -16,12 +16,14 @@ import {
   updateBuyerReviewOnBackend,
 } from '../../api/reviewApi';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
+import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById, removeById } from '../../core/utils/realtimeList';
+import { useResourceSocket } from '../../hooks/useResourceSocket';
 import StarRating from '../store/components/StarRating';
 import KeyboardAwareScrollView from '../shared/components/KeyboardAwareScrollView';
 import KeyboardStickyFooter from '../shared/components/KeyboardStickyFooter';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
-import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 
 const ACTIONS_BAR_ESTIMATE = 72;
 
@@ -62,11 +64,13 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
   const [editComment, setEditComment] = useState('');
   const [editRating, setEditRating] = useState(5);
 
-  const loadReviews = useCallback(async ({ nextPage = 1 } = {}) => {
-    if (nextPage === 1) {
-      setIsLoading(true);
-    } else {
-      setIsLoadingMore(true);
+  const loadReviews = useCallback(async ({ nextPage = 1, silent = false } = {}) => {
+    if (!silent) {
+      if (nextPage === 1) {
+        setIsLoading(true);
+      } else {
+        setIsLoadingMore(true);
+      }
     }
     try {
       const idToken = await getCurrentUserIdToken();
@@ -77,7 +81,7 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
         });
         const rows = Array.isArray(result?.items) ? result.items.map(normalizeReview) : [];
         setReviews((current) =>
-          nextPage === 1 ? rows : appendUniqueById(current, rows)
+          nextPage === 1 ? mergeListById(current, rows) : appendUniqueById(current, rows)
         );
         setPage(Number(result?.page) || nextPage);
         setTotalCount(Math.max(0, Number(result?.total) || 0));
@@ -88,20 +92,48 @@ export default function MyReviewsScreen({ refreshKey = 0 }) {
       setTotalCount(0);
       setHasMore(false);
     } catch {
+      if (silent) {
+        return;
+      }
       if (nextPage === 1) {
         setReviews([]);
         setTotalCount(0);
         setHasMore(false);
       }
     } finally {
-      setIsLoading(false);
-      setIsLoadingMore(false);
+      if (!silent) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     loadReviews();
   }, [loadReviews, refreshKey]);
+
+  const handleReviewRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'review') {
+        return;
+      }
+      const action = String(payload?.action || '').trim();
+      const reviewId = String(payload?.reviewId || '').trim();
+      if ((action === 'deleted' || action === 'hidden') && reviewId) {
+        setReviews((current) => removeById(current, reviewId));
+        setTotalCount((current) => Math.max(0, current - 1));
+        return;
+      }
+      loadReviews({ nextPage: 1, silent: true });
+    },
+    [loadReviews]
+  );
+
+  useResourceSocket({
+    enabled: true,
+    onResourceUpdated: handleReviewRealtime,
+  });
 
   function handleDelete(review) {
     Alert.alert('Xóa đánh giá', 'Bạn có chắc muốn xóa đánh giá này?', [

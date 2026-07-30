@@ -716,6 +716,8 @@ export default function MapScreen({
     visibleRestaurantIds,
   ]);
 
+  // Khoảng cách hiển thị (marker + panel) là quãng đường đi thật theo OSRM,
+  // chỉ dùng khoảng cách đường chim bay khi chưa có kết quả định tuyến.
   const displayRestaurants = useMemo(() => {
     const enriched = visibleRestaurants.map((item) => {
       const routeDistance = routeDistanceById[String(item.id)];
@@ -879,9 +881,9 @@ export default function MapScreen({
     if (!Number.isFinite(distance)) {
       return '--';
     }
+    // Cùng cách làm tròn với marker trên bản đồ để hai chỗ không lệch số.
     if (distance >= 1000) {
-      const km = (distance / 1000).toFixed(distance >= 10000 ? 1 : 2);
-      return `Cách ${km}km`;
+      return `Cách ${(distance / 1000).toFixed(1)}km`;
     }
     return `Cách ${Math.round(distance)}m`;
   }
@@ -1005,7 +1007,7 @@ export default function MapScreen({
           scanLocation={
             usingCustomScan && hasValidLocation(scanLocation) ? scanLocation : null
           }
-          restaurants={visibleRestaurants}
+          restaurants={displayRestaurants}
           onEvent={handleMapEvent}
           interactive={!isSearchFocused}
         />
@@ -1198,6 +1200,7 @@ export default function MapScreen({
                 const productCount = Number(restaurant.total_products ?? restaurant.product_count ?? 0);
                 const rating = Number(restaurant.rating_avg ?? restaurant.averageRating ?? 0);
                 const distanceLabel = formatNearbyDistance(restaurant.distance_meters);
+                const isOpen = restaurant.is_open !== false && restaurant.is_open !== 0;
                 const avatarUrl = isRemoteAvatarUrl(restaurant.image_url)
                   ? restaurant.image_url
                   : '';
@@ -1213,28 +1216,41 @@ export default function MapScreen({
                     <AvatarBadge
                       name={restaurant.shop_name || restaurant.name || 'S'}
                       uri={avatarUrl}
-                      size={52}
+                      size={56}
                       style={styles.nearbyThumb}
                     />
                     <View style={styles.nearbyCardBody}>
                       <Text style={styles.nearbyName} numberOfLines={1}>
-                        {restaurant.name}
+                        {restaurant.shop_name || restaurant.name}
                       </Text>
                       <View style={styles.nearbyMetricsRow}>
-                        <Ionicons name="star" size={11} color="#eab308" />
+                        <Ionicons name="star" size={12} color="#eab308" />
                         <Text style={styles.nearbyRating}>
                           {rating > 0 ? rating.toFixed(1) : 'Mới'}
                         </Text>
                         <Text style={styles.nearbyMetricSep}>·</Text>
                         <Text style={styles.nearbyMetricText}>{productCount} sản phẩm</Text>
-                        <Text style={styles.nearbyMetricSep}>·</Text>
-                        <Text style={styles.nearbyMetricText}>{distanceLabel}</Text>
+                        <View
+                          style={[
+                            styles.nearbyOpenBadge,
+                            !isOpen && styles.nearbyOpenBadgeClosed,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.nearbyOpenBadgeText,
+                              !isOpen && styles.nearbyOpenBadgeTextClosed,
+                            ]}
+                          >
+                            {isOpen ? 'Đang mở cửa' : 'Đóng cửa'}
+                          </Text>
+                        </View>
                       </View>
                       <Text style={styles.nearbyCategory} numberOfLines={1}>
                         {categoryLabel}
+                        {distanceLabel && distanceLabel !== '--' ? ` · ${distanceLabel}` : ''}
                       </Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
                   </Pressable>
                 );
               }}
@@ -1321,59 +1337,77 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 4,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
-    gap: 8,
+    gap: 10,
   },
   nearbyCardPressed: {
     opacity: 0.85,
     backgroundColor: '#fafafa',
   },
   nearbyThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 10,
+    width: 56,
+    height: 56,
+    borderRadius: 12,
     flexShrink: 0,
   },
   nearbyCardBody: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: 3,
   },
   nearbyName: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
-    lineHeight: 17,
+    lineHeight: 18,
   },
   nearbyMetricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
     flexWrap: 'wrap',
   },
   nearbyRating: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#64748b',
+    color: '#b45309',
   },
   nearbyMetricSep: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
     color: '#cbd5e1',
   },
   nearbyMetricText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: '#64748b',
   },
-  nearbyCategory: {
+  nearbyOpenBadge: {
+    marginLeft: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#e8f5e9',
+  },
+  nearbyOpenBadgeClosed: {
+    backgroundColor: '#f1f5f9',
+  },
+  nearbyOpenBadgeText: {
     fontSize: 11,
+    fontWeight: '700',
+    color: '#2e7d32',
+  },
+  nearbyOpenBadgeTextClosed: {
+    color: '#64748b',
+  },
+  nearbyCategory: {
+    fontSize: 12,
     fontWeight: '500',
-    color: '#94a3b8',
-    lineHeight: 14,
+    color: '#64748b',
+    lineHeight: 16,
   },
   mapFab: {
     position: 'absolute',

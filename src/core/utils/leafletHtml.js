@@ -4,7 +4,7 @@ const DEFAULT_LOCATION = {
 };
 
 const MAP_EVENT_SOURCE = 'fastmark-map';
-export const LEAFLET_HTML_REVISION = 20;
+export const LEAFLET_HTML_REVISION = 26;
 
 function safeJson(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
@@ -104,62 +104,22 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         flex-direction: column;
         align-items: center;
         width: max-content;
-        max-width: 176px;
+        max-width: 118px;
         pointer-events: auto;
         touch-action: manipulation;
-        filter: drop-shadow(0 6px 14px rgba(15, 23, 42, 0.16));
+        filter: drop-shadow(0 4px 9px rgba(15, 23, 42, 0.16));
       }
 
       .shop-marker-card-inner {
         display: flex;
         align-items: center;
-        gap: 9px;
-        padding: 7px 12px 7px 7px;
-        border-radius: 16px;
+        width: 112px;
+        min-height: 42px;
+        box-sizing: border-box;
+        padding: 5px 8px;
+        border-radius: 13px;
         background: #ffffff;
-        border: 1px solid rgba(15, 23, 42, 0.05);
-      }
-
-      .shop-marker-avt {
-        position: relative;
-        flex-shrink: 0;
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(155deg, #12a34f 0%, #076F32 58%, #055a28 100%);
-        box-shadow:
-          0 3px 8px rgba(7, 111, 50, 0.28),
-          inset 0 1px 0 rgba(255, 255, 255, 0.28);
-      }
-
-      .shop-marker-avt::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: inherit;
-        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-        pointer-events: none;
-      }
-
-      .shop-marker-avt svg {
-        width: 23px;
-        height: 23px;
-        display: block;
-        position: relative;
-        z-index: 1;
-      }
-
-      .shop-marker-avt-fallback {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: transparent;
+        border: 1px solid rgba(15, 23, 42, 0.06);
       }
 
       .shop-marker-meta {
@@ -170,51 +130,66 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       }
 
       .shop-marker-name {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 800;
-        line-height: 1.2;
+        line-height: 1.18;
         color: #0f172a;
-        white-space: nowrap;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 112px;
+        max-width: 96px;
       }
 
       .shop-marker-rating {
         display: flex;
         align-items: center;
-        gap: 3px;
-        font-size: 10px;
+        gap: 2px;
+        font-size: 9px;
         font-weight: 700;
         line-height: 1.2;
-        color: #334155;
+        color: #64748b;
       }
 
       .shop-marker-star {
         color: #f59e0b;
-        font-size: 11px;
+        font-size: 10px;
         line-height: 1;
       }
 
-      .shop-marker-cat {
-        font-size: 10px;
-        font-weight: 600;
-        line-height: 1.2;
-        color: #64748b;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 112px;
+      .shop-marker-distance {
+        color: #16a34a;
+        font-weight: 800;
       }
 
       .shop-marker-pointer {
-        width: 11px;
-        height: 11px;
-        margin-top: -5px;
+        position: relative;
+        width: 9px;
+        height: 9px;
+        margin-top: 7px;
         border-radius: 999px;
-        background: #076F32;
-        border: 2.5px solid #ffffff;
+        background: #16a34a;
+        border: 2px solid #ffffff;
         box-shadow: 0 2px 6px rgba(7, 111, 50, 0.35);
+      }
+
+      .shop-marker-pointer::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -11px;
+        width: 0;
+        height: 0;
+        transform: translateX(-50%);
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-top: 10px solid #ffffff;
+        filter: drop-shadow(0 2px 1px rgba(15, 23, 42, 0.08));
+      }
+
+      .shop-marker-pointer-closed {
+        background: #94a3b8;
+        box-shadow: 0 2px 6px rgba(100, 116, 139, 0.3);
       }
 
       .fastmark-restaurant-icon {
@@ -309,7 +284,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       let radiusCircleLayer = null;
       let activeRadiusMeters = null;
       let userMovedMap = false;
-      let restaurantMarkers = [];
+      const restaurantMarkerById = {};
       let routeLayer = null;
       let destinationMarker = null;
       let activeRouteDestination = null;
@@ -615,25 +590,8 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         }
       }
 
-      function isRemoteIconUrl(value) {
-        return value.indexOf('http://') === 0 || value.indexOf('https://') === 0;
-      }
-
       const SHOP_PIN_PATH =
         'M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z';
-
-      function getShopNameInitial(restaurant) {
-        const name = String(
-          restaurant.shop_name ||
-          restaurant.shopName ||
-          restaurant.name ||
-          ''
-        ).trim().replace(/^@+/, '');
-        if (!name) {
-          return '?';
-        }
-        return name.charAt(0).toLocaleUpperCase('vi-VN');
-      }
 
       function getShopDisplayName(restaurant) {
         return String(
@@ -665,38 +623,25 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         return rating.toFixed(1);
       }
 
-      function getShopAvatarUrl(restaurant) {
-        const avatarUrl = String(
-          restaurant.image_url ||
-          restaurant.imageUrl ||
-          restaurant.storeAvatar ||
-          restaurant.cover_image_url ||
-          restaurant.coverImageUrl ||
-          ''
-        ).trim();
-        return isRemoteIconUrl(avatarUrl) ? avatarUrl : '';
+      function getShopDistanceLabel(restaurant) {
+        const distance = Number(
+          restaurant.distance_meters ??
+          restaurant.distanceMeters ??
+          0
+        );
+        if (!Number.isFinite(distance) || distance <= 0) {
+          return '';
+        }
+        if (distance >= 1000) {
+          return (distance / 1000).toFixed(1) + 'km';
+        }
+        return Math.round(distance) + 'm';
       }
 
-      function getShopStoreIconHtml() {
-        // Icon storefront trắng, rõ nét trên nền gradient.
-        return (
-          '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-          '<path fill="#ffffff" d="M3.9 9.3 5.7 4.55A1.55 1.55 0 0 1 7.15 3.6h9.7c.6 0 1.15.35 1.4.9L20.1 9.3c.2.5-.18 1.05-.7 1.05H4.6c-.52 0-.9-.55-.7-1.05z"/>' +
-          '<circle fill="#ffffff" cx="6.2" cy="10.35" r="1.15"/>' +
-          '<circle fill="#ffffff" cx="10.05" cy="10.35" r="1.15"/>' +
-          '<circle fill="#ffffff" cx="13.95" cy="10.35" r="1.15"/>' +
-          '<circle fill="#ffffff" cx="17.8" cy="10.35" r="1.15"/>' +
-          '<path fill="#ffffff" d="M5.35 11.7h13.3V19.7c0 .66-.54 1.2-1.2 1.2h-2.95v-4.2c0-.66-.54-1.2-1.2-1.2h-2.6c-.66 0-1.2.54-1.2 1.2v4.2H6.55c-.66 0-1.2-.54-1.2-1.2v-8z"/>' +
-          '</svg>'
-        );
-      }
-
-      function getShopFallbackIconHtml() {
-        return (
-          '<div class="shop-marker-avt-fallback" aria-hidden="true">' +
-          getShopStoreIconHtml() +
-          '</div>'
-        );
+      function isShopOpen(restaurant) {
+        return restaurant.is_open !== false &&
+          restaurant.is_open !== 0 &&
+          restaurant.isOpen !== 0;
       }
 
       function getShopPinIcon() {
@@ -717,71 +662,103 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       function getShopMarkerIcon(restaurant) {
         const name = escapeHtmlAttr(getShopDisplayName(restaurant));
         const rating = escapeHtmlAttr(getShopRatingLabel(restaurant));
-        const category = escapeHtmlAttr(getShopCategoryLabel(restaurant));
-
-        const avatarHtml =
-          '<div class="shop-marker-avt" aria-hidden="true">' + getShopStoreIconHtml() + '</div>';
-
-        const categoryHtml = category
-          ? '<div class="shop-marker-cat">' + category + '</div>'
+        const distance = escapeHtmlAttr(getShopDistanceLabel(restaurant));
+        const open = isShopOpen(restaurant);
+        const distanceHtml = distance
+          ? '<span> · </span><span class="shop-marker-distance">' + distance + '</span>'
           : '';
 
         return (
           '<div class="shop-marker-card">' +
           '<div class="shop-marker-card-inner">' +
-          avatarHtml +
           '<div class="shop-marker-meta">' +
           '<div class="shop-marker-name">' + name + '</div>' +
-          '<div class="shop-marker-rating"><span class="shop-marker-star">★</span>' + rating + '</div>' +
-          categoryHtml +
+          '<div class="shop-marker-rating"><span class="shop-marker-star">★</span>' +
+          rating + distanceHtml + '</div>' +
           '</div>' +
           '</div>' +
-          '<div class="shop-marker-pointer"></div>' +
+          '<div class="shop-marker-pointer' + (open ? '' : ' shop-marker-pointer-closed') +
+          '" title="' + (open ? 'Đang mở cửa' : 'Đóng cửa') + '"></div>' +
           '</div>'
         );
       }
 
-      function drawRestaurants(restaurantsList) {
-        clearLayerList(restaurantMarkers);
-        
-        if (!Array.isArray(restaurantsList)) {
-          return;
-        }
+      function buildShopMarkerIconObject(restaurant) {
+        return L.divIcon({
+          className: 'fastmark-restaurant-icon',
+          html: getShopMarkerIcon(restaurant),
+          iconSize: [118, 62],
+          iconAnchor: [59, 62],
+        });
+      }
 
-        restaurantsList.forEach(function(r) {
-          if (!hasLocation(r)) {
+      function buildShopPopupContent(restaurant) {
+        return (
+          '<div class="restaurant-popup" style="font-family: sans-serif; padding: 2px; min-width: 180px;">' +
+          '<b style="font-size: 14px; color: #0f172a;">' + escapeHtmlAttr(restaurant.name || '') + '</b><br>' +
+          '<span style="font-size: 12px; color: #475569;">' + escapeHtmlAttr(restaurant.address || '') + '</span>' +
+          '<button type="button" class="view-store-btn">Xem gian hàng</button>' +
+          '</div>'
+        );
+      }
+
+      /** Chữ ký nội dung marker — chỉ vẽ lại khi thật sự đổi để bản đồ không nháy. */
+      function getShopMarkerSignature(restaurant) {
+        return [
+          Number(restaurant.latitude).toFixed(6),
+          Number(restaurant.longitude).toFixed(6),
+          getShopDisplayName(restaurant),
+          getShopRatingLabel(restaurant),
+          getShopDistanceLabel(restaurant),
+          isShopOpen(restaurant) ? 'open' : 'closed',
+          String(restaurant.name || ''),
+          String(restaurant.address || ''),
+        ].join('|');
+      }
+
+      function drawRestaurants(restaurantsList) {
+        const items = Array.isArray(restaurantsList) ? restaurantsList : [];
+        const nextIds = {};
+
+        items.forEach(function(r) {
+          if (!hasLocation(r) || r.id == null) {
             return;
           }
 
+          const id = String(r.id);
+          nextIds[id] = true;
+
           const latLng = [Number(r.latitude), Number(r.longitude)];
-          
-          const icon = L.divIcon({
-            className: 'fastmark-restaurant-icon',
-            html: getShopMarkerIcon(r),
-            iconSize: [176, 72],
-            iconAnchor: [88, 72],
-          });
+          const signature = getShopMarkerSignature(r);
+          const existing = restaurantMarkerById[id];
+
+          if (existing) {
+            if (existing.signature === signature) {
+              return;
+            }
+
+            existing.data.name = r.name || '';
+            existing.data.address = r.address || '';
+            existing.marker.setLatLng(latLng);
+            existing.marker.setIcon(buildShopMarkerIconObject(r));
+            existing.marker.setPopupContent(buildShopPopupContent(r));
+            existing.signature = signature;
+            return;
+          }
 
           const marker = L.marker(latLng, {
-            icon: icon,
+            icon: buildShopMarkerIconObject(r),
             bubblingMouseEvents: true,
             riseOnHover: true,
           }).addTo(map);
 
           const restaurantData = {
-            id: String(r.id),
+            id: id,
             name: r.name || '',
             address: r.address || '',
           };
 
-          const popupContent =
-            '<div class="restaurant-popup" style="font-family: sans-serif; padding: 2px; min-width: 180px;">' +
-            '<b style="font-size: 14px; color: #0f172a;">' + escapeHtmlAttr(restaurantData.name) + '</b><br>' +
-            '<span style="font-size: 12px; color: #475569;">' + escapeHtmlAttr(restaurantData.address) + '</span>' +
-            '<button type="button" class="view-store-btn">Xem gian hàng</button>' +
-            '</div>';
-
-          marker.bindPopup(popupContent, { closeOnClick: true, autoPan: true });
+          marker.bindPopup(buildShopPopupContent(r), { closeOnClick: true, autoPan: true });
 
           marker.on('click', function() {
             openRestaurant(restaurantData);
@@ -807,7 +784,19 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
             };
           });
 
-          restaurantMarkers.push(marker);
+          restaurantMarkerById[id] = {
+            marker: marker,
+            data: restaurantData,
+            signature: signature,
+          };
+        });
+
+        Object.keys(restaurantMarkerById).forEach(function(id) {
+          if (nextIds[id]) {
+            return;
+          }
+          map.removeLayer(restaurantMarkerById[id].marker);
+          delete restaurantMarkerById[id];
         });
       }
 
