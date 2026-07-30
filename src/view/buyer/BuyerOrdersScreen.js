@@ -165,6 +165,7 @@ function BuyerOrdersContent({
   orderReviewPatches = {},
   refreshKey = 0,
   embedded = true,
+  isScreenActive = true,
 }) {
   const insets = useScreenInsets();
   const holdingListExtra = activeTab === RESERVATION_TAB.HOLDING ? 56 : 0;
@@ -189,6 +190,15 @@ function BuyerOrdersContent({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  // Rời màn hình → xóa ô tìm kiếm (chỉ reset UI, không đụng dữ liệu server).
+  useEffect(() => {
+    if (isScreenActive) {
+      return;
+    }
+    setSearchInput('');
+    setSearch('');
+  }, [isScreenActive]);
 
   const loadOrders = useCallback(async ({ refresh = false, nextPage = 1 } = {}) => {
     if (loadingGuardRef.current) {
@@ -712,6 +722,7 @@ export default function BuyerOrdersScreen({
   const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0);
   const [orderReviewPatches, setOrderReviewPatches] = useState({});
   const lastTabRequestKeyRef = useRef(0);
+  const wasOrdersActiveRef = useRef(isScreenActive);
   const { reviewedOrderCodes, reviewsByOrderId, markReviewed, unmarkReviewed } =
     useReviewedOrderCodes(reviewsRefreshKey);
 
@@ -724,12 +735,28 @@ export default function BuyerOrdersScreen({
   }, [detailTarget, isScreenActive, scanTarget, onNavigationStateChange]);
 
   useEffect(() => {
-    if (isScreenActive) {
+    const wasActive = wasOrdersActiveRef.current;
+    wasOrdersActiveRef.current = isScreenActive;
+
+    if (!isScreenActive) {
+      // Rời bottom tab Đơn hàng → reset UI về "Chờ xác nhận".
+      const defaultTab = RESERVATION_TAB.PENDING;
+      if (controlledActiveTab === undefined) {
+        setInternalActiveTab(defaultTab);
+      }
+      onActiveTabChange?.(defaultTab);
+      setDetailTarget(null);
+      setScanTarget(null);
+      setReviewTarget(null);
+      setViewReviewTarget(null);
       return;
     }
-    setDetailTarget(null);
-    setScanTarget(null);
-  }, [isScreenActive]);
+
+    // Chỉ refresh khi vừa quay lại tab (false → true), không refresh khi đổi tab trạng thái.
+    if (!wasActive) {
+      setListRefreshKey((value) => value + 1);
+    }
+  }, [controlledActiveTab, isScreenActive, onActiveTabChange]);
 
   useEffect(() => {
     if (!tabRequestKey || lastTabRequestKeyRef.current === tabRequestKey) {
@@ -781,6 +808,7 @@ export default function BuyerOrdersScreen({
         orderReviewPatches={orderReviewPatches}
         refreshKey={listRefreshKey}
         embedded={embedded}
+        isScreenActive={isScreenActive}
       />
       <ShopReviewModal
         visible={Boolean(reviewTarget)}

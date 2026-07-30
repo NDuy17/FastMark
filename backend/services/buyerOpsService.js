@@ -32,6 +32,7 @@ const { holdDepositToSystem } = require("./walletService");
 const { createNotification, NOTIFICATION_INDEX } = require("./notificationService");
 const { emitOrderUpdated } = require("./orderRealtimeService");
 const { loadActiveReviewsByReservationIds } = require("./buyerReviewService");
+const { normalizeSearchText } = require("../utils/searchText");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -286,14 +287,23 @@ async function listBuyerReservations(user, { tab = "pending", search, page, limi
     })
   );
 
-  const keyword = pickString(search).toLowerCase();
+  const keyword = normalizeSearchText(search);
   if (keyword) {
-    mapped = mapped.filter(
-      (item) =>
-        (item.product?.productName || "").toLowerCase().includes(keyword) ||
-        (item.variant?.variantName || "").toLowerCase().includes(keyword) ||
-        (item.storeName || "").toLowerCase().includes(keyword)
-    );
+    mapped = mapped.filter((item) => {
+      const haystack = normalizeSearchText(
+        [
+          item.product?.productName,
+          item.variant?.variantName,
+          item.storeName,
+          item.id,
+          item.orderCode,
+          item._id,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      return haystack.includes(keyword);
+    });
   }
 
   return {

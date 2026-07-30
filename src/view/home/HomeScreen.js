@@ -474,6 +474,8 @@ export default function HomeScreen({
     setSelectedStoreId(null);
     setSelectedBuyerUserId(null);
     setShowSearchScreen(false);
+    // Rời bottom tab Trang chủ → reset filter danh mục về mặc định.
+    setSelectedCategoryId('');
   }, [isScreenActive, keepNestedAcrossTabs]);
 
   useEffect(() => {

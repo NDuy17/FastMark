@@ -25,6 +25,7 @@ import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import KeyboardAwareTextInput from '../shared/components/KeyboardAwareTextInput';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
+import { matchesSearch, normalizeSearchText } from '../../core/utils/searchText';
 import DatePickerField from '../shared/components/DatePickerField';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
@@ -130,11 +131,8 @@ export default function SellerBulkPromotionScreen({ onBack, onChanged, initialTa
   );
 
   const filteredProducts = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return selectableProducts;
-    return selectableProducts.filter((item) =>
-      String(item.name || '').toLowerCase().includes(keyword)
-    );
+    if (!normalizeSearchText(search)) return selectableProducts;
+    return selectableProducts.filter((item) => matchesSearch(item.name, search));
   }, [selectableProducts, search]);
 
   useEffect(() => {

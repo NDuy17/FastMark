@@ -11,6 +11,7 @@ const {
   resolveShopUsername,
   resolveShopAvatar,
 } = require("../utils/shopIdentity");
+const { normalizeSearchText } = require("../utils/searchText");
 
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
@@ -347,7 +348,7 @@ async function getFollowStatus(currentUser, payload = {}) {
 
 async function listFollowing(currentUser, query = {}) {
   const { page, limit, skip } = parsePagination(query);
-  const search = pickString(query.search || query.q).toLowerCase();
+  const search = normalizeSearchText(query.search || query.q);
   const followerObjectId = toObjectId(currentUser._id);
 
   const filter = { followerId: followerObjectId || currentUser._id };
@@ -393,8 +394,9 @@ async function listFollowing(currentUser, query = {}) {
 
   if (search) {
     items = items.filter((item) => {
-      const haystack =
-        `${item.fullName} ${item.userName} ${item.shopName} ${item.shopUsername}`.toLowerCase();
+      const haystack = normalizeSearchText(
+        `${item.fullName} ${item.userName} ${item.shopName} ${item.shopUsername}`
+      );
       return haystack.includes(search);
     });
   }
@@ -412,7 +414,7 @@ async function listFollowing(currentUser, query = {}) {
 
 async function listFollowers(currentUser, query = {}) {
   const { page, limit, skip } = parsePagination(query);
-  const search = pickString(query.search || query.q).toLowerCase();
+  const search = normalizeSearchText(query.search || query.q);
 
   // Mặc định: followers của chính mình. Có thể truyền followedUserId/shopId để xem của người khác (chỉ chủ).
   let targetUserId = pickString(query.followedUserId || query.userId);
@@ -454,7 +456,7 @@ async function listFollowers(currentUser, query = {}) {
 
   if (search) {
     items = items.filter((item) => {
-      const haystack = `${item.fullName} ${item.userName}`.toLowerCase();
+      const haystack = normalizeSearchText(`${item.fullName} ${item.userName}`);
       return haystack.includes(search);
     });
   }

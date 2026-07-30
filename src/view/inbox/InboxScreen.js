@@ -19,6 +19,7 @@ import {
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { matchesSearchAny, normalizeSearchText } from '../../core/utils/searchText';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useMessageInboxSocket } from '../../hooks/useMessageInboxSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
@@ -84,30 +85,26 @@ function getConversationKey(item) {
   return String(item.id || item.shop?.id || item.shopId);
 }
 
-function getConversationSearchHaystack(item, isSellerInbox = false) {
+function getConversationSearchFields(item, isSellerInbox = false) {
   if (isSellerInbox) {
     return [
       item.buyer?.fullName,
       item.buyer?.name,
       item.buyer?.userName,
       item.lastMessage,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
+    ];
   }
 
-  return [getConversationName(item), item.lastMessage].filter(Boolean).join(' ').toLowerCase();
+  return [getConversationName(item), item.lastMessage];
 }
 
 function filterConversations(conversations, query, isSellerInbox = false) {
-  const keyword = query.trim().toLowerCase();
-  if (!keyword) {
+  if (!normalizeSearchText(query)) {
     return conversations;
   }
 
   return conversations.filter((item) =>
-    getConversationSearchHaystack(item, isSellerInbox).includes(keyword)
+    matchesSearchAny(getConversationSearchFields(item, isSellerInbox), query)
   );
 }
 

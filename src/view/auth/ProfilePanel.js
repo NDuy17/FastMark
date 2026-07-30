@@ -177,6 +177,10 @@ export default function ProfilePanel({
       setSellerStep(null);
       setOrderDetailTarget(null);
       setPhoneChangeReturn(null);
+      // Reset tab/filter UI khi rời bottom tab Tài khoản.
+      setBuyerOrdersTab(RESERVATION_TAB.PENDING);
+      setSellerOrdersTab(RESERVATION_TAB.PENDING);
+      setFollowConnectionsTab('following');
       return;
     }
   }, [isProfileVisible]);
@@ -415,7 +419,10 @@ export default function ProfilePanel({
   if (profileNav === 'seller-orders') {
     return (
       <SellerOrdersScreen
-        onBack={() => setProfileNav(null)}
+        onBack={() => {
+          setSellerOrdersTab(RESERVATION_TAB.PENDING);
+          setProfileNav(null);
+        }}
         activeTab={sellerOrdersTab}
         onActiveTabChange={setSellerOrdersTab}
         onRefreshKey={ordersRefreshKey}
@@ -563,7 +570,10 @@ export default function ProfilePanel({
   if (profileNav === 'buyer-orders') {
     return (
       <BuyerOrdersScreen
-        onBack={() => setProfileNav(null)}
+        onBack={() => {
+          setBuyerOrdersTab(RESERVATION_TAB.PENDING);
+          setProfileNav(null);
+        }}
         onNavigatePickup={onNavigatePickup}
         activeTab={buyerOrdersTab}
         onActiveTabChange={setBuyerOrdersTab}

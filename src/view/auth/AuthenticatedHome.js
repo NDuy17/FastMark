@@ -181,6 +181,11 @@ export default function AuthenticatedHome() {
       if (leavingTab === 'shop') {
         setSellerRegisterRequest(0);
       }
+      // Rời bottom tab Đơn hàng → về tab mặc định "Chờ xác nhận" khi quay lại.
+      if (leavingTab === 'orders') {
+        setBuyerOrdersTab(RESERVATION_TAB.PENDING);
+        setOpenBuyerOrdersRequest(null);
+      }
 
       // Giữ overlay products khi đang sang nạp ví từ giữ hàng — sẽ đóng bên dưới nếu không keep.
       if (!keepNested) {
