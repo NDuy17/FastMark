@@ -12,6 +12,7 @@ import { useAdminOrderSocket } from '../hooks/useAdminOrderSocket';
 import { goBackOr } from '../utils/navigation';
 import { formatDate, formatDateActivity, formatDateTimeDetail, formatPrice } from '../utils/format';
 import { formatReservationOrderCode } from '../utils/reservationOrderCode';
+import { keepIfSame } from '../utils/realtimeList';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 import { resolveAdminListStatusMeta } from '../utils/reservationOrderTimeline';
 import { reverseGeocode } from '../utils/reverseGeocode';
@@ -255,20 +256,32 @@ export default function ReservationDetailPage() {
   const [resolutionModal, setResolutionModal] = useState('');
   const [resolutionNote, setResolutionNote] = useState('');
 
-  const loadDetail = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await getReservationDetail(token, reservationId);
-      setReservation(payload.data?.reservation || null);
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được chi tiết đơn giữ hàng.');
-      setReservation(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [getIdToken, reservationId]);
+  const loadDetail = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const payload = await getReservationDetail(token, reservationId);
+        const next = payload.data?.reservation || null;
+        // Giữ nguyên state nếu dữ liệu không đổi → không render lại cả trang.
+        setReservation((current) => keepIfSame(current, next));
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được chi tiết đơn giữ hàng.');
+        setReservation(null);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [getIdToken, reservationId]
+  );
 
   useEffect(() => {
     loadDetail();
@@ -279,7 +292,8 @@ export default function ReservationDetailPage() {
       if (!payload?.reservationId || String(payload.reservationId) !== String(reservationId)) {
         return;
       }
-      loadDetail();
+      // Cập nhật im lặng: không bật skeleton, không nháy nội dung đang xem.
+      loadDetail({ silent: true });
     },
     [loadDetail, reservationId]
   );

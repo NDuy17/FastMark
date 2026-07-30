@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -15,6 +15,7 @@ import {
 } from '../../core/utils/notificationRealtime';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import {
@@ -70,6 +71,29 @@ function capitalizeFirstLetter(value = '') {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** Item được memo: chỉ thông báo nào đổi dữ liệu mới render lại. */
+const NotificationRow = memo(function NotificationRow({ item, onPress }) {
+  return (
+    <Pressable style={styles.listItem} onPress={() => onPress?.(item)}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>🔔</Text>
+      </View>
+      <View style={styles.listBody}>
+        <View style={styles.listTopRow}>
+          <Text style={styles.notificationTitle} numberOfLines={1}>
+            {capitalizeFirstLetter(item.title)}
+          </Text>
+          <Text style={styles.listTime}>{formatNotificationTime(item.createdAt)}</Text>
+        </View>
+        <Text style={styles.notificationBody} numberOfLines={2}>
+          {item.content || item.body || ''}
+        </Text>
+      </View>
+      {!item.isRead ? <View style={styles.unreadDot} /> : null}
+    </Pressable>
+  );
+});
+
 export default function NotificationsScreen({
   onNavigationStateChange,
   audience = 'buyer',
@@ -113,7 +137,7 @@ export default function NotificationsScreen({
         index: resolveNotificationIndex(item),
       }));
       setNotifications((current) =>
-        nextPage === 1 ? items : appendUniqueById(current, items)
+        nextPage === 1 ? mergeListById(current, items) : appendUniqueById(current, items)
       );
       setPage(Number(result.page) || nextPage);
       setHasMore(Boolean(result.hasMore));
@@ -138,6 +162,11 @@ export default function NotificationsScreen({
     }
     loadNotifications({ nextPage: page + 1 });
   }, [hasMore, isLoading, isLoadingMore, loadNotifications, page]);
+
+  const renderNotificationItem = useCallback(
+    ({ item }) => <NotificationRow item={item} onPress={setSelectedNotification} />,
+    []
+  );
 
   const handleRealtimeNotification = useCallback(
     (notification) => {
@@ -174,8 +203,8 @@ export default function NotificationsScreen({
         notification={selectedNotification}
         audience={audience}
         onBack={() => {
+          // Đã đọc được patch trực tiếp vào item (onMarkedRead) → không tải lại cả danh sách.
           setSelectedNotification(null);
-          loadNotifications({ nextPage: 1, refresh: true });
         }}
         onMarkedRead={(id) => {
           setNotifications((current) =>
@@ -245,25 +274,7 @@ export default function NotificationsScreen({
               </Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <Pressable style={styles.listItem} onPress={() => setSelectedNotification(item)}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>🔔</Text>
-              </View>
-              <View style={styles.listBody}>
-                <View style={styles.listTopRow}>
-                  <Text style={styles.notificationTitle} numberOfLines={1}>
-                    {capitalizeFirstLetter(item.title)}
-                  </Text>
-                  <Text style={styles.listTime}>{formatNotificationTime(item.createdAt)}</Text>
-                </View>
-                <Text style={styles.notificationBody} numberOfLines={2}>
-                  {item.content || item.body || ''}
-                </Text>
-              </View>
-              {!item.isRead ? <View style={styles.unreadDot} /> : null}
-            </Pressable>
-          )}
+          renderItem={renderNotificationItem}
         />
       )}
     </View>

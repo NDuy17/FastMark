@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,7 @@ import { getMyProductsOnBackend, setProductPinOnBackend } from '../../api/produc
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import {
   getProductImageOverlayLabel,
@@ -68,7 +69,12 @@ function mapApiProductToManageCard(product) {
   return mapped;
 }
 
-function ProductManageCard({ product, onPress, onPinPress, pinningId }) {
+const ProductManageCard = memo(function ProductManageCard({
+  product,
+  onPress,
+  onPinPress,
+  pinningId,
+}) {
   const overlayLabel = getProductImageOverlayLabel(product);
   const pin = Number(product.pinProduct) || 0;
   const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
@@ -155,7 +161,7 @@ function ProductManageCard({ product, onPress, onPinPress, pinningId }) {
       </Pressable>
     </Pressable>
   );
-}
+});
 
 export default function SellerProductsTabScreen({
   productRefreshKey = 0,
@@ -197,7 +203,7 @@ export default function SellerProductsTabScreen({
       });
       const rows = (result.items || []).map(mapApiProductToManageCard);
       setProducts((current) =>
-        nextPage === 1 ? rows : appendUniqueById(current, rows)
+        nextPage === 1 ? mergeListById(current, rows) : appendUniqueById(current, rows)
       );
       setPage(Number(result.page) || nextPage);
       setHasMore(Boolean(result.hasMore));

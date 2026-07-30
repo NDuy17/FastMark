@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -111,7 +111,7 @@ function MessageStatus({ status }) {
   return <Text style={styles.messageStatus}>{MESSAGE_STATUS_LABEL[status] || 'Đã gửi'}</Text>;
 }
 
-function DateSeparator({ label }) {
+const DateSeparator = memo(function DateSeparator({ label }) {
   return (
     <View style={styles.dateSeparatorWrap}>
       <View style={styles.dateSeparatorPill}>
@@ -119,7 +119,7 @@ function DateSeparator({ label }) {
       </View>
     </View>
   );
-}
+});
 
 function ImageMessageContent({ imageUri, isMine, caption, isDeleted }) {
   if (isDeleted) {
@@ -136,7 +136,8 @@ function ImageMessageContent({ imageUri, isMine, caption, isDeleted }) {
   );
 }
 
-function ChatBubble({ item, peerAvatarUri, peerName, onLongPress }) {
+/** Memo: tin nhắn mới chỉ thêm 1 bubble, các bubble cũ không render lại. */
+const ChatBubble = memo(function ChatBubble({ item, peerAvatarUri, peerName, onLongPress }) {
   const isMine = Boolean(item.isMine);
   const isDeleted = Boolean(item.isDeleted);
   const timeLabel = formatTimeLabel(item);
@@ -207,7 +208,7 @@ function ChatBubble({ item, peerAvatarUri, peerName, onLongPress }) {
       </View>
     </View>
   );
-}
+});
 
 function resolveOwnShopId(shop) {
   const raw = shop?.shopId || shop?.id || shop?._id;
@@ -899,49 +900,62 @@ export default function ChatScreen({
     }
   }
 
-  function handleLongPressMessage(item) {
-    if (!item.isMine || item.isDeleted) {
-      return;
-    }
+  // useCallback để bubble đã memo không render lại mỗi khi có tin nhắn mới.
+  const handleLongPressMessage = useCallback(
+    (item) => {
+      if (!item.isMine || item.isDeleted) {
+        return;
+      }
 
-    Alert.alert('Tin nhắn', 'Bạn muốn gỡ tin nhắn này?', [
-      { text: 'Huỷ', style: 'cancel' },
-      {
-        text: 'Gỡ tin nhắn',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const activeConversationId = resolvedConversationId || (await ensureConversation());
-            let result;
+      Alert.alert('Tin nhắn', 'Bạn muốn gỡ tin nhắn này?', [
+        { text: 'Huỷ', style: 'cancel' },
+        {
+          text: 'Gỡ tin nhắn',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const activeConversationId =
+                resolvedConversationId || (await ensureConversation());
+              let result;
 
-            if (isSellerMode) {
-              const idToken = await getCurrentUserIdToken();
-              result = await deleteSellerMessageOnBackend(
-                idToken,
-                activeConversationId,
-                item.id
-              );
-            } else {
-              result = await deleteBuyerMessageOnBackend(activeConversationId, item.id);
+              if (isSellerMode) {
+                const idToken = await getCurrentUserIdToken();
+                result = await deleteSellerMessageOnBackend(
+                  idToken,
+                  activeConversationId,
+                  item.id
+                );
+              } else {
+                result = await deleteBuyerMessageOnBackend(activeConversationId, item.id);
+              }
+
+              const deleted = result?.message || result;
+              const ownName = isSellerMode
+                ? shopName || 'Người bán'
+                : authProfile?.fullName || authUser?.displayName || 'Người mua';
+              const preview =
+                result?.lastMessage ||
+                deleted?.conversationLastMessage ||
+                `${ownName} đã gỡ 1 tin nhắn`;
+              setMessages((current) => mergeMessages(current, deleted));
+              onConversationPreviewChange?.(activeConversationId, preview);
+            } catch (deleteError) {
+              showErrorAlert(deleteError.message || 'Không gỡ được tin nhắn.');
             }
-
-            const deleted = result?.message || result;
-            const ownName = isSellerMode
-              ? shopName || 'Người bán'
-              : authProfile?.fullName || authUser?.displayName || 'Người mua';
-            const preview =
-              result?.lastMessage ||
-              deleted?.conversationLastMessage ||
-              `${ownName} đã gỡ 1 tin nhắn`;
-            setMessages((current) => mergeMessages(current, deleted));
-            onConversationPreviewChange?.(activeConversationId, preview);
-          } catch (deleteError) {
-            showErrorAlert(deleteError.message || 'Không gỡ được tin nhắn.');
-          }
+          },
         },
-      },
-    ]);
-  }
+      ]);
+    },
+    [
+      authProfile?.fullName,
+      authUser?.displayName,
+      ensureConversation,
+      isSellerMode,
+      onConversationPreviewChange,
+      resolvedConversationId,
+      shopName,
+    ]
+  );
 
   if (peerOverlay === 'buyer-profile' && buyerProfileUserId) {
     return (

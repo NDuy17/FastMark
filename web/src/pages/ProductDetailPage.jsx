@@ -16,8 +16,10 @@ import {
 import ProductRemoveDialog from '../components/admin/ProductRemoveDialog';
 import { useAuth } from '../context/AuthContext';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDateTimeDetail, formatMoney } from '../utils/format';
 import { goBackOr } from '../utils/navigation';
+import { keepIfSame } from '../utils/realtimeList';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 
 function statusBadgeClass(product) {
@@ -130,29 +132,52 @@ export default function ProductDetailPage() {
   const [removeError, setRemoveError] = useState('');
   const [removeLoading, setRemoveLoading] = useState(false);
 
-  const loadDetail = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await getProductDetail(token, productId);
-      const nextProduct = payload.data?.product || null;
-      setProduct(nextProduct);
-      setSelectedVariantId('');
-      setActiveImage(nextProduct?.thumbnail || nextProduct?.thumbnails?.[0] || '');
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được chi tiết sản phẩm.');
-      setProduct(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [getIdToken, productId]);
+  const loadDetail = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const payload = await getProductDetail(token, productId);
+        const nextProduct = payload.data?.product || null;
+        setProduct((current) => keepIfSame(current, nextProduct));
+        if (!silent) {
+          // Đồng bộ realtime thì giữ nguyên biến thể/ảnh người dùng đang xem.
+          setSelectedVariantId('');
+          setActiveImage(nextProduct?.thumbnail || nextProduct?.thumbnails?.[0] || '');
+        }
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được chi tiết sản phẩm.');
+        setProduct(null);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [getIdToken, productId]
+  );
 
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
 
-  useAdminRealtimeRefresh('product', loadDetail);
+  useAdminRealtimeRefresh(
+    'product',
+    (payload) => {
+      const changedId = String(payload?.productId || payload?.id || '');
+      if (changedId && changedId !== String(productId)) {
+        return;
+      }
+      loadDetail({ silent: true });
+    },
+    { coalesceMs: REALTIME_COALESCE_MS }
+  );
 
   useEffect(() => {
     if (!message) return undefined;

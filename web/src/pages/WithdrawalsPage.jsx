@@ -14,9 +14,11 @@ import { TableSttCell, TableSttHeader } from '../components/admin/TableStt';
 import TableIconActions from '../components/ui/TableIconActions';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { formatDate, formatPrice } from '../utils/format';
+import { mergeListById } from '../utils/realtimeList';
 
 const TABS = [
   { id: 'pending', label: 'Chờ duyệt', status: '0' },
@@ -113,35 +115,48 @@ export default function WithdrawalsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await listAdminWithdraws(token, {
-        status: statusParam === '' ? undefined : statusParam,
-        q: search || undefined,
-        from: from || undefined,
-        to: to || undefined,
-        page,
-        limit,
-      });
-      setItems(payload.data?.items || []);
-      setTotal(Number(payload.data?.total) || 0);
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được yêu cầu rút tiền.');
-      setItems([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [from, getIdToken, limit, page, search, statusParam, to]);
+  const loadItems = useCallback(
+    async ({ silent = false } = {}) => {
+      // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const payload = await listAdminWithdraws(token, {
+          status: statusParam === '' ? undefined : statusParam,
+          q: search || undefined,
+          from: from || undefined,
+          to: to || undefined,
+          page,
+          limit,
+        });
+        setItems((current) => mergeListById(current, payload.data?.items || []));
+        setTotal(Number(payload.data?.total) || 0);
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được yêu cầu rút tiền.');
+        setItems([]);
+        setTotal(0);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [from, getIdToken, limit, page, search, statusParam, to]
+  );
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('withdraw', loadItems);
+  useAdminRealtimeRefresh('withdraw', () => loadItems({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   useEffect(() => {
     setPage(1);

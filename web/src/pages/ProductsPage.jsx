@@ -40,6 +40,8 @@ import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { useAuth } from '../context/AuthContext';
 
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 
 
@@ -218,11 +220,16 @@ export default function ProductsPage() {
 
 
 
-  const loadItems = useCallback(async () => {
+  const loadItems = useCallback(async ({ silent = false } = {}) => {
 
-    setLoading(true);
+    // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+    if (!silent) {
 
-    setError('');
+      setLoading(true);
+
+      setError('');
+
+    }
 
     try {
 
@@ -246,17 +253,17 @@ export default function ProductsPage() {
 
       });
 
-      setItems(payload.data?.items || []);
+      setItems((current) => mergeListById(current, payload.data?.items || []));
 
-      setSummary(
+      setSummary((current) =>
 
-        payload.data?.summary || { total: 0, visible: 0, removed: 0 },
+        keepIfSame(current, payload.data?.summary || { total: 0, visible: 0, removed: 0 }),
 
       );
 
-      setPagination(
+      setPagination((current) =>
 
-        payload.data?.pagination || {
+        keepIfSame(current, payload.data?.pagination || {
 
           page: 1,
 
@@ -266,11 +273,17 @@ export default function ProductsPage() {
 
           totalPages: 1,
 
-        },
+        }),
 
       );
 
     } catch (loadError) {
+
+      if (silent) {
+
+        return;
+
+      }
 
       setError(loadError.message || 'Không tải được danh sách sản phẩm.');
 
@@ -280,7 +293,11 @@ export default function ProductsPage() {
 
     } finally {
 
-      setLoading(false);
+      if (!silent) {
+
+        setLoading(false);
+
+      }
 
     }
 
@@ -294,7 +311,11 @@ export default function ProductsPage() {
 
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('product', loadItems);
+  useAdminRealtimeRefresh('product', () => loadItems({ silent: true }), {
+
+    coalesceMs: REALTIME_COALESCE_MS,
+
+  });
 
 
 

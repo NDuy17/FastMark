@@ -177,25 +177,34 @@ export default function SellerOrderDetailScreen({
     }
   }, [resolvedId]);
 
-  const loadDetail = useCallback(async () => {
-    if (!resolvedId) {
-      showErrorAlert('Thiếu mã đơn hàng.');
-      setIsLoading(false);
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const idToken = await getCurrentUserIdToken();
-      const data = await getSellerReservationDetailOnBackend(idToken, resolvedId);
-      setReservation((prev) => mergeLoadedItem(prev, data));
-      await loadDisputeReports();
-    } catch (loadError) {
-      showErrorAlert(loadError.message || 'Không tải được chi tiết đơn.');
-      setReservation((prev) => prev || initialItem);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [resolvedId, initialItem, loadDisputeReports]);
+  const loadDetail = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!resolvedId) {
+        showErrorAlert('Thiếu mã đơn hàng.');
+        setIsLoading(false);
+        return;
+      }
+      if (!silent) {
+        setIsLoading(true);
+      }
+      try {
+        const idToken = await getCurrentUserIdToken();
+        const data = await getSellerReservationDetailOnBackend(idToken, resolvedId);
+        setReservation((prev) => mergeLoadedItem(prev, data));
+        await loadDisputeReports();
+      } catch (loadError) {
+        if (!silent) {
+          showErrorAlert(loadError.message || 'Không tải được chi tiết đơn.');
+        }
+        setReservation((prev) => prev || initialItem);
+      } finally {
+        if (!silent) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [resolvedId, initialItem, loadDisputeReports]
+  );
 
   useEffect(() => {
     loadDetail();
@@ -206,7 +215,8 @@ export default function SellerOrderDetailScreen({
       if (!payload?.reservationId || String(payload.reservationId) !== String(resolvedId)) {
         return;
       }
-      loadDetail();
+      // Cập nhật im lặng: không bật spinner khi đang xem chi tiết.
+      loadDetail({ silent: true });
     },
     [loadDetail, resolvedId]
   );

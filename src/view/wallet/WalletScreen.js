@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -18,6 +18,7 @@ import SubScreenHeader from '../shared/components/SubScreenHeader';
 import { WALLET_TX_STATUS } from '../../model/walletModel';
 import { loadWalletViewModel } from '../../viewmodel/wallet/walletViewModel';
 import { useResourceSocket } from '../../hooks/useResourceSocket';
+import { isSameData, mergeListById } from '../../core/utils/realtimeList';
 import { showErrorAlert } from '../../core/utils/appAlert';
 import WalletTransactionDetailScreen from './WalletTransactionDetailScreen';
 
@@ -38,7 +39,7 @@ function formatTxTime(value) {
   });
 }
 
-function TransactionRow({ item, onPress }) {
+const TransactionRow = memo(function TransactionRow({ item, onPress }) {
   const isCredit = item.isCredit;
   const status = item.status;
   const pending = status === WALLET_TX_STATUS.PENDING;
@@ -95,7 +96,7 @@ function TransactionRow({ item, onPress }) {
       <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
     </Pressable>
   );
-}
+});
 
 export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTransactions }) {
   const insets = useScreenInsets();
@@ -105,16 +106,21 @@ export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTran
   const [transactions, setTransactions] = useState([]);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false } = {}) => {
     try {
       const data = await loadWalletViewModel();
-      setWallet(data.wallet);
-      setTransactions(data.transactions || []);
+      // Chỉ đổi state khi số dư/giao dịch thật sự khác → không nháy danh sách.
+      setWallet((current) => (isSameData(current, data.wallet) ? current : data.wallet));
+      setTransactions((current) => mergeListById(current, data.transactions || []));
     } catch (err) {
-      showErrorAlert(err.message || 'Không tải được ví.');
+      if (!silent) {
+        showErrorAlert(err.message || 'Không tải được ví.');
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!silent) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -122,14 +128,21 @@ export default function WalletScreen({ onBack, onTopUp, onWithdraw, onSeeAllTran
     load();
   }, [load]);
 
+  const handleWalletRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'wallet' && type !== 'withdraw') {
+        return;
+      }
+      // Đồng bộ im lặng: giữ nguyên vị trí cuộn, chỉ dòng nào đổi mới render lại.
+      load({ silent: true });
+    },
+    [load]
+  );
+
   useResourceSocket({
     enabled: true,
-    onResourceUpdated: (payload) => {
-      const type = String(payload?.type || '').trim();
-      if (type === 'wallet' || type === 'withdraw') {
-        load();
-      }
-    },
+    onResourceUpdated: handleWalletRealtime,
   });
 
   if (selectedTransaction) {

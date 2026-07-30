@@ -19,8 +19,10 @@ import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PAGE_SIZE } from '../constants/pagination';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 import { formatDate } from '../utils/format';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 const REPORT_TYPE_OPTIONS = [
   { value: '', label: 'Tất cả' },
@@ -884,9 +886,12 @@ export default function ReportManagement() {
     return REPORT_TYPE_OPTIONS;
   }, [scopeFromUrl]);
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const loadItems = useCallback(async ({ silent = false } = {}) => {
+    // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const token = await getIdToken();
@@ -901,21 +906,26 @@ export default function ReportManagement() {
         ...dateQueryParams,
       });
 
-      setItems(payload.data?.items || []);
-      setPagination(
-        payload.data?.pagination || {
+      setItems((current) => mergeListById(current, payload.data?.items || []));
+      setPagination((current) =>
+        keepIfSame(current, payload.data?.pagination || {
           page: 1,
           limit: DEFAULT_PAGE_SIZE,
           total: 0,
           totalPages: 1,
-        },
+        }),
       );
-      setDataMeta(payload.data?.meta || null);
+      setDataMeta((current) => keepIfSame(current, payload.data?.meta || null));
     } catch (loadError) {
+      if (silent) {
+        return;
+      }
       setError(loadError.message || 'Không tải được danh sách báo cáo.');
       setItems([]);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [getIdToken, limit, page, productIdFromUrl, reportType, scopeFromUrl, search, statusParam, dateFrom, dateTo, dateQueryParams]);
 
@@ -943,7 +953,9 @@ export default function ReportManagement() {
     loadItems();
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('report', loadItems);
+  useAdminRealtimeRefresh('report', () => loadItems({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   useEffect(() => {
     if (!snackbar) {

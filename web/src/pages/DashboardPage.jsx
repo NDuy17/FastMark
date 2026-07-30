@@ -23,6 +23,8 @@ import { getAdminDashboard } from '../api/dashboardApi';
 import DashboardDateRange, { presetDates } from '../components/DashboardDateRange';
 import { useAuth } from '../context/AuthContext';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
+import { keepIfSame } from '../utils/realtimeList';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
@@ -540,26 +542,39 @@ export default function DashboardPage() {
   // null = chưa chọn ô nào, ẩn biểu đồ xu hướng cho gọn.
   const [selectedMetric, setSelectedMetric] = useState(null);
 
-  const loadDashboard = useCallback(async () => {
-    if (!from || !to) return;
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const data = await getAdminDashboard(token, { from, to });
-      setDashboard(data);
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được dashboard.');
-    } finally {
-      setLoading(false);
-    }
-  }, [from, getIdToken, to]);
+  const loadDashboard = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!from || !to) return;
+      // silent = đồng bộ realtime: giữ nguyên số liệu đang xem, chỉ ô nào đổi mới render lại.
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const data = await getAdminDashboard(token, { from, to });
+        setDashboard((current) => keepIfSame(current, data));
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được dashboard.');
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [from, getIdToken, to]
+  );
 
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
 
-  useAdminRealtimeRefresh('*', loadDashboard);
+  useAdminRealtimeRefresh('*', () => loadDashboard({ silent: true }), {
+    coalesceMs: REALTIME_COALESCE_MS,
+  });
 
   const cards = dashboard?.cards || {};
   const charts = dashboard?.charts || {};

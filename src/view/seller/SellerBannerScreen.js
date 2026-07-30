@@ -22,6 +22,7 @@ import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { buyerTheme as t } from '../../core/theme/buyerTheme';
 import { formatPrice } from '../../core/utils/productFormat';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { isSameData } from '../../core/utils/realtimeList';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { useResourceSocket } from '../../hooks/useResourceSocket';
 import ProfileSubScreen from '../profile/ProfileSubScreen';
@@ -106,11 +107,13 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
   }, []);
 
   const load = useCallback(
-    async ({ selectBannerId = null, closeDetail = true } = {}) => {
-      setIsLoading(true);
+    async ({ selectBannerId = null, closeDetail = true, silent = false } = {}) => {
+      if (!silent) {
+        setIsLoading(true);
+      }
       try {
         const result = await loadSellerBannerViewModel();
-        setData(result);
+        setData((current) => (isSameData(current, result) ? current : result));
         if (selectBannerId) {
           const banner = (result?.banners || []).find(
             (item) => String(item.id) === String(selectBannerId)
@@ -136,7 +139,9 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
         }
         return null;
       } finally {
-        setIsLoading(false);
+        if (!silent) {
+          setIsLoading(false);
+        }
       }
     },
     [fillFormFromBanner, onOpenSubscription]
@@ -146,14 +151,21 @@ export default function SellerBannerScreen({ onBack, onOpenWallet, onOpenSubscri
     load();
   }, [load]);
 
+  const handleBannerRealtime = useCallback(
+    (payload) => {
+      const type = String(payload?.type || '').trim();
+      if (type !== 'banner' && type !== 'wallet') {
+        return;
+      }
+      // Cập nhật im lặng: không bật spinner toàn màn, không đóng form đang mở.
+      load({ closeDetail: false, silent: true });
+    },
+    [load]
+  );
+
   useResourceSocket({
     enabled: true,
-    onResourceUpdated: (payload) => {
-      const type = String(payload?.type || '').trim();
-      if (type === 'banner' || type === 'wallet') {
-        load();
-      }
-    },
+    onResourceUpdated: handleBannerRealtime,
   });
 
   const loadProducts = useCallback(async ({ nextPage = 1 } = {}) => {

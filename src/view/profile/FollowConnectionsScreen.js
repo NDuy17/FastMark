@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -21,12 +21,13 @@ import { showErrorAlert } from '../../core/utils/appAlert';
 import SubScreenHeader from '../shared/components/SubScreenHeader';
 import ClearableSearchField from '../shared/components/ClearableSearchField';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 const SEARCH_DEBOUNCE_MS = 400;
 const FOLLOWERS_REFRESH_MS = 20000;
 
-function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
+const ConnectionRow = memo(function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
   const isShop = Boolean(item.shopId || item.shopName);
   const avatar = item.avatar || item.shopAvatar;
   const title = item.shopName || item.fullName || item.userName || (isShop ? 'Gian hàng' : 'Người dùng');
@@ -72,7 +73,7 @@ function ConnectionRow({ item, showUnfollow, onUnfollow, onOpenShop }) {
       ) : null}
     </Pressable>
   );
-}
+});
 
 /**
  * mode:
@@ -157,8 +158,16 @@ export default function FollowConnectionsScreen({
           result?.pagination || { page: nextPage, limit: 20, total: rows.length, totalPages: 1 }
         );
         setPage(nextPage);
-        setItems((current) => (nextPage > 1 ? [...current, ...rows] : rows));
+        setItems((current) =>
+          nextPage > 1
+            ? [...current, ...rows]
+            : mergeListById(current, rows, (row) => String(row?.shopId || row?.id || ''))
+        );
       } catch (loadError) {
+        if (silent) {
+          // Refresh nền thất bại: giữ nguyên danh sách, không báo lỗi, không nháy.
+          return;
+        }
         if (nextPage === 1) {
           setItems([]);
         }

@@ -12,7 +12,9 @@ import { useAuth } from '../context/AuthContext';
 import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
 import { useAdminDateFilter } from '../hooks/useAdminDateFilter';
 import { useAdminRealtimeRefresh } from '../hooks/useAdminRealtimeRefresh';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDate, formatDateDisplay, formatPrice } from '../utils/format';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
@@ -143,41 +145,62 @@ export default function SellerSubscriptionsPage() {
   const { input: searchInput, debounced: search, setInput: setSearchInput } = useDebouncedSearch();
   const [selected, setSelected] = useState(null);
 
-  const loadRevenue = useCallback(async () => {
-    setRevenueLoading(true);
-    setRevenueError('');
-    try {
-      const token = await getIdToken();
-      const dashboard = await getAdminDashboard(token, buildDashboardQuery(from, to));
-      setRevenueData(dashboard);
-    } catch (loadError) {
-      setRevenueError(loadError.message || 'Không tải được doanh thu gói.');
-      setRevenueData(null);
-    } finally {
-      setRevenueLoading(false);
-    }
-  }, [from, to, getIdToken]);
+  const loadRevenue = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setRevenueLoading(true);
+        setRevenueError('');
+      }
+      try {
+        const token = await getIdToken();
+        const dashboard = await getAdminDashboard(token, buildDashboardQuery(from, to));
+        setRevenueData((current) => keepIfSame(current, dashboard));
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setRevenueError(loadError.message || 'Không tải được doanh thu gói.');
+        setRevenueData(null);
+      } finally {
+        if (!silent) {
+          setRevenueLoading(false);
+        }
+      }
+    },
+    [from, to, getIdToken]
+  );
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const token = await getIdToken();
-      const payload = await listSellerSubscriptions(token, {
-        page: 1,
-        limit: 50,
-        status,
-        search,
-        ...historyQueryParams,
-      });
-      setItems(payload.data?.items || []);
-    } catch (loadError) {
-      setError(loadError.message || 'Không tải được danh sách subscription.');
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [getIdToken, historyFrom, historyQueryParams, historyTo, search, status]);
+  const loadItems = useCallback(
+    async ({ silent = false } = {}) => {
+      // silent = đồng bộ realtime: không bật loading, chỉ dòng nào đổi mới render lại.
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
+      try {
+        const token = await getIdToken();
+        const payload = await listSellerSubscriptions(token, {
+          page: 1,
+          limit: 50,
+          status,
+          search,
+          ...historyQueryParams,
+        });
+        setItems((current) => mergeListById(current, payload.data?.items || []));
+      } catch (loadError) {
+        if (silent) {
+          return;
+        }
+        setError(loadError.message || 'Không tải được danh sách subscription.');
+        setItems([]);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [getIdToken, historyFrom, historyQueryParams, historyTo, search, status]
+  );
 
   useEffect(() => {
     loadRevenue();
@@ -187,10 +210,14 @@ export default function SellerSubscriptionsPage() {
     loadItems();
   }, [loadItems]);
 
-  useAdminRealtimeRefresh('subscription', () => {
-    loadItems();
-    loadRevenue();
-  });
+  useAdminRealtimeRefresh(
+    'subscription',
+    () => {
+      loadItems({ silent: true });
+      loadRevenue({ silent: true });
+    },
+    { coalesceMs: REALTIME_COALESCE_MS }
+  );
 
   const revenueCards = revenueData?.cards || {};
   const revenueAllTime = isDashboardAllTime(from, to);

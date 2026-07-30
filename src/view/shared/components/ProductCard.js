@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -13,7 +14,7 @@ function formatProductDistance(product) {
   return '—';
 }
 
-export default function ProductCard({
+function ProductCard({
   product,
   isLiked,
   onToggleLike,
@@ -112,6 +113,9 @@ export default function ProductCard({
     </Pressable>
   );
 }
+
+/** Memo: chỉ render lại khi props của đúng thẻ sản phẩm đó thay đổi. */
+export default memo(ProductCard);
 
 const styles = StyleSheet.create({
   nearbyCard: {

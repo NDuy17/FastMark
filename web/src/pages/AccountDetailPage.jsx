@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -47,8 +47,10 @@ import {
   getHistoryStatusFilters,
   HISTORY_STATUS_FILTER_ALL,
 } from '../config/historyStatusFilters';
+import { REALTIME_COALESCE_MS } from '../constants/realtime';
 import { formatDate, formatMoney, formatPrice } from '../utils/format';
 import { goBackOr } from '../utils/navigation';
+import { keepIfSame, mergeListById } from '../utils/realtimeList';
 import { resolveMediaUrl } from '../utils/resolveMediaUrl';
 
 function statusBadgeClass(status) {
@@ -906,8 +908,9 @@ const HISTORY_TAB_REALTIME_RESOURCES = {
   products: 'product',
   wallet: 'wallet',
   withdrawals: 'withdraw',
-  reservations: 'reservation',
-  'shop-reservations': 'reservation',
+  // Backend phát event đơn hàng với type "order".
+  reservations: 'order',
+  'shop-reservations': 'order',
   'reports-filed': 'report',
   'reports-received': 'report',
   reviews: 'review',
@@ -956,6 +959,8 @@ export function ActivityHistorySection({
   const [removeLoading, setRemoveLoading] = useState(false);
   const [busyProductId, setBusyProductId] = useState('');
   const [reloadTick, setReloadTick] = useState(0);
+  // Lần tải kế tiếp đến từ realtime → không bật loading, không nháy bảng.
+  const silentReloadRef = useRef(false);
 
   useEffect(() => {
     if (!tabs.some((item) => item.id === tab)) {
@@ -974,8 +979,12 @@ export function ActivityHistorySection({
     let cancelled = false;
 
     async function load() {
-      setLoading(true);
-      setError('');
+      const silent = silentReloadRef.current;
+      silentReloadRef.current = false;
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
       try {
         const token = await getIdToken();
         const params = { tab, page, limit };
@@ -984,18 +993,25 @@ export function ActivityHistorySection({
         }
         const payload = await loadHistory(token, entityId, params);
         if (!cancelled) {
-          setData({
-            items: payload.data?.items || [],
-            pagination: payload.data?.pagination || null,
+          setData((current) => {
+            const nextItems = mergeListById(current.items, payload.data?.items || []);
+            const nextPagination = keepIfSame(
+              current.pagination,
+              payload.data?.pagination || null
+            );
+            if (nextItems === current.items && nextPagination === current.pagination) {
+              return current;
+            }
+            return { items: nextItems, pagination: nextPagination };
           });
         }
       } catch (loadError) {
-        if (!cancelled) {
+        if (!cancelled && !silent) {
           setError(loadError.message || 'Không tải được lịch sử.');
           setData({ items: [], pagination: null });
         }
       } finally {
-        if (!cancelled) {
+        if (!cancelled && !silent) {
           setLoading(false);
         }
       }
@@ -1009,11 +1025,13 @@ export function ActivityHistorySection({
 
   const realtimeResource = HISTORY_TAB_REALTIME_RESOURCES[tab] || '';
   const refreshFromRealtime = useCallback(() => {
+    silentReloadRef.current = true;
     setReloadTick((value) => value + 1);
   }, []);
 
   useAdminRealtimeRefresh(realtimeResource, refreshFromRealtime, {
     enabled: Boolean(realtimeResource),
+    coalesceMs: REALTIME_COALESCE_MS,
   });
 
   async function openDetail(item) {

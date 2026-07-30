@@ -19,6 +19,7 @@ import {
   prependUniqueNotification,
 } from '../../core/utils/notificationRealtime';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import { mergeListById } from '../../core/utils/realtimeList';
 import { matchesSearchAny, normalizeSearchText } from '../../core/utils/searchText';
 import { useNotificationSocket } from '../../hooks/useNotificationSocket';
 import { useMessageInboxSocket } from '../../hooks/useMessageInboxSocket';
@@ -138,40 +139,51 @@ export default function InboxScreen({
   const [isLoadingMoreNotifications, setIsLoadingMoreNotifications] = useState(false);
   const [notificationError, setNotificationError] = useState('');
   const notificationLoadGuardRef = useRef(false);
-  const loadConversations = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError('');
-
-    if (showSellerInbox) {
-      try {
-        const idToken = await getCurrentUserIdToken();
-        const data = await getSellerConversationsOnBackend(idToken);
-        setConversations(
-          (Array.isArray(data) ? data : []).filter((item) => hasRealMessage(item))
-        );
-      } catch {
-        setConversations([]);
-        setLoadError('Không tải được hộp thư người bán.');
-      } finally {
-        setIsLoading(false);
+  const loadConversations = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setIsLoading(true);
+        setLoadError('');
       }
-      return;
-    }
 
-    try {
-      const conversationRows = await getBuyerConversationsOnBackend();
-      setConversations(
-        (Array.isArray(conversationRows) ? conversationRows : []).filter((item) =>
+      if (showSellerInbox) {
+        try {
+          const idToken = await getCurrentUserIdToken();
+          const data = await getSellerConversationsOnBackend(idToken);
+          const rows = (Array.isArray(data) ? data : []).filter((item) => hasRealMessage(item));
+          setConversations((current) => mergeListById(current, rows));
+        } catch {
+          if (!silent) {
+            setConversations([]);
+            setLoadError('Không tải được hộp thư người bán.');
+          }
+        } finally {
+          if (!silent) {
+            setIsLoading(false);
+          }
+        }
+        return;
+      }
+
+      try {
+        const conversationRows = await getBuyerConversationsOnBackend();
+        const rows = (Array.isArray(conversationRows) ? conversationRows : []).filter((item) =>
           hasRealMessage(item)
-        )
-      );
-    } catch (error) {
-      setConversations([]);
-      setLoadError(error.message || 'Không tải được hộp thư. Vui lòng đăng nhập lại.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [showSellerInbox]);
+        );
+        setConversations((current) => mergeListById(current, rows));
+      } catch (error) {
+        if (!silent) {
+          setConversations([]);
+          setLoadError(error.message || 'Không tải được hộp thư. Vui lòng đăng nhập lại.');
+        }
+      } finally {
+        if (!silent) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [showSellerInbox]
+  );
 
   const loadNotifications = useCallback(async ({ nextPage = 1 } = {}) => {
     if (notificationLoadGuardRef.current) {
@@ -193,7 +205,7 @@ export default function InboxScreen({
       });
       const items = Array.isArray(result?.items) ? result.items : [];
       setNotifications((current) =>
-        nextPage === 1 ? items : appendUniqueById(current, items)
+        nextPage === 1 ? mergeListById(current, items) : appendUniqueById(current, items)
       );
       setNotificationPage(Number(result?.page) || nextPage);
       setNotificationsHasMore(Boolean(result?.hasMore));
@@ -247,7 +259,8 @@ export default function InboxScreen({
 
   const handleInboxMessageSent = useCallback(() => {
     if (messagesOnly || activeTab === 'messages') {
-      loadConversations();
+      // Realtime: đồng bộ im lặng, chỉ hội thoại có tin mới được render lại.
+      loadConversations({ silent: true });
     }
   }, [activeTab, loadConversations, messagesOnly]);
 
@@ -295,8 +308,8 @@ export default function InboxScreen({
         notification={selectedNotification}
         audience="buyer"
         onBack={() => {
+          // Trạng thái đã đọc được cập nhật ngay tại item (onMarkedRead) → không tải lại danh sách.
           setSelectedNotification(null);
-          loadNotifications({ nextPage: 1 });
         }}
         onMarkedRead={(id) => {
           setNotifications((current) =>
@@ -326,7 +339,7 @@ export default function InboxScreen({
         buyerAvatar={selectedChat.buyerAvatar}
         onBack={() => {
           setSelectedChat(null);
-          loadConversations();
+          loadConversations({ silent: true });
         }}
         onConversationPreviewChange={(conversationId, lastMessage) => {
           if (!conversationId || !lastMessage) {

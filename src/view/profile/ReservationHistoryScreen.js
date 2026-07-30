@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -8,7 +8,10 @@ import {
   View,
 } from 'react-native';
 
-import { getBuyerOrdersOnBackend } from '../../api/buyerOpsApi';
+import {
+  getBuyerOrdersOnBackend,
+  getBuyerReservationOnBackend,
+} from '../../api/buyerOpsApi';
 import { RESERVATION_STATUS, RESERVATION_TAB } from '../../constants/sellerOrders';
 import {
   canReviewReservationOrder,
@@ -18,6 +21,12 @@ import {
   submitShopReview,
 } from '../../core/utils/orderReview';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
+import {
+  hasItemId,
+  mergeListById,
+  removeById,
+  upsertById,
+} from '../../core/utils/realtimeList';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
 import { useOrderSocket } from '../../hooks/useOrderSocket';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
@@ -35,6 +44,24 @@ function formatDateTime(iso) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function toHistoryRow(reservation) {
+  return {
+    id: String(reservation.id),
+    reservationId: String(reservation.id),
+    orderCode: String(reservation.id),
+    shopId: reservation.shopId || reservation.storeId || '',
+    storeId: reservation.shopId || reservation.storeId || '',
+    productId: reservation.product?.id ? String(reservation.product.id) : '',
+    productName:
+      reservation.product?.productName || reservation.variant?.variantName || 'Sản phẩm',
+    storeName: reservation.storeName || 'Gian hàng',
+    quantity: Number(reservation.quantity || 1),
+    reservedAt: reservation.createdAt,
+    expiresAt: reservation.expiresAt || reservation.pickupDeadline,
+    status: reservation.status,
+  };
 }
 
 const STATUS_COLORS = {
@@ -121,6 +148,9 @@ export default function ReservationHistoryScreen({
   const [reviewTarget, setReviewTarget] = useState(null);
   const [localRefreshKey, setLocalRefreshKey] = useState(0);
   const [reservations, setReservations] = useState([]);
+  // Đọc danh sách hiện tại trong handler realtime mà không cần thêm dependency.
+  const reservationsRef = useRef(reservations);
+  reservationsRef.current = reservations;
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
@@ -151,25 +181,9 @@ export default function ReservationHistoryScreen({
         page: nextPage,
         limit: DEFAULT_PAGE_SIZE,
       });
-      const rows = (data?.reservations || []).map((reservation) => ({
-        id: String(reservation.id),
-        reservationId: String(reservation.id),
-        orderCode: String(reservation.id),
-        shopId: reservation.shopId || reservation.storeId || '',
-        storeId: reservation.shopId || reservation.storeId || '',
-        productId: reservation.product?.id ? String(reservation.product.id) : '',
-        productName:
-          reservation.product?.productName ||
-          reservation.variant?.variantName ||
-          'Sản phẩm',
-        storeName: reservation.storeName || 'Gian hàng',
-        quantity: Number(reservation.quantity || 1),
-        reservedAt: reservation.createdAt,
-        expiresAt: reservation.expiresAt || reservation.pickupDeadline,
-        status: reservation.status,
-      }));
+      const rows = (data?.reservations || []).map(toHistoryRow);
       setReservations((current) =>
-        nextPage === 1 ? rows : appendUniqueById(current, rows)
+        nextPage === 1 ? mergeListById(current, rows) : appendUniqueById(current, rows)
       );
       setPage(Number(data?.page) || nextPage);
       setHasMore(
@@ -200,9 +214,44 @@ export default function ReservationHistoryScreen({
     loadReservations({ nextPage: 1 });
   }, [loadReservations, localRefreshKey]);
 
-  const handleOrderUpdated = useCallback(() => {
-    loadReservations({ nextPage: 1 });
-  }, [loadReservations]);
+  /** Realtime: chỉ sửa đúng đơn thay đổi trong danh sách "đang giữ hàng". */
+  const handleOrderUpdated = useCallback(async (payload) => {
+    const reservationId = String(payload?.reservationId || payload?.id || '').trim();
+    if (!reservationId) {
+      return;
+    }
+
+    const stillPending =
+      Number(payload?.status) === RESERVATION_STATUS.PENDING_SELLER_CONFIRMATION;
+    const isInList = hasItemId(reservationsRef.current, reservationId);
+
+    if (!stillPending) {
+      if (isInList) {
+        setReservations((current) => removeById(current, reservationId));
+        setTotalCount((current) => Math.max(0, current - 1));
+      }
+      return;
+    }
+
+    try {
+      const idToken = await getCurrentUserIdToken();
+      if (!idToken) {
+        return;
+      }
+      const reservation = await getBuyerReservationOnBackend(idToken, reservationId);
+      if (!reservation?.id) {
+        return;
+      }
+      setReservations((current) =>
+        upsertById(current, toHistoryRow(reservation), { position: 'start' })
+      );
+      if (!isInList) {
+        setTotalCount((current) => current + 1);
+      }
+    } catch {
+      // Giữ nguyên danh sách nếu tải lỗi.
+    }
+  }, []);
 
   useOrderSocket({
     enabled: true,
