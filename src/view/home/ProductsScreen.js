@@ -20,7 +20,7 @@ import {
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
 import { formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
-import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { resolveShopAvatarUri } from '../../core/utils/avatarInitial';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { showErrorAlert } from '../../core/utils/appAlert';
@@ -683,7 +683,7 @@ export default function ProductsScreen({
                   >
                     <AvatarBadge
                       name={shop.shop_name || shop.name || 'Gian hàng'}
-                      uri={isRemoteAvatarUrl(shop.image_url) ? shop.image_url : ''}
+                      uri={resolveShopAvatarUri(shop)}
                       size={56}
                     />
                     <View style={styles.shopCardBody}>

@@ -4,19 +4,25 @@ import { StyleSheet, View } from 'react-native';
 import { createLeafletHtml, LEAFLET_HTML_REVISION, MAP_EVENT_SOURCE } from '../../../core/utils/leafletHtml';
 import { hasValidLocation } from '../../../core/utils/geo';
 import { createLogger } from '../../../core/utils/logger';
+import { useDebouncedMapRestaurants } from '../../../hooks/useDebouncedMapRestaurants';
+import { useThrottledCallback } from '../../../hooks/useThrottledCallback';
 
 const MAP_COMMAND_SOURCE = 'fastmark-map-command';
 const log = createLogger('LeafletMap');
+const NAV_LOCATION_THROTTLE_MS = 180;
+const NAV_ROUTE_THROTTLE_MS = 350;
 
 export default function LeafletMap({
   currentLocation,
   radiusCircle,
   recenterRequest,
   routeRequest,
+  routePolyline,
   scanLocation,
   restaurants,
   onEvent,
   navigationMode = false,
+  followUser = false,
   interactive = true,
 }) {
   const iframeRef = useRef(null);
@@ -24,9 +30,11 @@ export default function LeafletMap({
   const initialLocationRef = useRef(currentLocation);
   const hasCenteredRef = useRef(false);
   const pendingCommandsRef = useRef([]);
+  const routePolylineRef = useRef(routePolyline);
   const [ready, setReady] = useState(false);
 
   onEventRef.current = onEvent;
+  routePolylineRef.current = routePolyline;
 
   const html = useMemo(
     () => createLeafletHtml({ currentLocation: initialLocationRef.current }),
@@ -54,6 +62,28 @@ export default function LeafletMap({
     );
   }
 
+  const sendNavLocationUpdate = useThrottledCallback((location, follow) => {
+    sendCommand({
+      type: 'updateNavigationLocation',
+      location,
+      followUser: follow,
+    });
+  }, NAV_LOCATION_THROTTLE_MS);
+
+  const sendNavRouteUpdate = useThrottledCallback((polyline) => {
+    if (!polyline?.coordinates?.length || !hasValidLocation(polyline?.destination)) {
+      sendCommand({ type: 'clearRoute' });
+      return;
+    }
+
+    sendCommand({
+      type: 'setRoutePolyline',
+      coordinates: polyline.coordinates,
+      destination: polyline.destination,
+      fitBounds: Boolean(polyline.fitBounds),
+    });
+  }, NAV_ROUTE_THROTTLE_MS);
+
   useEffect(() => {
     if (!ready || pendingCommandsRef.current.length === 0) {
       return;
@@ -79,25 +109,47 @@ export default function LeafletMap({
     return () => window.removeEventListener('message', handleMessage);
   }, [onEvent]);
 
+  useDebouncedMapRestaurants(restaurants, ready, sendCommand);
+
   useEffect(() => {
     if (!ready || !hasValidLocation(currentLocation)) {
+      return;
+    }
+
+    if (navigationMode) {
+      sendNavLocationUpdate(currentLocation, followUser);
       return;
     }
 
     sendCommand({
       type: 'location',
       location: currentLocation,
-      recenter: navigationMode ? false : !hasCenteredRef.current,
+      recenter: !hasCenteredRef.current,
     });
 
-    if (!navigationMode && !hasCenteredRef.current) {
+    if (!hasCenteredRef.current) {
       hasCenteredRef.current = true;
     }
-  }, [currentLocation, ready, navigationMode]);
+  }, [currentLocation, followUser, navigationMode, ready, sendNavLocationUpdate]);
 
   useEffect(() => {
-    sendCommand({ type: 'showRestaurants', restaurants });
-  }, [restaurants, ready]);
+    if (!navigationMode) {
+      return;
+    }
+
+    const polyline = routePolylineRef.current;
+    if (polyline?.fitBounds) {
+      sendCommand({
+        type: 'setRoutePolyline',
+        coordinates: polyline.coordinates,
+        destination: polyline.destination,
+        fitBounds: true,
+      });
+      return;
+    }
+
+    sendNavRouteUpdate(polyline);
+  }, [navigationMode, routePolyline, ready, sendNavRouteUpdate]);
 
   useEffect(() => {
     sendCommand({
@@ -128,13 +180,17 @@ export default function LeafletMap({
   }, [scanLocation, ready]);
 
   useEffect(() => {
+    if (navigationMode) {
+      return undefined;
+    }
+
     if (!routeRequest?.to || !hasValidLocation(routeRequest.to)) {
       sendCommand({ type: 'clearRoute' });
-      return;
+      return undefined;
     }
 
     if (!hasValidLocation(routeRequest.from)) {
-      return;
+      return undefined;
     }
 
     sendCommand({
@@ -142,7 +198,19 @@ export default function LeafletMap({
       from: routeRequest.from,
       to: routeRequest.to,
     });
-  }, [routeRequest, ready]);
+
+    return undefined;
+  }, [navigationMode, routeRequest, ready]);
+
+  useEffect(() => {
+    if (!navigationMode) {
+      return undefined;
+    }
+
+    return () => {
+      sendCommand({ type: 'clearRoute' });
+    };
+  }, [navigationMode, ready]);
 
   return (
     <View style={styles.container} pointerEvents={interactive ? 'auto' : 'none'}>

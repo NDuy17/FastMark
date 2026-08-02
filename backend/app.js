@@ -44,6 +44,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/banners', require('./routes/bannerRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
+app.use('/api/routing', require('./routes/routingRoutes'));
 app.post('/api/webhooks/payos', asyncHandler(walletController.payosWebhook));
 app.use('/api', storeRoutes);
 

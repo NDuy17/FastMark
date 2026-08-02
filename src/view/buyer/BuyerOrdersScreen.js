@@ -57,6 +57,8 @@ import OrderItemHeader from '../shared/components/OrderItemHeader';
 import OrderStatusTabBar from '../shared/components/OrderStatusTabBar';
 import BuyerOrderDetailScreen from './BuyerOrderDetailScreen';
 import BuyerShopQrScanScreen from './BuyerShopQrScanScreen';
+import StoreDetailScreen from '../store/StoreDetailScreen';
+import ProductDetailScreen from '../store/ProductDetailScreen';
 import { deleteBuyerReviewOnBackend } from '../../api/reviewApi';
 import { useReviewedOrderCodes } from '../../hooks/useReviewedOrderCodes';
 
@@ -774,6 +776,7 @@ export default function BuyerOrdersScreen({
   const [viewReviewTarget, setViewReviewTarget] = useState(null);
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const [detailTarget, setDetailTarget] = useState(null);
+  const [detailNestedNav, setDetailNestedNav] = useState(null);
   const [scanTarget, setScanTarget] = useState(null);
   const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0);
   const [orderReviewPatches, setOrderReviewPatches] = useState({});
@@ -977,6 +980,51 @@ export default function BuyerOrdersScreen({
     );
   }
 
+  if (detailNestedNav?.screen === 'product') {
+    return (
+      <View style={styles.screen}>
+        <ProductDetailScreen
+          productId={String(detailNestedNav.productId)}
+          onBack={() => {
+            if (detailNestedNav.storeId) {
+              setDetailNestedNav({
+                screen: 'store',
+                storeId: String(detailNestedNav.storeId),
+              });
+              return;
+            }
+            setDetailNestedNav(null);
+          }}
+          onStorePress={(storeId) =>
+            setDetailNestedNav({
+              screen: 'store',
+              storeId: String(storeId),
+              productId: String(detailNestedNav.productId),
+            })
+          }
+        />
+      </View>
+    );
+  }
+
+  if (detailNestedNav?.screen === 'store') {
+    return (
+      <View style={styles.screen}>
+        <StoreDetailScreen
+          storeId={String(detailNestedNav.storeId)}
+          onBack={() => setDetailNestedNav(null)}
+          onProductPress={(productId) =>
+            setDetailNestedNav({
+              screen: 'product',
+              productId: String(productId),
+              storeId: String(detailNestedNav.storeId),
+            })
+          }
+        />
+      </View>
+    );
+  }
+
   if (detailTarget) {
     return (
       <View style={styles.screen}>
@@ -988,9 +1036,20 @@ export default function BuyerOrdersScreen({
             if (detailTarget?.fromTab) {
               setActiveTab(detailTarget.fromTab);
             }
+            setDetailNestedNav(null);
             setDetailTarget(null);
           }}
           onChanged={() => setListRefreshKey((value) => value + 1)}
+          onOpenShop={({ shopId }) => {
+            setDetailNestedNav({ screen: 'store', storeId: String(shopId) });
+          }}
+          onOpenProduct={({ productId, shopId }) => {
+            setDetailNestedNav({
+              screen: 'product',
+              productId: String(productId),
+              storeId: shopId ? String(shopId) : '',
+            });
+          }}
           onOpenShopScan={(item) => {
             setDetailTarget(null);
             setScanTarget(normalizeOrderItem(item || detailTarget.item));

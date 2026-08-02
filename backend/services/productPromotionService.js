@@ -9,6 +9,8 @@ const {
   seededOffset,
 } = require("../utils/pagination");
 
+const { resolveShopDisplayName } = require("../utils/shopIdentity");
+
 function createServiceError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -445,11 +447,7 @@ async function listActivePromotions({
     ).trim();
     const shop = shopId ? shopById.get(shopId) : null;
     const owner = shop ? ownerById.get(String(shop.userId)) : null;
-    const storeName =
-      String(owner?.FullName || "").trim() ||
-      String(owner?.UserName || "").trim() ||
-      String(shop?.shopName || "").trim() ||
-      (shop?.shopUsername ? `@${shop.shopUsername}` : "");
+    const storeName = resolveShopDisplayName(shop, owner);
 
     let distanceMeters = null;
     if (hasOrigin && shop && hasValidCoordinate(shop.latitude) && hasValidCoordinate(shop.longitude)) {

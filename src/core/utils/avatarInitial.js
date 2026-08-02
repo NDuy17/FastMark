@@ -13,3 +13,15 @@ export function getAvatarInitial(name, fallback = '?') {
 export function isRemoteAvatarUrl(value) {
   return /^https?:\/\//i.test(String(value || '').trim());
 }
+
+/** Shop avatar URL for list/map cards — empty when no remote image. */
+export function resolveShopAvatarUri(shop) {
+  const url = String(
+    shop?.image_url ||
+      shop?.cover_image_url ||
+      shop?.shopAvatar ||
+      shop?.avatar ||
+      ''
+  ).trim();
+  return isRemoteAvatarUrl(url) ? url : '';
+}

@@ -13,7 +13,6 @@ import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 
 import { getShopCategoriesOnBackend } from '../../api/productApi';
-import { fetchRouteDistancesFromOrigin } from '../../api/routingApi';
 
 import LeafletMap from '../shared/components/LeafletMap';
 import DirectionsScreen from './DirectionsScreen';
@@ -21,14 +20,23 @@ import AddressSearchBar from './AddressSearchBar';
 import ProductDetailScreen from '../store/ProductDetailScreen';
 import StoreDetailScreen from '../store/StoreDetailScreen';
 import ReservationScreen from '../buyer/ReservationScreen';
-import { calculateDistanceMeters, formatDistance, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
-import { loadNearbyRegisteredShops, reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
+import {
+  calculateDistanceMeters,
+  formatDistance,
+  formatNearbyDistanceLabel,
+  getDistanceFromCurrentLocation,
+  hasValidLocation,
+  normalizeExpoLocation,
+} from '../../core/utils/geo';
+import useLocationWatcher from '../../hooks/useLocationWatcher';
+import { loadAllNearbyShopsForMap, loadNearbyRegisteredShops, reverseGeocodeLocation } from '../../viewmodel/map/mapViewModel';
 import { loadStoreById } from '../../viewmodel/store/storeViewModel';
 import { mapLogger as log } from '../../core/utils/logger';
 import { RESERVATION_TAB } from '../../constants/sellerOrders';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import LoadMoreButton from '../shared/components/LoadMoreButton';
-import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { resolveShopAvatarUri } from '../../core/utils/avatarInitial';
+import { buildMapMarkerPayload } from '../../core/utils/mapMarkerPayload';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 
 const TYPE_LABEL = {
@@ -44,6 +52,7 @@ const MAP_FLEX_HALF = 3;
 const SHOP_FLEX_HALF = 3;
 const MAP_FLEX_SHOP_COLLAPSED = 5;
 const SHOP_FLEX_COLLAPSED = 1;
+const DEFAULT_SCAN_RADIUS_METERS = 1000;
 
 function formatScanCoords(location) {
   if (!hasValidLocation(location)) {
@@ -83,9 +92,15 @@ export default function MapScreen({
   onNavigationStateChange,
   isScreenActive = true,
 }) {
-  const watcherRef = useRef(null);
-  const mountedRef = useRef(false);
-  const [currentLocation, setCurrentLocation] = useState(null);
+  const [directionsSession, setDirectionsSession] = useState(null);
+  const handleLocationError = useCallback((error) => {
+    log.fail('location:tracking-failed', error);
+  }, []);
+  const currentLocation = useLocationWatcher({
+    mode: 'discovery',
+    enabled: isScreenActive && !directionsSession,
+    onError: handleLocationError,
+  });
   const [scanLocation, setScanLocation] = useState(null);
   const [scanSystemAddress, setScanSystemAddress] = useState('');
   const [isResolvingScanAddress, setIsResolvingScanAddress] = useState(false);
@@ -93,19 +108,18 @@ export default function MapScreen({
   const [recenterRequest, setRecenterRequest] = useState(null);
 
   const [menuVisible, setMenuVisible] = useState(false);
-  const [selectedRadius, setSelectedRadius] = useState(5000);
+  const [selectedRadius, setSelectedRadius] = useState(DEFAULT_SCAN_RADIUS_METERS);
   // Giá trị đang kéo trên slider (commit vào selectedRadius khi thả tay).
-  const [radiusDraft, setRadiusDraft] = useState(5000);
+  const [radiusDraft, setRadiusDraft] = useState(DEFAULT_SCAN_RADIUS_METERS);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [registeredShops, setRegisteredShops] = useState([]);
+  const [mapMarkerShops, setMapMarkerShops] = useState([]);
   const [isScanningShops, setIsScanningShops] = useState(false);
   const [isLoadingMoreShops, setIsLoadingMoreShops] = useState(false);
   const [shopsHasMore, setShopsHasMore] = useState(false);
   const [shopsTotal, setShopsTotal] = useState(0);
   const [storeNav, setStoreNav] = useState(null);
   const [activeReservation, setActiveReservation] = useState(null);
-  const [directionsSession, setDirectionsSession] = useState(null);
-  const [routeDistanceById, setRouteDistanceById] = useState({});
   const [isShopPanelExpanded, setIsShopPanelExpanded] = useState(false);
   const [shopCategories, setShopCategories] = useState([]);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -127,11 +141,18 @@ export default function MapScreen({
     setMenuVisible(false);
   }, []);
 
-  const lastAcceptedRef = useRef(null);
   const reverseScanRequestRef = useRef(0);
   const scanFetchTimerRef = useRef(null);
   const lastScanFetchRef = useRef(null);
   const shopsPageRef = useRef(1);
+
+  const beginScanRefresh = useCallback(() => {
+    setIsScanningShops(true);
+    setRegisteredShops([]);
+    setMapMarkerShops([]);
+    setShopsHasMore(false);
+    setShopsTotal(0);
+  }, []);
 
   const resolveScanAddress = useCallback(async (location) => {
     if (!hasValidLocation(location)) {
@@ -233,98 +254,6 @@ export default function MapScreen({
     });
   }, []);
 
-  const startLocationTracking = useCallback(async () => {
-    watcherRef.current?.remove();
-    watcherRef.current = null;
-
-    const updateLocationSafely = (loc) => {
-      if (!loc || !mountedRef.current) {
-        return;
-      }
-
-      const prev = lastAcceptedRef.current;
-      if (!prev) {
-        lastAcceptedRef.current = loc;
-        log.ok('location:first-fix', { lat: loc.latitude, lng: loc.longitude, accuracy: loc.accuracy });
-        setCurrentLocation(loc);
-        return;
-      }
-
-      if (loc.accuracy > 150) {
-        log.debug('location:skip-low-accuracy', { accuracy: loc.accuracy });
-        return;
-      }
-
-      const dist = calculateDistanceMeters(prev, loc);
-      if (dist !== null && dist < 3) {
-        return;
-      }
-
-      lastAcceptedRef.current = loc;
-      log.debug('location:update', { lat: loc.latitude, lng: loc.longitude, dist });
-      setCurrentLocation(loc);
-    };
-
-    try {
-      log.info('location:request-permission');
-      const permission = await Location.requestForegroundPermissionsAsync();
-
-      if (!mountedRef.current || permission.status !== 'granted') {
-        log.warn('location:permission-denied', { status: permission.status });
-        return;
-      }
-
-      log.ok('location:permission-granted');
-
-      const lastKnown = await Location.getLastKnownPositionAsync({
-        maxAge: 60000,
-        requiredAccuracy: 200,
-      }).catch(() => null);
-
-      if (mountedRef.current && lastKnown) {
-        updateLocationSafely(normalizeExpoLocation(lastKnown));
-      }
-
-      const preciseLocation = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      }).catch(() => null);
-
-      if (mountedRef.current && preciseLocation) {
-        updateLocationSafely(normalizeExpoLocation(preciseLocation));
-      }
-
-      const watcher = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          distanceInterval: 1,
-          timeInterval: 2000,
-        },
-        (location) => {
-          updateLocationSafely(normalizeExpoLocation(location));
-        }
-      );
-
-      if (mountedRef.current) {
-        watcherRef.current = watcher;
-      } else {
-        watcher.remove();
-      }
-    } catch (error) {
-      log.fail('location:tracking-failed', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    startLocationTracking();
-
-    return () => {
-      mountedRef.current = false;
-      watcherRef.current?.remove();
-      watcherRef.current = null;
-    };
-  }, [startLocationTracking]);
-
   useEffect(() => {
     if (!hasValidLocation(currentLocation) || usingCustomScan) {
       return;
@@ -333,8 +262,7 @@ export default function MapScreen({
     setScanLocation((prev) => {
       if (hasValidLocation(prev)) {
         const movedMeters = calculateDistanceMeters(prev, currentLocation);
-        // Tránh GPS nhấp nháy hủy liên tục request quét.
-        if (movedMeters !== null && movedMeters < 40) {
+        if (movedMeters !== null && movedMeters < 50) {
           return prev;
         }
       }
@@ -346,6 +274,7 @@ export default function MapScreen({
   useEffect(() => {
     if (selectedCategory === 'none') {
       setRegisteredShops([]);
+      setMapMarkerShops([]);
       setShopsHasMore(false);
       setShopsTotal(0);
       setIsScanningShops(false);
@@ -359,16 +288,27 @@ export default function MapScreen({
     let isCurrent = true;
     // null = tắt lọc hiển thị → quét rộng (unlimited phía API).
     const effectiveRadius = selectedRadius == null ? 0 : selectedRadius;
+    const categoryKey =
+      selectedCategory === 'all' || selectedCategory === 'none' ? 'all' : String(selectedCategory);
+    const locKey = `${Number(scanLocation.latitude).toFixed(4)},${Number(scanLocation.longitude).toFixed(4)},${effectiveRadius},${categoryKey}`;
+
+    if (lastScanFetchRef.current !== locKey) {
+      setIsScanningShops(true);
+      setRegisteredShops([]);
+      setMapMarkerShops([]);
+      setShopsHasMore(false);
+      setShopsTotal(0);
+    }
 
     if (scanFetchTimerRef.current) {
       clearTimeout(scanFetchTimerRef.current);
     }
 
     const runFetch = () => {
-      const categoryKey =
-        selectedCategory === 'all' || selectedCategory === 'none' ? 'all' : String(selectedCategory);
-      const locKey = `${Number(scanLocation.latitude).toFixed(4)},${Number(scanLocation.longitude).toFixed(4)},${effectiveRadius},${categoryKey}`;
       if (lastScanFetchRef.current === locKey) {
+        if (isCurrent) {
+          setIsScanningShops(false);
+        }
         return;
       }
 
@@ -382,14 +322,24 @@ export default function MapScreen({
 
       setIsScanningShops(true);
       shopsPageRef.current = 1;
-      loadNearbyRegisteredShops({
+      const shopCategoryId =
+        selectedCategory === 'all' || selectedCategory === 'none' ? '' : selectedCategory;
+      const fetchParams = {
         latitude: scanLocation.latitude,
         longitude: scanLocation.longitude,
         radiusMeters: effectiveRadius,
-        shopCategoryId: selectedCategory === 'all' || selectedCategory === 'none' ? '' : selectedCategory,
+        shopCategoryId,
+      };
+
+      const listPromise = loadNearbyRegisteredShops({
+        ...fetchParams,
         page: 1,
         limit: DEFAULT_PAGE_SIZE,
-      })
+      });
+
+      const mapPromise = loadAllNearbyShopsForMap(fetchParams);
+
+      listPromise
         .then((data) => {
           if (!isCurrent) {
             return;
@@ -407,7 +357,6 @@ export default function MapScreen({
           if (!isCurrent) {
             return;
           }
-          // Không khóa locKey khi lỗi — lần sau vẫn quét lại được.
           lastScanFetchRef.current = null;
           log.fail('fetchRegisteredShops:map-failed', error);
         })
@@ -416,10 +365,26 @@ export default function MapScreen({
             setIsScanningShops(false);
           }
         });
+
+      mapPromise
+        .then((shops) => {
+          if (!isCurrent) {
+            return;
+          }
+          log.ok('fetchMapMarkers:loaded', { count: shops.length });
+          setMapMarkerShops(Array.isArray(shops) ? shops : []);
+        })
+        .catch((error) => {
+          if (!isCurrent) {
+            return;
+          }
+          log.fail('fetchMapMarkers:failed', error);
+          setMapMarkerShops([]);
+        });
     };
 
-    // Tab đang mở: quét ngay. Tab ẩn: debounce nhẹ để preload.
-    const delayMs = isScreenActive ? 0 : 400;
+    // Tab đang mở: debounce 3s trước khi quét lại. Tab ẩn: debounce nhẹ để preload.
+    const delayMs = isScreenActive ? 3000 : 400;
     scanFetchTimerRef.current = setTimeout(runFetch, delayMs);
 
     return () => {
@@ -519,6 +484,13 @@ export default function MapScreen({
     [shopCategoryLookup]
   );
 
+  const liveDistanceOrigin = useMemo(() => {
+    if (usingCustomScan && hasValidLocation(scanLocation)) {
+      return scanLocation;
+    }
+    return currentLocation;
+  }, [usingCustomScan, scanLocation, currentLocation]);
+
   const startDirectionsToStore = useCallback(
     ({ shopId, storeName, latitude, longitude, categoryId = '', storeAvatar = '' }) => {
       const nextLatitude = Number(latitude);
@@ -536,6 +508,7 @@ export default function MapScreen({
         reservationId: null,
         storeName: storeName || 'Gian hàng',
         storeAvatar: String(storeAvatar || '').trim(),
+        initialLocation: hasValidLocation(liveDistanceOrigin) ? { ...liveDistanceOrigin } : null,
         destination: {
           latitude: nextLatitude,
           longitude: nextLongitude,
@@ -545,7 +518,7 @@ export default function MapScreen({
       });
       onClearFocus?.();
     },
-    [onClearFocus]
+    [onClearFocus, liveDistanceOrigin]
   );
 
   useEffect(() => {
@@ -592,6 +565,7 @@ export default function MapScreen({
           reservationId: focusStoreRequest?.reservationId || null,
           storeName: focusStoreRequest?.storeName || enrichedStore.name || 'Gian hàng',
           storeAvatar: String(enrichedStore.image_url || enrichedStore.cover_image_url || '').trim(),
+          initialLocation: hasValidLocation(liveDistanceOrigin) ? { ...liveDistanceOrigin } : null,
           destination: {
             latitude: targetStore.latitude,
             longitude: targetStore.longitude,
@@ -629,112 +603,86 @@ export default function MapScreen({
     return () => {
       isCurrent = false;
     };
-  }, [focusStoreRequest, registeredShops, enrichShopWithCategory]);
+  }, [focusStoreRequest, registeredShops, enrichShopWithCategory, liveDistanceOrigin]);
 
-  const mapItems = useMemo(() => {
-    if (selectedCategory === 'none') {
-      return [];
-    }
+  const shopDistanceOrigin = hasValidLocation(scanLocation) ? scanLocation : liveDistanceOrigin;
 
-    const enrichedShops = registeredShops.map(enrichShopWithCategory);
+  const filterShopsByCategory = useCallback(
+    (shops) => {
+      if (selectedCategory === 'none') {
+        return [];
+      }
 
-    if (selectedCategory === 'all') {
-      return enrichedShops;
-    }
+      const enrichedShops = shops.map(enrichShopWithCategory);
 
-    return enrichedShops.filter(
-      (item) => String(item.category_id || item.categoryId || '') === String(selectedCategory)
-    );
-  }, [registeredShops, selectedCategory, enrichShopWithCategory]);
+      if (selectedCategory === 'all') {
+        return enrichedShops;
+      }
 
-  const visibleRestaurants = useMemo(() => {
-    const distanceOrigin = scanLocation || currentLocation;
-
-    if (!hasValidLocation(distanceOrigin) || mapItems.length === 0) {
-      return mapItems;
-    }
-
-    const enriched = mapItems.map((item) => {
-      const distanceMeters = Number.isFinite(Number(item.distance_meters))
-        ? Number(item.distance_meters)
-        : calculateDistanceMeters(distanceOrigin, item);
-
-      return {
-        ...item,
-        distance_meters: distanceMeters,
-      };
-    });
-
-    const filtered = selectedRadius
-      ? enriched.filter(
-          (item) =>
-            item.distance_meters !== null &&
-            Number.isFinite(item.distance_meters) &&
-            item.distance_meters <= selectedRadius
-        )
-      : enriched;
-
-    return [...filtered].sort(
-      (left, right) => (left.distance_meters ?? Number.MAX_SAFE_INTEGER) - (right.distance_meters ?? Number.MAX_SAFE_INTEGER)
-    );
-  }, [mapItems, scanLocation, currentLocation, selectedRadius]);
-
-  const distanceOrigin = scanLocation || currentLocation;
-  const visibleRestaurantIds = useMemo(
-    () => visibleRestaurants.map((item) => String(item.id)).join('|'),
-    [visibleRestaurants]
+      return enrichedShops.filter(
+        (item) => String(item.category_id || item.categoryId || '') === String(selectedCategory)
+      );
+    },
+    [selectedCategory, enrichShopWithCategory]
   );
 
-  useEffect(() => {
-    if (!hasValidLocation(distanceOrigin) || visibleRestaurants.length === 0) {
-      setRouteDistanceById({});
-      return undefined;
-    }
+  const enrichAndFilterByRadius = useCallback(
+    (items) => {
+      if (!hasValidLocation(shopDistanceOrigin) || items.length === 0) {
+        return items;
+      }
 
-    let active = true;
-    const timer = setTimeout(() => {
-      fetchRouteDistancesFromOrigin(distanceOrigin, visibleRestaurants)
-        .then((distances) => {
-          if (active) {
-            setRouteDistanceById(distances);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setRouteDistanceById({});
-          }
-        });
-    }, 350);
-
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [
-    distanceOrigin?.latitude,
-    distanceOrigin?.longitude,
-    visibleRestaurantIds,
-  ]);
-
-  // Khoảng cách hiển thị (marker + panel) là quãng đường đi thật theo OSRM,
-  // chỉ dùng khoảng cách đường chim bay khi chưa có kết quả định tuyến.
-  const displayRestaurants = useMemo(() => {
-    const enriched = visibleRestaurants.map((item) => {
-      const routeDistance = routeDistanceById[String(item.id)];
-      return {
+      const enriched = items.map((item) => ({
         ...item,
-        distance_meters: Number.isFinite(routeDistance) ? routeDistance : item.distance_meters,
-      };
-    });
+        distance_meters: getDistanceFromCurrentLocation(shopDistanceOrigin, item),
+      }));
 
-    return [...enriched].sort(
-      (left, right) =>
-        (left.distance_meters ?? Number.MAX_SAFE_INTEGER) -
-        (right.distance_meters ?? Number.MAX_SAFE_INTEGER)
-    );
-  }, [visibleRestaurants, routeDistanceById]);
+      const filtered = selectedRadius
+        ? enriched.filter(
+            (item) =>
+              item.distance_meters !== null &&
+              Number.isFinite(item.distance_meters) &&
+              item.distance_meters <= selectedRadius
+          )
+        : enriched;
 
-  const originLocation = distanceOrigin;
+      return [...filtered].sort(
+        (left, right) =>
+          (left.distance_meters ?? Number.MAX_SAFE_INTEGER) -
+          (right.distance_meters ?? Number.MAX_SAFE_INTEGER)
+      );
+    },
+    [shopDistanceOrigin, selectedRadius]
+  );
+
+  const filterMapMarkersByRadius = useCallback(
+    (items) => {
+      if (!selectedRadius) {
+        return items;
+      }
+
+      return items.filter((item) => {
+        const distance = Number(item.distance_meters ?? item.distanceMeters);
+        return Number.isFinite(distance) && distance <= selectedRadius;
+      });
+    },
+    [selectedRadius]
+  );
+
+  const mapRestaurantPayload = useMemo(
+    () =>
+      buildMapMarkerPayload(
+        filterMapMarkersByRadius(filterShopsByCategory(mapMarkerShops))
+      ),
+    [mapMarkerShops, filterShopsByCategory, filterMapMarkersByRadius]
+  );
+
+  const displayRestaurants = useMemo(
+    () => enrichAndFilterByRadius(filterShopsByCategory(registeredShops)),
+    [registeredShops, filterShopsByCategory, enrichAndFilterByRadius]
+  );
+
+  const originLocation = liveDistanceOrigin;
 
   const radiusCircleProp =
     selectedRadius && hasValidLocation(scanLocation || currentLocation)
@@ -742,8 +690,6 @@ export default function MapScreen({
       : null;
 
   function requestRecenter(location) {
-    lastAcceptedRef.current = location;
-    setCurrentLocation(location);
     setRecenterRequest({ location, at: Date.now() });
   }
 
@@ -751,7 +697,7 @@ export default function MapScreen({
     log.info('recenter:pressed');
     setUsingCustomScan(false);
 
-    const cached = lastAcceptedRef.current || currentLocation;
+    const cached = currentLocation;
     if (hasValidLocation(cached)) {
       requestRecenter(cached);
       log.info('recenter:instant', { lat: cached.latitude, lng: cached.longitude });
@@ -784,15 +730,11 @@ export default function MapScreen({
           requestRecenter(loc);
           log.debug('recenter:gps-refined', { lat: loc.latitude, lng: loc.longitude });
         } else if (!hasValidLocation(cached)) {
-          log.warn('recenter:no-location-restart-tracking');
-          startLocationTracking();
+          log.warn('recenter:no-location');
         }
       })
       .catch((error) => {
         log.fail('recenter:gps-failed', error);
-        if (!hasValidLocation(cached)) {
-          startLocationTracking();
-        }
       });
   }
 
@@ -815,12 +757,11 @@ export default function MapScreen({
 
     // Mở tab Khám phá: bỏ cache quét cũ và ép quét lại quanh vị trí gần nhất.
     lastScanFetchRef.current = null;
-    const cached = lastAcceptedRef.current;
-    if (hasValidLocation(cached) && !usingCustomScan) {
-      resolveScanAddress(cached);
-      setScanLocation({ ...cached });
+    if (hasValidLocation(currentLocation) && !usingCustomScan) {
+      resolveScanAddress(currentLocation);
+      setScanLocation({ ...currentLocation });
     }
-  }, [isScreenActive, usingCustomScan, resolveScanAddress]);
+  }, [isScreenActive, usingCustomScan, resolveScanAddress, currentLocation]);
 
   useEffect(() => {
     if (storeNav) {
@@ -877,21 +818,18 @@ export default function MapScreen({
   }
 
   function formatNearbyDistance(distanceMeters) {
-    const distance = Number(distanceMeters);
-    if (!Number.isFinite(distance)) {
-      return '--';
-    }
-    // Cùng cách làm tròn với marker trên bản đồ để hai chỗ không lệch số.
-    if (distance >= 1000) {
-      return `Cách ${(distance / 1000).toFixed(1)}km`;
-    }
-    return `Cách ${Math.round(distance)}m`;
+    return formatNearbyDistanceLabel(distanceMeters);
   }
 
   function adjustRadius(delta) {
     const base = selectedRadius == null ? 0 : Number(selectedRadius) || 0;
     const next = Math.max(0, Math.min(RADIUS_SLIDER_MAX, base + delta));
-    setSelectedRadius(next > 0 ? next : null);
+    const nextRadius = next > 0 ? next : null;
+    if (nextRadius === selectedRadius) {
+      return;
+    }
+    beginScanRefresh();
+    setSelectedRadius(nextRadius);
   }
 
   useEffect(() => {
@@ -918,16 +856,21 @@ export default function MapScreen({
   const selectedRadiusLabel = formatRadiusLabel(selectedRadius);
 
   const showNearbyPanel =
-    selectedCategory !== 'none' && displayRestaurants.length > 0 && !storeNav;
+    selectedCategory !== 'none' &&
+    displayRestaurants.length > 0 &&
+    !storeNav &&
+    !isScanningShops;
+
+  const scannedPointsTotal = shopsTotal > 0 ? shopsTotal : displayRestaurants.length;
 
   const scanLocationLabel = useMemo(() => {
-    const coords = formatScanCoords(scanLocation || currentLocation);
+    const coords = formatScanCoords(liveDistanceOrigin || scanLocation || currentLocation);
     const address = isResolvingScanAddress
       ? 'Đang lấy địa chỉ hệ thống...'
       : scanSystemAddress || 'Chưa có địa chỉ hệ thống';
 
     return `${coords} · ${address}`;
-  }, [scanLocation, currentLocation, isResolvingScanAddress, scanSystemAddress]);
+  }, [liveDistanceOrigin, scanLocation, currentLocation, isResolvingScanAddress, scanSystemAddress]);
 
   const mapFlex = isShopPanelExpanded ? MAP_FLEX_HALF : MAP_FLEX_SHOP_COLLAPSED;
   const shopFlex = isShopPanelExpanded ? SHOP_FLEX_HALF : SHOP_FLEX_COLLAPSED;
@@ -1007,7 +950,7 @@ export default function MapScreen({
           scanLocation={
             usingCustomScan && hasValidLocation(scanLocation) ? scanLocation : null
           }
-          restaurants={displayRestaurants}
+          restaurants={mapRestaurantPayload}
           onEvent={handleMapEvent}
           interactive={!isSearchFocused}
         />
@@ -1075,9 +1018,13 @@ export default function MapScreen({
                 maximumTrackTintColor="#e2e8f0"
                 thumbTintColor="#076F32"
                 onValueChange={(value) => setRadiusDraft(value)}
-                onSlidingComplete={(value) =>
-                  setSelectedRadius(value > 0 ? Math.round(value) : null)
-                }
+                onSlidingComplete={(value) => {
+                  const nextRadius = value > 0 ? Math.round(value) : null;
+                  if (nextRadius !== selectedRadius) {
+                    beginScanRefresh();
+                    setSelectedRadius(nextRadius);
+                  }
+                }}
               />
               <View style={styles.radiusScaleRow}>
                 <Text style={styles.radiusScaleText}>0 km</Text>
@@ -1113,7 +1060,13 @@ export default function MapScreen({
                     key={cat.key}
                     category={cat}
                     selected={isSelected}
-                    onPress={() => setSelectedCategory(cat.key)}
+                    onPress={() => {
+                      if (cat.key === selectedCategory) {
+                        return;
+                      }
+                      beginScanRefresh();
+                      setSelectedCategory(cat.key);
+                    }}
                   />
                 );
               })}
@@ -1162,14 +1115,14 @@ export default function MapScreen({
           </View>
           <View style={[styles.nearbyPanel, { flex: shopFlex }]} onTouchStart={closeFilterMenu}>
           <Text style={styles.nearbyTitle}>
-            {showNearbyPanel
-              ? `${displayRestaurants.length} điểm trong ${selectedRadiusLabel} — chạm để xem`
-              : selectedCategory === 'none'
-                ? 'Chọn loại hiển thị để xem danh sách'
-                : !hasValidLocation(scanLocation || currentLocation)
-                  ? 'Đang lấy vị trí để quét gian hàng gần bạn...'
-                  : isScanningShops
-                    ? 'Đang quét gian hàng gần bạn...'
+            {selectedCategory === 'none'
+              ? 'Chọn loại hiển thị để xem danh sách'
+              : !hasValidLocation(scanLocation || currentLocation)
+                ? 'Đang lấy vị trí để quét gian hàng gần bạn...'
+                : isScanningShops
+                  ? 'Đang quét gian hàng gần bạn...'
+                  : showNearbyPanel
+                    ? `${scannedPointsTotal} điểm trong ${selectedRadiusLabel} — chạm để xem`
                     : `Không có điểm nào trong bán kính ${selectedRadiusLabel}`}
           </Text>
           {showNearbyPanel ? (
@@ -1182,11 +1135,7 @@ export default function MapScreen({
                 displayRestaurants.length > 0 ? (
                   <LoadMoreButton
                     currentCount={displayRestaurants.length}
-                    totalCount={
-                      shopsHasMore
-                        ? Math.max(shopsTotal, displayRestaurants.length + DEFAULT_PAGE_SIZE)
-                        : displayRestaurants.length
-                    }
+                    totalCount={scannedPointsTotal}
                     loading={isLoadingMoreShops}
                     onPress={loadMoreShops}
                   />
@@ -1201,9 +1150,7 @@ export default function MapScreen({
                 const rating = Number(restaurant.rating_avg ?? restaurant.averageRating ?? 0);
                 const distanceLabel = formatNearbyDistance(restaurant.distance_meters);
                 const isOpen = restaurant.is_open !== false && restaurant.is_open !== 0;
-                const avatarUrl = isRemoteAvatarUrl(restaurant.image_url)
-                  ? restaurant.image_url
-                  : '';
+                const avatarUrl = resolveShopAvatarUri(restaurant);
 
                 return (
                   <Pressable
@@ -1348,9 +1295,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fafafa',
   },
   nearbyThumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
     flexShrink: 0,
   },
   nearbyCardBody: {

@@ -5,8 +5,12 @@ import { WebView } from 'react-native-webview';
 import { createLeafletHtml, LEAFLET_HTML_REVISION, MAP_EVENT_SOURCE } from '../../../core/utils/leafletHtml';
 import { hasValidLocation } from '../../../core/utils/geo';
 import { createLogger } from '../../../core/utils/logger';
+import { useDebouncedMapRestaurants } from '../../../hooks/useDebouncedMapRestaurants';
+import { useThrottledCallback } from '../../../hooks/useThrottledCallback';
 
 const log = createLogger('LeafletMap');
+const NAV_LOCATION_THROTTLE_MS = 180;
+const NAV_ROUTE_THROTTLE_MS = 350;
 
 function parseMapMessage(data) {
   try {
@@ -22,10 +26,12 @@ export default function LeafletMap({
   radiusCircle,
   recenterRequest,
   routeRequest,
+  routePolyline,
   scanLocation,
   restaurants,
   onEvent,
   navigationMode = false,
+  followUser = false,
   interactive = true,
 }) {
   const webViewRef = useRef(null);
@@ -77,6 +83,33 @@ export default function LeafletMap({
     );
   }
 
+  useDebouncedMapRestaurants(restaurants, ready, sendCommand);
+
+  const sendNavLocationUpdate = useThrottledCallback((location, follow) => {
+    sendCommand({
+      type: 'updateNavigationLocation',
+      location,
+      followUser: follow,
+    });
+  }, NAV_LOCATION_THROTTLE_MS);
+
+  const sendNavRouteUpdate = useThrottledCallback((polyline) => {
+    if (!polyline?.coordinates?.length || !hasValidLocation(polyline?.destination)) {
+      sendCommand({ type: 'clearRoute' });
+      return;
+    }
+
+    sendCommand({
+      type: 'setRoutePolyline',
+      coordinates: polyline.coordinates,
+      destination: polyline.destination,
+      fitBounds: Boolean(polyline.fitBounds),
+    });
+  }, NAV_ROUTE_THROTTLE_MS);
+
+  const routePolylineRef = useRef(routePolyline);
+  routePolylineRef.current = routePolyline;
+
   useEffect(() => {
     flushPendingCommands();
   }, [ready]);
@@ -86,20 +119,40 @@ export default function LeafletMap({
       return;
     }
 
+    if (navigationMode) {
+      sendNavLocationUpdate(currentLocation, followUser);
+      return;
+    }
+
     sendCommand({
       type: 'location',
       location: currentLocation,
-      recenter: navigationMode ? false : !hasCenteredRef.current,
+      recenter: !hasCenteredRef.current,
     });
 
-    if (!navigationMode && !hasCenteredRef.current) {
+    if (!hasCenteredRef.current) {
       hasCenteredRef.current = true;
     }
-  }, [currentLocation, ready, navigationMode]);
+  }, [currentLocation, followUser, navigationMode, ready, sendNavLocationUpdate]);
 
   useEffect(() => {
-    sendCommand({ type: 'showRestaurants', restaurants });
-  }, [restaurants, ready]);
+    if (!navigationMode) {
+      return;
+    }
+
+    const polyline = routePolylineRef.current;
+    if (polyline?.fitBounds) {
+      sendCommand({
+        type: 'setRoutePolyline',
+        coordinates: polyline.coordinates,
+        destination: polyline.destination,
+        fitBounds: true,
+      });
+      return;
+    }
+
+    sendNavRouteUpdate(polyline);
+  }, [navigationMode, routePolyline, ready, sendNavRouteUpdate]);
 
   useEffect(() => {
     sendCommand({
@@ -130,13 +183,17 @@ export default function LeafletMap({
   }, [scanLocation, ready]);
 
   useEffect(() => {
+    if (navigationMode) {
+      return undefined;
+    }
+
     if (!routeRequest?.to || !hasValidLocation(routeRequest.to)) {
       sendCommand({ type: 'clearRoute' });
-      return;
+      return undefined;
     }
 
     if (!hasValidLocation(routeRequest.from)) {
-      return;
+      return undefined;
     }
 
     sendCommand({
@@ -144,7 +201,19 @@ export default function LeafletMap({
       from: routeRequest.from,
       to: routeRequest.to,
     });
-  }, [routeRequest, ready]);
+
+    return undefined;
+  }, [navigationMode, routeRequest, ready]);
+
+  useEffect(() => {
+    if (!navigationMode) {
+      return undefined;
+    }
+
+    return () => {
+      sendCommand({ type: 'clearRoute' });
+    };
+  }, [navigationMode, ready]);
 
   return (
     <View style={styles.container} pointerEvents={interactive ? 'auto' : 'none'}>

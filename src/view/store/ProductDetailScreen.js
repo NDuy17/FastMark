@@ -18,8 +18,8 @@ import { useSelector } from 'react-redux';
 
 import { formatPrice, formatPriceRange, getProductPromoPriceLabels, getPromotionalUnitPrice } from '../../core/utils/productFormat';
 import {
-  calculateDistanceMeters,
   formatDistance,
+  getDistanceFromCurrentLocation,
   hasValidLocation,
   normalizeExpoLocation,
 } from '../../core/utils/geo';
@@ -31,7 +31,6 @@ import {
   getFavoriteProductIdsOnBackend,
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
-import { fetchRouteDistanceMeters } from '../../api/routingApi';
 import { deleteProductOnBackend } from '../../api/productApi';
 import SellerProductDetailScreen from '../seller/SellerProductDetailScreen';
 import { loadProductById, loadStoreById } from '../../viewmodel/store/storeViewModel';
@@ -83,7 +82,6 @@ export default function ProductDetailScreen({
   const [quantity, setQuantity] = useState(1);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [originLocation, setOriginLocation] = useState(null);
-  const [routeDistanceMeters, setRouteDistanceMeters] = useState(null);
   const [showOwnerEdit, setShowOwnerEdit] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -199,61 +197,32 @@ export default function ProductDetailScreen({
     };
   }, []);
 
-  const straightLineDistanceMeters = useMemo(() => {
+  const distanceMeters = useMemo(() => {
     if (!store || !hasValidLocation(originLocation)) {
-      return null;
-    }
-    return calculateDistanceMeters(originLocation, {
-      latitude: store.latitude,
-      longitude: store.longitude,
-    });
-  }, [store, originLocation?.latitude, originLocation?.longitude]);
-
-  useEffect(() => {
-    if (!store || !hasValidLocation(originLocation) || !hasValidLocation(store)) {
-      setRouteDistanceMeters(null);
-      return undefined;
-    }
-
-    let active = true;
-    const timer = setTimeout(() => {
-      fetchRouteDistanceMeters(originLocation, {
-        latitude: store.latitude,
-        longitude: store.longitude,
-      })
-        .then((distance) => {
-          if (active) {
-            setRouteDistanceMeters(distance);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setRouteDistanceMeters(null);
-          }
-        });
-    }, 200);
-
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [
-    store?.id,
-    store?.latitude,
-    store?.longitude,
-    originLocation?.latitude,
-    originLocation?.longitude,
-  ]);
-
-  const distanceMeters = Number.isFinite(routeDistanceMeters)
-    ? routeDistanceMeters
-    : Number.isFinite(straightLineDistanceMeters)
-      ? straightLineDistanceMeters
-      : Number.isFinite(Number(product?.distanceMeters))
+      return Number.isFinite(Number(product?.distanceMeters))
         ? Number(product.distanceMeters)
         : Number.isFinite(Number(store?.distance_meters))
           ? Number(store.distance_meters)
           : null;
+    }
+
+    return (
+      getDistanceFromCurrentLocation(originLocation, {
+        latitude: store.latitude,
+        longitude: store.longitude,
+      }) ??
+      (Number.isFinite(Number(product?.distanceMeters))
+        ? Number(product.distanceMeters)
+        : Number.isFinite(Number(store?.distance_meters))
+          ? Number(store.distance_meters)
+          : null)
+    );
+  }, [
+    store,
+    product?.distanceMeters,
+    originLocation?.latitude,
+    originLocation?.longitude,
+  ]);
 
   const variants = product?.variants || [];
 

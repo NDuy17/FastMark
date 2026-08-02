@@ -43,6 +43,46 @@ export function calculateDistanceMeters(start, end) {
   return earthRadiusMeters * c;
 }
 
+/**
+ * Khoảng cách chuẩn từ vị trí hiện tại tới điểm đích (Haversine, làm tròn mét).
+ * Khám phá, Chỉ đường và chi tiết gian hàng đều dùng hàm này.
+ */
+export function getDistanceFromCurrentLocation(currentLocation, destination) {
+  const meters = calculateDistanceMeters(currentLocation, destination);
+  if (!Number.isFinite(meters)) {
+    return null;
+  }
+  return Math.round(meters);
+}
+
+export function estimateTravelDurationSeconds(distanceMeters, speedKmh = 30) {
+  const meters = Number(distanceMeters);
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return 0;
+  }
+  const metersPerSecond = (speedKmh * 1000) / 3600;
+  return Math.max(60, Math.ceil(meters / metersPerSecond));
+}
+
+export function formatDistanceLabel(distanceMeters) {
+  const distance = Number(distanceMeters);
+  if (!Number.isFinite(distance)) {
+    return '--';
+  }
+  if (distance >= 1000) {
+    return `${(distance / 1000).toFixed(1).replace(/\.0$/, '')} km`;
+  }
+  return `${Math.round(distance)} m`;
+}
+
+export function formatNearbyDistanceLabel(distanceMeters) {
+  const label = formatDistanceLabel(distanceMeters);
+  if (label === '--') {
+    return '--';
+  }
+  return `Cách ${label.replace(' ', '')}`;
+}
+
 export function formatDistance(distanceMeters) {
   const distance = Number(distanceMeters);
 

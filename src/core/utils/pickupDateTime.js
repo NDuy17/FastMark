@@ -1,3 +1,5 @@
+import { formatDistanceLabel } from './geo';
+
 function pad2(value) {
   return String(value).padStart(2, '0');
 }
@@ -43,11 +45,7 @@ export function parsePickupInputs(dateInput, timeInput) {
 }
 
 export function formatDistanceMeters(meters) {
-  const value = Number(meters) || 0;
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1).replace('.0', '')} km`;
-  }
-  return `${Math.round(value)} m`;
+  return formatDistanceLabel(meters);
 }
 
 export function formatDurationSeconds(seconds) {
