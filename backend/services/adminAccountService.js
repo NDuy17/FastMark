@@ -615,6 +615,83 @@ function assertUserIsActive(user) {
     );
   }
 }
+async function getAccountStatistics(query = {}) {
+
+  const [
+    totalUsers,
+    buyers,
+    sellers,
+    admins,
+    activeUsers,
+    blockedUsers,
+    totalShops,
+    totalProducts,
+    totalOrders
+  ] = await Promise.all([
+
+    User.countDocuments({}), // total tất cả tài khoản
+
+    // Buyer = USER + SELLER (seller vẫn mua hàng)
+    User.countDocuments({
+      Role: { 
+        $in: [1, 2]
+      }
+    }),
+    
+    // Seller
+    User.countDocuments({
+      Role: 2
+    }),
+    
+    // Admin
+    User.countDocuments({
+      Role: 3
+    }),
+    
+    // Active
+    User.countDocuments({
+      Status: 1
+    }),
+    
+    // Blocked
+    User.countDocuments({
+      Status: 0
+    }),
+    ShopProfile.countDocuments({}),
+
+    Product.countDocuments({
+      IsDeleted: { $ne: true }
+    }),
+
+    Reservation.countDocuments({})
+
+  ]);
+
+
+  return {
+    users: {
+      total: totalUsers,
+      buyers,
+      sellers,
+      admins,
+      active: activeUsers,
+      blocked: blockedUsers
+    },
+
+    shops: {
+      total: totalShops
+    },
+
+    products: {
+      total: totalProducts
+    },
+
+    orders: {
+      total: totalOrders
+    }
+  };
+}
+
 
 module.exports = {
   listAccounts,
@@ -625,4 +702,5 @@ module.exports = {
   ROLE_LABELS,
   STATUS_LABELS,
   VERIFICATION_LABELS,
+  getAccountStatistics
 };

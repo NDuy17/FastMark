@@ -489,11 +489,61 @@ function FinanceItemDialog({ selectedKey, row, onClose }) {
   );
 }
 
-function DetailPanel({ selectedKey, rows }) {
+const WALLET_DETAIL_KEYS = new Set(['allWallets', 'buyerWallets', 'sellerWallets']);
+
+function buildPageItems(page, totalPages) {
+  const safeTotal = Math.max(1, totalPages);
+  if (safeTotal <= 1) {
+    return [{ type: 'page', value: 1 }];
+  }
+
+  const pages = new Set([1, safeTotal]);
+  for (let i = page - 1; i <= page + 1; i += 1) {
+    if (i >= 1 && i <= safeTotal) {
+      pages.add(i);
+    }
+  }
+
+  const sorted = [...pages].sort((left, right) => left - right);
+  const items = [];
+  let previous = 0;
+
+  sorted.forEach((value) => {
+    if (previous && value - previous > 1) {
+      items.push({ type: 'ellipsis', key: `gap-${previous}-${value}` });
+    }
+    items.push({ type: 'page', value });
+    previous = value;
+  });
+
+  return items;
+}
+
+function DetailPanel({
+  selectedKey,
+  rows,
+  pagination,
+  onPageChange,
+}) {
   const meta = DETAIL_META[selectedKey];
   const [selectedRow, setSelectedRow] = useState(null);
   if (!meta) return null;
   const list = Array.isArray(rows) ? rows : [];
+  const page = pagination?.page || 1;
+  const totalPages = Math.max(1, pagination?.totalPages || 1);
+  const total = pagination?.total || 0;
+  const pageItems = buildPageItems(page, totalPages);
+  const isWalletDetail = WALLET_DETAIL_KEYS.has(selectedKey);
+  const totalLabel = isWalletDetail
+    ? `Tổng ${formatNumber(total)} ví`
+    : `Tổng ${formatNumber(total)} mục`;
+
+  function goToPage(target) {
+    const next = Math.min(Math.max(1, target), totalPages);
+    if (next !== page) {
+      onPageChange(next);
+    }
+  }
 
   return (
     <section className="table-card finance-detail-panel">
@@ -501,8 +551,8 @@ function DetailPanel({ selectedKey, rows }) {
         <div>
           <h2>{meta.title}</h2>
           <p>
-            {list.length
-              ? `${formatNumber(list.length)} mục · bấm dòng hoặc Chi tiết để xem đầy đủ`
+            {total > 0
+              ? `Trang ${page} / ${totalPages} · ${totalLabel} · bấm dòng hoặc Chi tiết để xem đầy đủ`
               : 'Không có dữ liệu'}
           </p>
         </div>
@@ -556,6 +606,50 @@ function DetailPanel({ selectedKey, rows }) {
               ))}
             </tbody>
           </table>
+          {total > 0 ? (
+            <div className="pagination">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => goToPage(page - 1)}
+              >
+                Previous
+              </button>
+
+              {pageItems.map((item) => {
+                if (item.type === 'ellipsis') {
+                  return (
+                    <span key={item.key} className="pagination-ellipsis" aria-hidden="true">
+                      …
+                    </span>
+                  );
+                }
+
+                const isActive = item.value === page;
+                return (
+                  <button
+                    key={`page-${item.value}`}
+                    type="button"
+                    className={isActive ? 'active' : undefined}
+                    disabled={isActive}
+                    onClick={() => goToPage(item.value)}
+                    aria-label={`Trang ${item.value}`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    {item.value}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => goToPage(page + 1)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -580,11 +674,11 @@ export default function FinancePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedKey, setSelectedKey] = useState(null);
-
+  const [page, setPage] = useState(1);
   const toggleSelect = useCallback((key) => {
-    setSelectedKey((prev) => (prev === key ? null : key));
+    setPage(1);
+    setSelectedKey(key);
   }, []);
-
   const load = useCallback(
     async ({ silent = false } = {}) => {
       if (!from || !to) return;
@@ -595,7 +689,13 @@ export default function FinancePage() {
       }
       try {
         const token = await getIdToken();
-        const payload = await getFinanceOverview(token, { from, to });
+        const payload = await getFinanceOverview(token, {
+          from,
+          to,
+          detailType: selectedKey || 'topup',
+          page,
+          limit: 20,
+        });
         setData((current) => keepIfSame(current, payload.data || null));
       } catch (loadError) {
         if (silent) {
@@ -608,7 +708,7 @@ export default function FinancePage() {
         }
       }
     },
-    [from, to, getIdToken]
+    [from, to, selectedKey, page, getIdToken]
   );
 
   useEffect(() => {
@@ -622,8 +722,8 @@ export default function FinancePage() {
   const balances = data?.balances || {};
   const inRange = data?.inRange || {};
   const pendingWithdraw = data?.pendingWithdraw || {};
-  const details = data?.details || {};
-
+  const table = data?.table || [];
+  const pagination = data?.pagination || {};
   return (
     <div className="page dashboard-page finance-page">
       <section className="dashboard-toolbar">
@@ -632,10 +732,12 @@ export default function FinancePage() {
           to={to}
           preset={preset}
           onApply={(range) => {
+            
             setPreset(range.preset);
             setFrom(range.from);
             setTo(range.to);
             setSelectedKey(null);
+            setPage(1);
           }}
         />
         <span className="dashboard-updated">
@@ -703,9 +805,13 @@ export default function FinancePage() {
               </div>
             </div>
           </section>
-
           {selectedKey ? (
-            <DetailPanel selectedKey={selectedKey} rows={details[selectedKey]} />
+            <DetailPanel
+              selectedKey={selectedKey}
+              rows={table}
+              pagination={pagination}
+              onPageChange={setPage}
+            />
           ) : null}
         </>
       ) : null}

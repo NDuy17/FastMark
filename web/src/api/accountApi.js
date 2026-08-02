@@ -89,3 +89,8 @@ export function getFinanceOverview(token, params = {}) {
     token,
   });
 }
+export function getAccountStatistics(token) {
+  return apiRequest('/api/admin/accounts/statistics', {
+    token,
+  });
+}

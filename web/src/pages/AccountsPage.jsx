@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, Lock, ShoppingCart, Store, Unlock, UserCheck, Users, UserX } from 'lucide-react';
 
-import { blockAccount, listAccounts, unblockAccount } from '../api/accountApi';
+import {
+  blockAccount,
+  listAccounts,
+  unblockAccount,
+  getAccountStatistics,
+} from '../api/accountApi';
 import AdminFilterPanel from '../components/admin/AdminFilterPanel';
 import AdminDateFilter from '../components/admin/AdminDateFilter';
 import AdminPageShell from '../components/admin/AdminPageShell';
@@ -124,7 +129,7 @@ export default function AccountsPage() {
   const viewFromUrl = searchParams.get('view') || 'buyers';
   const shopFilterFromUrl = searchParams.get('shop') || '';
   const statusFromUrl = searchParams.get('status') || '';
-
+  const [statistics, setStatistics] = useState(null);
   const [items, setItems] = useState([]);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -152,7 +157,18 @@ export default function AccountsPage() {
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE);
-
+  const loadStatistics = useCallback(async () => {
+    try {
+      const token = await getIdToken();
+  
+      const payload = await getAccountStatistics(token);
+  
+      setStatistics(payload.data?.statistics || null);
+  
+    } catch (error) {
+      console.log("Load statistics error:", error);
+    }
+  }, [getIdToken]);
   useEffect(() => {
     setPage(1);
   }, [search]);
@@ -226,20 +242,31 @@ export default function AccountsPage() {
 
   useEffect(() => {
     loadItems();
-  }, [loadItems]);
+    loadStatistics();
+  }, [loadItems, loadStatistics]);
 
   async function runAccountAction(accountId, action) {
     setBusyId(accountId);
     setMessage('');
     setError('');
+  
     try {
       const token = await getIdToken();
+  
       if (action === 'block') {
         await blockAccount(token, accountId);
+        setMessage('Đã khóa tài khoản');
       } else {
         await unblockAccount(token, accountId);
+        setMessage('Đã mở khóa tài khoản');
       }
+  
+      // reload danh sách
       await loadItems();
+  
+      // reload thống kê
+      await loadStatistics();
+  
     } catch (actionError) {
       setError(actionError.message || 'Thao tác thất bại.');
     } finally {
@@ -337,9 +364,11 @@ export default function AccountsPage() {
     </AdminFilterPanel>
   );
 
-  const lockedCount = items.filter((item) => item.status === 0).length;
-  const activeCount = items.filter((item) => item.status === 1).length;
-  const sellerCount = items.filter((item) => item.shop).length;
+  const lockedCount = statistics?.users?.blocked ?? 0;
+  const activeCount = statistics?.users?.active ?? 0;
+  const sellerCount = statistics?.users?.sellers ?? 0;
+  const totalUsers = statistics?.users?.total ?? 0;
+  const buyers = statistics?.users?.buyers ?? 0;
 
   return (
     <AdminPageShell
@@ -347,8 +376,8 @@ export default function AccountsPage() {
       title={pageMeta.title}
       description={pageMeta.description}
       stats={[
-        { label: 'Tổng người dùng', value: loading ? '…' : pagination.total, icon: Users, tone: 'green' },
-        { label: 'Người mua (trang)', value: loading ? '…' : Math.max(0, items.length - sellerCount), icon: ShoppingCart, tone: 'blue' },
+        { label: 'Tổng người dùng', value: loading ? '…' : totalUsers, icon: Users, tone: 'green' },
+        { label: 'Người mua (trang)', value: loading ? '…' : buyers, icon: ShoppingCart, tone: 'blue' },
         { label: 'Có gian hàng', value: loading ? '…' : sellerCount, icon: Store, tone: 'amber' },
         { label: 'Đang hoạt động', value: loading ? '…' : activeCount, icon: UserCheck, tone: 'green' },
         { label: 'Bị khóa', value: loading ? '…' : lockedCount, icon: UserX, tone: 'red' },

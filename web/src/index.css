@@ -2683,6 +2683,51 @@ button.table-link {
   color: #64748b;
 }
 
+.finance-detail-panel .pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 16px 4px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.finance-detail-panel .pagination button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.finance-detail-panel .pagination button:hover:not(:disabled) {
+  border-color: #16a34a;
+  color: #15803d;
+}
+
+.finance-detail-panel .pagination button.active,
+.finance-detail-panel .pagination button:disabled.active {
+  border-color: #16a34a;
+  background: #16a34a;
+  color: #fff;
+}
+
+.finance-detail-panel .pagination button:disabled:not(.active) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.finance-detail-panel .pagination-ellipsis {
+  min-width: 24px;
+  text-align: center;
+  color: #64748b;
+}
+
 .dashboard-metric.tone-green.active,
 .dashboard-metric.tone-orange.active,
 .dashboard-metric.tone-red.active,

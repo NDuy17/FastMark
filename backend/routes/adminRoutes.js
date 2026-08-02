@@ -20,13 +20,19 @@ router.get(
   requireAdmin,
   asyncHandler(adminDashboardController.getDashboard)
 );
-
+router.get(
+  "/accounts/statistics",
+  verifyFirebaseToken,
+  requireAdmin,
+  asyncHandler(adminAccountController.getAccountStatistics)
+);
 router.get(
   "/accounts",
   verifyFirebaseToken,
   requireAdmin,
   asyncHandler(adminAccountController.listAccounts)
 );
+
 router.get(
   "/accounts/:id",
   verifyFirebaseToken,
