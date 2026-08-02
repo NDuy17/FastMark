@@ -40,6 +40,10 @@ import {
 } from '../../constants/sellerOrders';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
 import { getOrderCodeValue } from '../../core/utils/orderCode';
+import {
+  getReservationProductId,
+  getReservationShopId,
+} from '../../core/utils/reservationEntity';
 import { formatPrice } from '../../core/utils/productFormat';
 import { getBuyerCancelConfirmMessage } from '../../core/utils/buyerCancelReservation';
 import {
@@ -168,6 +172,8 @@ export default function BuyerOrderDetailScreen({
   onChanged,
   onNavigatePickup,
   onOpenShopScan,
+  onOpenShop,
+  onOpenProduct,
   onReviewStore,
   onReviewDeleted,
 }) {
@@ -295,6 +301,24 @@ export default function BuyerOrderDetailScreen({
     reservation.shop?.shopName,
     reservation.shopUsername
   );
+  const shopId = getReservationShopId(reservation);
+  const productId = getReservationProductId(reservation);
+
+  function handleOpenShop() {
+    if (!shopId) {
+      Alert.alert('Thông báo', 'Không xác định được gian hàng.');
+      return;
+    }
+    onOpenShop?.({ shopId, storeName });
+  }
+
+  function handleOpenProduct() {
+    if (!productId) {
+      Alert.alert('Thông báo', 'Không xác định được sản phẩm.');
+      return;
+    }
+    onOpenProduct?.({ productId, shopId, storeName });
+  }
   const statusLabel = RESERVATION_STATUS_LABELS[reservation.status] || 'Không rõ';
   const cancelReasonText =
     String(listCancelReasonText || '').trim() ||
@@ -507,12 +531,21 @@ export default function BuyerOrderDetailScreen({
 
           <Text style={styles.sectionHeading}>THÔNG TIN CỬA HÀNG</Text>
           <View style={styles.shopRow}>
-            <AvatarBadge name={storeName} uri={reservation.shop?.avatar || ''} size={52} />
-            <View style={styles.shopInfo}>
-              <Text style={styles.shopName} numberOfLines={1}>
-                {storeName}
-              </Text>
-            </View>
+            <Pressable
+              style={({ pressed }) => [styles.shopTapArea, pressed && styles.tapAreaPressed]}
+              onPress={handleOpenShop}
+              accessibilityRole="button"
+              accessibilityLabel={`Xem gian hàng ${storeName}`}
+            >
+              <AvatarBadge name={storeName} uri={reservation.shop?.avatar || ''} size={52} />
+              <View style={styles.shopInfo}>
+                <Text style={styles.shopName} numberOfLines={1}>
+                  {storeName}
+                </Text>
+                <Text style={styles.linkHint}>Xem gian hàng</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+            </Pressable>
             <Pressable
               onPress={handleCallShop}
               style={({ pressed }) => [styles.callIconBtn, pressed && styles.callIconBtnPressed]}
@@ -527,7 +560,12 @@ export default function BuyerOrderDetailScreen({
           <View style={styles.divider} />
 
           <Text style={styles.sectionHeading}>THÔNG TIN SẢN PHẨM</Text>
-          <View style={styles.productRow}>
+          <Pressable
+            style={({ pressed }) => [styles.productRow, pressed && styles.tapAreaPressed]}
+            onPress={handleOpenProduct}
+            accessibilityRole="button"
+            accessibilityLabel={`Xem sản phẩm ${reservation.product?.productName || ''}`}
+          >
             <View style={styles.productThumbWrap}>
               {reservation.product?.thumbnail ? (
                 <Image
@@ -551,8 +589,10 @@ export default function BuyerOrderDetailScreen({
                 <Text style={styles.productMeta}>Giá: {formatPrice(unitPrice)}</Text>
                 <Text style={styles.productQtyMark}>x{qty || 1}</Text>
               </View>
+              <Text style={styles.linkHint}>Xem sản phẩm</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+          </Pressable>
 
           <View style={styles.divider} />
 
@@ -856,6 +896,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  shopTapArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 0,
+  },
+  tapAreaPressed: {
+    opacity: 0.82,
+  },
+  linkHint: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#076F32',
   },
   shopInfo: {
     flex: 1,

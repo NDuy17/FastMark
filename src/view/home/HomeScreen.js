@@ -23,10 +23,10 @@ import {
   removeFavoriteProductOnBackend,
 } from '../../api/favoriteApi';
 import { listActiveBannersOnBackend, recordBannerClickOnBackend } from '../../api/bannerApi';
-import { formatDistance, hasValidLocation, normalizeExpoLocation, calculateDistanceMeters } from '../../core/utils/geo';
+import { formatDistance, hasValidLocation, normalizeExpoLocation, getDistanceFromCurrentLocation } from '../../core/utils/geo';
 import { formatPriceRange, getProductPromoPriceLabels } from '../../core/utils/productFormat';
 import { confirmLogout } from '../../core/utils/appAlert';
-import { isRemoteAvatarUrl } from '../../core/utils/avatarInitial';
+import { resolveShopAvatarUri } from '../../core/utils/avatarInitial';
 import { appendUniqueById, DEFAULT_PAGE_SIZE } from '../../core/utils/pagination';
 import { mergeListById } from '../../core/utils/realtimeList';
 import { getCurrentUserIdToken } from '../../repository/authRepository';
@@ -86,7 +86,7 @@ const HomeProductCard = memo(function HomeProductCard({
   grid = false,
 }) {
   const distance = formatDistance(product.distanceMeters);
-  const storeName = product.storeName || 'Gian hàng';
+  const storeName = product.storeName || product.shopName || product.shop_name || 'Gian hàng';
   const isPromotion = Boolean(product.isPromotion) && Number(product.discountPercent) > 0;
   const unit = product.donVi ? `/${product.donVi}` : '';
   const promoLabels = isPromotion ? getProductPromoPriceLabels(product) : null;
@@ -175,9 +175,7 @@ const HomeShopCard = memo(function HomeShopCard({ shop, onPress, grid = false })
   const rating = Number(shop.rating_avg) || 0;
   const isOpen = shop.is_open !== false;
   const categoryLabel = shop.category_name || 'Gian hàng';
-  const avatar = isRemoteAvatarUrl(shop.image_url || shop.cover_image_url)
-    ? shop.image_url || shop.cover_image_url
-    : '';
+  const avatar = resolveShopAvatarUri(shop);
 
   return (
     <Pressable
@@ -188,13 +186,11 @@ const HomeShopCard = memo(function HomeShopCard({ shop, onPress, grid = false })
       ]}
       onPress={() => onPress?.(shop.id)}
     >
-      {avatar ? (
-        <Image source={{ uri: avatar }} style={styles.shopAvatar} />
-      ) : (
-        <View style={styles.shopAvatarFallback}>
-          <AvatarBadge name={shop.shop_name || shop.name || 'S'} size={42} />
-        </View>
-      )}
+      <AvatarBadge
+        name={shop.shop_name || shop.name || 'S'}
+        uri={avatar}
+        size={52}
+      />
       <View style={styles.shopInfo}>
         <Text style={styles.shopName} numberOfLines={1}>
           {shop.shop_name || shop.name}
@@ -728,12 +724,12 @@ export default function HomeScreen({
               const shopLat = Number(row.shopLatitude ?? row.latitude);
               const shopLng = Number(row.shopLongitude ?? row.longitude);
               if (Number.isFinite(shopLat) && Number.isFinite(shopLng)) {
-                const meters = calculateDistanceMeters(location, {
+                const meters = getDistanceFromCurrentLocation(location, {
                   latitude: shopLat,
                   longitude: shopLng,
                 });
-                if (meters != null && Number.isFinite(meters)) {
-                  distanceMeters = Math.round(meters);
+                if (meters != null) {
+                  distanceMeters = meters;
                 }
               }
             }
@@ -1887,21 +1883,6 @@ const styles = StyleSheet.create({
   },
   shopCardGrid: {
     width: '100%',
-  },
-  shopAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#f1f5f9',
-  },
-  shopAvatarFallback: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
   },
   shopInfo: {
     flex: 1,

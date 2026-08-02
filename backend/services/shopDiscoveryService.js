@@ -1005,11 +1005,7 @@ async function discoverProducts({
     const shopMeta = shopDistanceMap.get(String(product.ShopId));
     const shop = shopMeta?.shop;
     const seller = shop ? sellerMap.get(String(shop.userId)) : null;
-    const storeName =
-      pickString(seller?.FullName) ||
-      pickString(seller?.UserName) ||
-      pickString(shop?.shopName) ||
-      (shop?.shopUsername ? `@${shop.shopUsername}` : "");
+    const storeName = resolveShopDisplayName(shop, seller);
     const productVariants = variantsByProduct.get(String(product._id)) || [];
     const thumbnails = resolveProductGallery(
       product,

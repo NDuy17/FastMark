@@ -1,6 +1,5 @@
 const ShopProfile = require("../models/ShopProfile");
 const { mapPresenceFields } = require("../utils/activityLabel");
-const { emitUserEvent } = require("../socket");
 
 function buildPresencePayload({ userId, shopId, target, presence }) {
   return {
@@ -12,6 +11,7 @@ function buildPresencePayload({ userId, shopId, target, presence }) {
 }
 
 async function emitPresenceUpdate({ userId, shopId, target, presence }) {
+  const { emitUserEvent } = require("../socket");
   const payload = buildPresencePayload({ userId, shopId, target, presence });
   emitUserEvent(String(userId), "presence:update", payload);
 }

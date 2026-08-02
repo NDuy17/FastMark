@@ -35,6 +35,10 @@ import {
 } from '../../constants/sellerOrders';
 import { formatPrice } from '../../core/utils/productFormat';
 import { getOrderCodeValue } from '../../core/utils/orderCode';
+import {
+  getReservationBuyerId,
+  getReservationProductId,
+} from '../../core/utils/reservationEntity';
 import AvatarBadge from '../shared/components/AvatarBadge';
 import ReservationDisputeModal from '../shared/components/ReservationDisputeModal';
 import ReservationDisputeSection from '../shared/components/ReservationDisputeSection';
@@ -153,6 +157,8 @@ export default function SellerOrderDetailScreen({
   listCancelReasonText = '',
   onBack,
   onChanged,
+  onOpenBuyer,
+  onOpenProduct,
 }) {
   const resolvedId = String(reservationId || initialItem?.id || '').trim();
   const [reservation, setReservation] = useState(initialItem);
@@ -427,6 +433,25 @@ export default function SellerOrderDetailScreen({
     showPastPickupNotice && (canCancelAccepted || canReportBuyer);
   const showCancelBeforePickup = canCancelAccepted && !pastPickup;
   const buyerName = reservation.buyer?.fullName || 'Khách';
+  const buyerId = getReservationBuyerId(reservation);
+  const productId = getReservationProductId(reservation);
+
+  function handleOpenBuyer() {
+    if (!buyerId) {
+      Alert.alert('Thông báo', 'Không xác định được hồ sơ khách hàng.');
+      return;
+    }
+    onOpenBuyer?.({ userId: buyerId, fullName: buyerName });
+  }
+
+  function handleOpenProduct() {
+    if (!productId) {
+      Alert.alert('Thông báo', 'Không xác định được sản phẩm.');
+      return;
+    }
+    onOpenProduct?.({ productId, productName: reservation.product?.productName || '' });
+  }
+
   const statusLabel = RESERVATION_STATUS_LABELS[reservation.status] || 'Không rõ';
   const statusChipStyle =
     isCancelledReservationStatus(reservation.status) ||
@@ -490,12 +515,21 @@ export default function SellerOrderDetailScreen({
 
         <Text style={styles.sectionHeading}>THÔNG TIN KHÁCH HÀNG</Text>
         <View style={styles.buyerRow}>
-          <AvatarBadge name={buyerName} uri={reservation.buyer?.avatar || ''} size={52} />
-          <View style={styles.buyerInfo}>
-            <Text style={styles.buyerName} numberOfLines={1}>
-              {buyerName}
-            </Text>
-          </View>
+          <Pressable
+            style={({ pressed }) => [styles.buyerTapArea, pressed && styles.tapAreaPressed]}
+            onPress={handleOpenBuyer}
+            accessibilityRole="button"
+            accessibilityLabel={`Xem hồ sơ ${buyerName}`}
+          >
+            <AvatarBadge name={buyerName} uri={reservation.buyer?.avatar || ''} size={52} />
+            <View style={styles.buyerInfo}>
+              <Text style={styles.buyerName} numberOfLines={1}>
+                {buyerName}
+              </Text>
+              <Text style={styles.linkHint}>Xem hồ sơ khách</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+          </Pressable>
           <Pressable
             onPress={handleCallBuyer}
             style={({ pressed }) => [styles.callIconBtn, pressed && styles.callIconBtnPressed]}
@@ -510,7 +544,12 @@ export default function SellerOrderDetailScreen({
         <View style={styles.divider} />
 
         <Text style={styles.sectionHeading}>THÔNG TIN SẢN PHẨM</Text>
-        <View style={styles.productRow}>
+        <Pressable
+          style={({ pressed }) => [styles.productRow, pressed && styles.tapAreaPressed]}
+          onPress={handleOpenProduct}
+          accessibilityRole="button"
+          accessibilityLabel={`Xem sản phẩm ${reservation.product?.productName || ''}`}
+        >
           <View style={styles.productThumbWrap}>
             {reservation.product?.thumbnail ? (
               <Image
@@ -534,8 +573,10 @@ export default function SellerOrderDetailScreen({
               <Text style={styles.productMeta}>Giá: {formatPrice(unitPrice)}</Text>
               <Text style={styles.productQtyMark}>x{qty || 1}</Text>
             </View>
+            <Text style={styles.linkHint}>Xem sản phẩm</Text>
           </View>
-        </View>
+          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        </Pressable>
 
         <View style={styles.divider} />
 
@@ -820,6 +861,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  buyerTapArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 0,
+  },
+  tapAreaPressed: {
+    opacity: 0.82,
+  },
+  linkHint: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#076F32',
   },
   buyerInfo: {
     flex: 1,

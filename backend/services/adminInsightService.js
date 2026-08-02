@@ -855,35 +855,58 @@ async function sumWalletBalanceByRole(role) {
 
 const DETAIL_LIMIT = 40;
 
-async function listWalletsByRole(role = null) {
-  const wallets = await Wallet.find({})
-    .sort({ balance: -1 })
-    .populate("userId", "FullName UserName Email Phone Role")
-    .lean();
+function mapWalletRow(row) {
+  const user = row.user || {};
+  const userRole = Number(user.Role);
+  return {
+    id: String(user._id || row.userId || ""),
+    fullName: user.FullName || "",
+    userName: user.UserName || "",
+    email: user.Email || "",
+    phone: user.Phone || "",
+    role: userRole,
+    roleLabel: userRole === USER_ROLE.SELLER ? "Người bán" : "Người mua",
+    balance: Number(row.balance) || 0,
+  };
+}
 
+async function listWalletsByRolePaged(role = null, page = 1, limit = 20) {
   const allowedRoles =
     role != null ? [role] : [USER_ROLE.BUYER, USER_ROLE.SELLER];
+  const skip = (page - 1) * limit;
 
-  return wallets
-    .filter((row) => {
-      const userRole = Number(row.userId?.Role);
-      return allowedRoles.includes(userRole);
-    })
-    .slice(0, DETAIL_LIMIT)
-    .map((row) => {
-      const user = row.userId || {};
-      const userRole = Number(user.Role);
-      return {
-        id: String(user._id || row.userId || ""),
-        fullName: user.FullName || "",
-        userName: user.UserName || "",
-        email: user.Email || "",
-        phone: user.Phone || "",
-        role: userRole,
-        roleLabel: userRole === USER_ROLE.SELLER ? "Người bán" : "Người mua",
-        balance: Number(row.balance) || 0,
-      };
-    });
+  const [result] = await Wallet.aggregate([
+    {
+      $lookup: {
+        from: "users",
+        localField: "userId",
+        foreignField: "_id",
+        as: "user",
+      },
+    },
+    { $unwind: "$user" },
+    { $match: { "user.Role": { $in: allowedRoles } } },
+    { $sort: { balance: -1 } },
+    {
+      $facet: {
+        total: [{ $count: "count" }],
+        items: [{ $skip: skip }, { $limit: limit }],
+      },
+    },
+  ]);
+
+  const total = result?.total?.[0]?.count || 0;
+  const items = (result?.items || []).map(mapWalletRow);
+
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    },
+  };
 }
 
 async function listEscrowReservations() {
@@ -996,12 +1019,80 @@ async function listTxInRange(type, from, to) {
     };
   });
 }
+async function listTxInRangePaged(type, from, to, page = 1, limit = 20) {
+  const filter = {
+    type,
+    status: WALLET_TX_STATUS.SUCCESS,
+    CreatedAt: { $gte: from, $lte: to },
+  };
 
+  const skip = (page - 1) * limit;
+
+  const [total, rows] = await Promise.all([
+    WalletTransaction.countDocuments(filter),
+    WalletTransaction.find(filter)
+      .sort({ CreatedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+  ]);
+
+  const userIds = rows.map((row) => row.userId).filter(Boolean);
+
+  const users = userIds.length
+    ? await User.find({
+        _id: { $in: userIds },
+      })
+        .select("FullName UserName Phone Email Role")
+        .lean()
+    : [];
+
+  const userMap = new Map(
+    users.map((user) => [String(user._id), user])
+  );
+
+  return {
+    items: rows.map((row) => {
+      const user = userMap.get(String(row.userId));
+
+      return {
+        id: String(row._id),
+        amount: Number(row.amount) || 0,
+        description: row.description || "",
+        orderCode: row.orderCode || "",
+        reservationId: row.reservationId
+          ? String(row.reservationId)
+          : "",
+        createdAt: row.CreatedAt || null,
+        typeLabel: WALLET_TX_TYPE_LABEL[row.type] || "",
+        userName: user?.FullName || user?.UserName || "",
+        userPhone: user?.Phone || "",
+        userEmail: user?.Email || "",
+        roleLabel:
+          Number(user?.Role) === USER_ROLE.SELLER
+            ? "Người bán"
+            : Number(user?.Role) === USER_ROLE.BUYER
+            ? "Người mua"
+            : "",
+      };
+    }),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
 /**
  * Tổng quan tài chính hệ thống (trang Tài chính admin).
  */
 async function getFinanceOverview(query = {}) {
   const { from, to } = resolveRange(query);
+
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+  const detailType = String(query.detailType || "topup");
 
   const [
     buyerWallets,
@@ -1018,50 +1109,151 @@ async function getFinanceOverview(query = {}) {
     withdrawSeries,
     paymentSeries,
     depositReleaseSeries,
-    buyerWalletList,
-    sellerWalletList,
-    allWalletList,
     escrowList,
     pendingWithdrawList,
-    topupList,
-    withdrawalList,
-    paymentList,
-    depositHoldList,
-    depositRefundList,
-    depositReleaseList,
   ] = await Promise.all([
     sumWalletBalanceByRole(USER_ROLE.BUYER),
     sumWalletBalanceByRole(USER_ROLE.SELLER),
     SystemWallet.findOne({ key: "system" }).lean(),
+
     sumTxInRange(WALLET_TX_TYPE.TOPUP, from, to),
     sumTxInRange(WALLET_TX_TYPE.WITHDRAWAL, from, to),
     sumTxInRange(WALLET_TX_TYPE.PAYMENT, from, to),
     sumTxInRange(WALLET_TX_TYPE.DEPOSIT_HOLD, from, to),
     sumTxInRange(WALLET_TX_TYPE.DEPOSIT_REFUND, from, to),
     sumTxInRange(WALLET_TX_TYPE.DEPOSIT_RELEASE, from, to),
+
     WithdrawRequest.aggregate([
       { $match: { status: WITHDRAW_STATUS.PENDING } },
-      { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
+      },
     ]),
+
     dailyTxSeries(WALLET_TX_TYPE.TOPUP, from, to),
     dailyTxSeries(WALLET_TX_TYPE.WITHDRAWAL, from, to),
     dailyTxSeries(WALLET_TX_TYPE.PAYMENT, from, to),
     dailyTxSeries(WALLET_TX_TYPE.DEPOSIT_RELEASE, from, to),
-    listWalletsByRole(USER_ROLE.BUYER),
-    listWalletsByRole(USER_ROLE.SELLER),
-    listWalletsByRole(null),
+
     listEscrowReservations(),
     listPendingWithdraws(),
-    listTxInRange(WALLET_TX_TYPE.TOPUP, from, to),
-    listTxInRange(WALLET_TX_TYPE.WITHDRAWAL, from, to),
-    listTxInRange(WALLET_TX_TYPE.PAYMENT, from, to),
-    listTxInRange(WALLET_TX_TYPE.DEPOSIT_HOLD, from, to),
-    listTxInRange(WALLET_TX_TYPE.DEPOSIT_REFUND, from, to),
-    listTxInRange(WALLET_TX_TYPE.DEPOSIT_RELEASE, from, to),
   ]);
+
+  let detailData = {
+    items: [],
+    pagination: {
+      page,
+      limit,
+      total: 0,
+      totalPages: 1,
+    },
+  };
+
+  switch (detailType) {
+    case "topup":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.TOPUP,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "withdrawal":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.WITHDRAWAL,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "platformRevenue":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.PAYMENT,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "depositHold":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.DEPOSIT_HOLD,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "depositRefund":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.DEPOSIT_REFUND,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "depositRelease":
+      detailData = await listTxInRangePaged(
+        WALLET_TX_TYPE.DEPOSIT_RELEASE,
+        from,
+        to,
+        page,
+        limit
+      );
+      break;
+
+    case "pendingWithdraw":
+      detailData = {
+        items: pendingWithdrawList,
+        pagination: {
+          page: 1,
+          limit: pendingWithdrawList.length,
+          total: pendingWithdrawList.length,
+          totalPages: 1,
+        },
+      };
+      break;
+
+    case "allWallets":
+      detailData = await listWalletsByRolePaged(null, page, limit);
+      break;
+
+    case "buyerWallets":
+      detailData = await listWalletsByRolePaged(USER_ROLE.BUYER, page, limit);
+      break;
+
+    case "sellerWallets":
+      detailData = await listWalletsByRolePaged(USER_ROLE.SELLER, page, limit);
+      break;
+
+    case "escrow":
+      detailData = {
+        items: escrowList,
+        pagination: {
+          page: 1,
+          limit: escrowList.length,
+          total: escrowList.length,
+          totalPages: 1,
+        },
+      };
+      break;
+  }
 
   return {
     range: { from, to },
+
     balances: {
       buyerWalletTotal: buyerWallets.total,
       buyerWalletCount: buyerWallets.count,
@@ -1069,41 +1261,41 @@ async function getFinanceOverview(query = {}) {
       sellerWalletCount: sellerWallets.count,
       escrowBalance: systemWallet?.balance || 0,
     },
+
     inRange: {
       topup: topupInRange,
       withdrawal: withdrawInRange,
-      // PAYMENT = thanh toán gói seller/banner từ ví → doanh thu nền tảng.
       platformRevenue: paymentInRange,
       depositHold: depositHoldInRange,
       depositRefund: depositRefundInRange,
       depositRelease: depositReleaseInRange,
     },
+
     pendingWithdraw: {
       total: pendingWithdrawAgg[0]?.total || 0,
       count: pendingWithdrawAgg[0]?.count || 0,
     },
+
     series: {
       topup: topupSeries,
       withdrawal: withdrawSeries,
       platformRevenue: paymentSeries,
       depositRelease: depositReleaseSeries,
     },
+
     details: {
-      allWallets: allWalletList,
-      buyerWallets: buyerWalletList,
-      sellerWallets: sellerWalletList,
+      allWallets: [],
+      buyerWallets: [],
+      sellerWallets: [],
       escrow: escrowList,
       pendingWithdraw: pendingWithdrawList,
-      topup: topupList,
-      withdrawal: withdrawalList,
-      platformRevenue: paymentList,
-      depositHold: depositHoldList,
-      depositRefund: depositRefundList,
-      depositRelease: depositReleaseList,
     },
+
+    table: detailData.items,
+    pagination: detailData.pagination,
+    detailType,
   };
 }
-
 /**
  * Nhật ký thao tác admin trên đơn giữ hàng (tranh chấp).
  */

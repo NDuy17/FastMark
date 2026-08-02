@@ -4,7 +4,7 @@ const DEFAULT_LOCATION = {
 };
 
 const MAP_EVENT_SOURCE = 'fastmark-map';
-export const LEAFLET_HTML_REVISION = 26;
+export const LEAFLET_HTML_REVISION = 31;
 
 function safeJson(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
@@ -23,6 +23,8 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
     />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <style>
       html,
       body,
@@ -60,6 +62,24 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         inset: 7px;
         border-radius: 999px;
         background: #f7c948;
+      }
+
+      .nav-user-marker {
+        position: relative;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        background: #2563eb;
+        border: 4px solid #ffffff;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+      }
+
+      .nav-user-marker::after {
+        content: "";
+        position: absolute;
+        inset: 5px;
+        border-radius: 999px;
+        background: #60a5fa;
       }
 
       .location-pin {
@@ -274,6 +294,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
   <body>
     <div id="map"></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script>
       const EVENT_SOURCE = '${MAP_EVENT_SOURCE}';
       const initialData = ${initialData};
@@ -285,8 +306,14 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
       let activeRadiusMeters = null;
       let userMovedMap = false;
       const restaurantMarkerById = {};
+      let drawRestaurantsFrame = null;
+      let pendingRestaurantList = null;
+      let lastRestaurantListSignature = '';
       let routeLayer = null;
       let destinationMarker = null;
+      let lastRoutePolylineKey = '';
+      let lastNavLocation = null;
+      let lastNavPanAt = 0;
       let activeRouteDestination = null;
       let scanMarker = null;
       let lastMapTap = null;
@@ -358,6 +385,26 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         attribution: '',
       }).addTo(map);
 
+      function createRestaurantLayerGroup() {
+        if (typeof L.markerClusterGroup === 'function') {
+          return L.markerClusterGroup({
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            maxClusterRadius: 54,
+            disableClusteringAtZoom: 17,
+            chunkedLoading: true,
+            chunkInterval: 48,
+            chunkDelay: 24,
+            spiderfyOnMaxZoom: true,
+            removeOutsideVisibleBounds: true,
+          });
+        }
+        return L.layerGroup();
+      }
+
+      let restaurantClusterGroup = createRestaurantLayerGroup();
+      map.addLayer(restaurantClusterGroup);
+
       const RED_PIN_SVG =
         '<svg viewBox="0 0 24 36" xmlns="http://www.w3.org/2000/svg">' +
         '<path fill="#dc2626" stroke="#ffffff" stroke-width="1.5" d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z"/>' +
@@ -375,6 +422,13 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         html: '<div class="location-pin">' + RED_PIN_SVG + '</div>',
         iconSize: [28, 36],
         iconAnchor: [14, 36],
+      });
+
+      const navUserIcon = L.divIcon({
+        className: '',
+        html: '<div class="nav-user-marker"></div>',
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
       });
 
       const scanIcon = L.divIcon({
@@ -518,6 +572,145 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           destinationMarker = null;
         }
         activeRouteDestination = null;
+        lastRoutePolylineKey = '';
+      }
+
+      function routePolylineKey(coords) {
+        if (!coords.length) {
+          return '';
+        }
+        const first = coords[0];
+        const last = coords[coords.length - 1];
+        return (
+          coords.length +
+          ':' +
+          Number(first[0]).toFixed(5) +
+          ',' +
+          Number(first[1]).toFixed(5) +
+          ':' +
+          Number(last[0]).toFixed(5) +
+          ',' +
+          Number(last[1]).toFixed(5)
+        );
+      }
+
+      function isNavMoveSignificant(left, right) {
+        return (
+          Math.abs(Number(left.latitude) - Number(right.latitude)) >= 0.000012 ||
+          Math.abs(Number(left.longitude) - Number(right.longitude)) >= 0.000012
+        );
+      }
+
+      function drawDestinationMarker(to) {
+        if (!hasLocation(to)) {
+          return;
+        }
+
+        const destIcon = L.divIcon({
+          className: 'fastmark-restaurant-icon',
+          html: getShopPinIcon({
+            image_url: to.image_url || to.storeAvatar || '',
+            type: to.type || 'shop',
+          }),
+          iconSize: [28, 36],
+          iconAnchor: [14, 36],
+        });
+
+        if (!destinationMarker) {
+          destinationMarker = L.marker(getLatLng(to), {
+            icon: destIcon,
+            interactive: false,
+            zIndexOffset: 1000,
+          }).addTo(map);
+        } else {
+          destinationMarker.setLatLng(getLatLng(to));
+          destinationMarker.setIcon(destIcon);
+        }
+
+        activeRouteDestination = to;
+      }
+
+      function setRoutePolyline(payload) {
+        const coords = Array.isArray(payload?.coordinates) ? payload.coordinates : [];
+        const destination = payload?.destination || null;
+
+        if (!coords.length || !hasLocation(destination)) {
+          clearRoute();
+          return;
+        }
+
+        const nextKey = routePolylineKey(coords);
+        if (!payload.fitBounds && nextKey === lastRoutePolylineKey && routeLayer) {
+          drawDestinationMarker(destination);
+          return;
+        }
+        lastRoutePolylineKey = nextKey;
+
+        drawDestinationMarker(destination);
+
+        if (!routeLayer) {
+          routeLayer = L.polyline(coords, {
+            color: '#2563eb',
+            weight: 6,
+            opacity: 0.92,
+            lineJoin: 'round',
+          }).addTo(map);
+        } else {
+          routeLayer.setLatLngs(coords);
+        }
+
+        if (payload.fitBounds) {
+          map.fitBounds(routeLayer.getBounds(), { padding: [100, 48], maxZoom: 17, animate: true });
+        }
+      }
+
+      function panToNavigationLocation(location, followUser) {
+        if (!hasLocation(location)) {
+          return;
+        }
+
+        const latLng = getLatLng(location);
+        const markerMoved = !lastNavLocation || isNavMoveSignificant(lastNavLocation, location);
+        lastNavLocation = {
+          latitude: Number(location.latitude),
+          longitude: Number(location.longitude),
+        };
+
+        if (!currentMarker) {
+          currentMarker = L.marker(latLng, { icon: navUserIcon, interactive: false, zIndexOffset: 900 }).addTo(map);
+        } else if (markerMoved) {
+          currentMarker.setLatLng(latLng);
+          currentMarker.setIcon(navUserIcon);
+        }
+
+        hideAccuracyCircle();
+
+        if (!followUser || !markerMoved) {
+          return;
+        }
+
+        const zoom = map.getZoom();
+        const targetPoint = map.project(latLng, zoom).subtract([0, 120]);
+        const targetLatLng = map.unproject(targetPoint, zoom);
+        const center = map.getCenter();
+        const centerShiftMeters = center.distanceTo(targetLatLng);
+        const now = Date.now();
+
+        if (centerShiftMeters < 12 && now - lastNavPanAt < 500) {
+          return;
+        }
+
+        lastNavPanAt = now;
+        const animate = centerShiftMeters > 18;
+        map.panTo(targetLatLng, {
+          animate,
+          duration: animate ? (centerShiftMeters > 45 ? 0.3 : 0.18) : 0,
+          easeLinearity: 0.4,
+        });
+      }
+
+      function updateNavigationLocation(command) {
+        panToNavigationLocation(command.location, Boolean(command.followUser));
       }
 
       async function showRoute(from, to) {
@@ -709,11 +902,37 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           Number(restaurant.longitude).toFixed(6),
           getShopDisplayName(restaurant),
           getShopRatingLabel(restaurant),
-          getShopDistanceLabel(restaurant),
           isShopOpen(restaurant) ? 'open' : 'closed',
-          String(restaurant.name || ''),
-          String(restaurant.address || ''),
         ].join('|');
+      }
+
+      function getRestaurantListSignature(items) {
+        if (!Array.isArray(items) || !items.length) {
+          return '';
+        }
+        return items
+          .map(function(r) {
+            return String(r.id);
+          })
+          .sort()
+          .join(',');
+      }
+
+      function scheduleDrawRestaurants(restaurantsList) {
+        pendingRestaurantList = restaurantsList;
+        const nextSignature = getRestaurantListSignature(restaurantsList);
+        if (nextSignature === lastRestaurantListSignature) {
+          return;
+        }
+        if (drawRestaurantsFrame) {
+          cancelAnimationFrame(drawRestaurantsFrame);
+        }
+        drawRestaurantsFrame = requestAnimationFrame(function() {
+          drawRestaurantsFrame = null;
+          lastRestaurantListSignature = getRestaurantListSignature(pendingRestaurantList);
+          drawRestaurants(pendingRestaurantList);
+          pendingRestaurantList = null;
+        });
       }
 
       function drawRestaurants(restaurantsList) {
@@ -750,7 +969,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
             icon: buildShopMarkerIconObject(r),
             bubblingMouseEvents: true,
             riseOnHover: true,
-          }).addTo(map);
+          });
 
           const restaurantData = {
             id: id,
@@ -784,6 +1003,8 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
             };
           });
 
+          restaurantClusterGroup.addLayer(marker);
+
           restaurantMarkerById[id] = {
             marker: marker,
             data: restaurantData,
@@ -795,7 +1016,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
           if (nextIds[id]) {
             return;
           }
-          map.removeLayer(restaurantMarkerById[id].marker);
+          restaurantClusterGroup.removeLayer(restaurantMarkerById[id].marker);
           delete restaurantMarkerById[id];
         });
       }
@@ -824,7 +1045,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
         }
 
         if (command.type === 'showRestaurants') {
-          drawRestaurants(command.restaurants);
+          scheduleDrawRestaurants(command.restaurants);
         }
 
         if (command.type === 'radiusCircle') {
@@ -837,6 +1058,14 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
 
         if (command.type === 'showRoute') {
           showRoute(command.from, command.to);
+        }
+
+        if (command.type === 'setRoutePolyline') {
+          setRoutePolyline(command);
+        }
+
+        if (command.type === 'updateNavigationLocation') {
+          updateNavigationLocation(command);
         }
 
         if (command.type === 'clearRoute') {
@@ -879,6 +1108,7 @@ export function createLeafletHtml({ currentLocation = null } = {}) {
 
       map.on('dragstart zoomstart', function() {
         userMovedMap = true;
+        postToApp({ type: 'userMovedMap' });
       });
 
       drawCurrentLocation(startLocation, { recenter: true });

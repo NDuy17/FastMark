@@ -41,6 +41,7 @@ import SellerShopSettingsScreen from '../seller/SellerShopSettingsScreen';
 import SellerReviewsManageScreen from '../seller/SellerReviewsManageScreen';
 import SellerOrdersScreen from '../seller/SellerOrdersScreen';
 import SellerOrderDetailScreen from '../seller/SellerOrderDetailScreen';
+import BuyerProfileScreen from '../profile/BuyerProfileScreen';
 import SellerStatsScreen from '../seller/SellerStatsScreen';
 import SellerProductsTabScreen from '../seller/SellerProductsTabScreen';
 import SellerSubscriptionScreen from '../seller/SellerSubscriptionScreen';
@@ -106,6 +107,7 @@ export default function ProfilePanel({
   const [sellerStep, setSellerStep] = useState(null);
   const [sellerVerification, setSellerVerification] = useState(null);
   const [orderDetailTarget, setOrderDetailTarget] = useState(null);
+  const [orderDetailNestedNav, setOrderDetailNestedNav] = useState(null);
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
   const [phoneChangeReturn, setPhoneChangeReturn] = useState(null);
   const [shopContactRefreshKey, setShopContactRefreshKey] = useState(0);
@@ -427,6 +429,7 @@ export default function ProfilePanel({
         onActiveTabChange={setSellerOrdersTab}
         onRefreshKey={ordersRefreshKey}
         onOpenReservation={(target) => {
+          setOrderDetailNestedNav(null);
           setOrderDetailTarget(target);
           setProfileNav('seller-order-detail');
         }}
@@ -435,6 +438,25 @@ export default function ProfilePanel({
   }
 
   if (profileNav === 'seller-order-detail' && orderDetailTarget) {
+    if (orderDetailNestedNav?.screen === 'buyer') {
+      return (
+        <BuyerProfileScreen
+          userId={String(orderDetailNestedNav.userId)}
+          onBack={() => setOrderDetailNestedNav(null)}
+        />
+      );
+    }
+
+    if (orderDetailNestedNav?.screen === 'product') {
+      return (
+        <SellerProductDetailScreen
+          productId={String(orderDetailNestedNav.productId)}
+          onBack={() => setOrderDetailNestedNav(null)}
+          onChanged={() => setOrdersRefreshKey((value) => value + 1)}
+        />
+      );
+    }
+
     return (
       <SellerOrderDetailScreen
         reservationId={String(orderDetailTarget.item?.id || '')}
@@ -444,9 +466,16 @@ export default function ProfilePanel({
           if (orderDetailTarget.fromTab) {
             setSellerOrdersTab(orderDetailTarget.fromTab);
           }
+          setOrderDetailNestedNav(null);
           setProfileNav('seller-orders');
         }}
         onChanged={() => setOrdersRefreshKey((value) => value + 1)}
+        onOpenBuyer={({ userId }) => {
+          setOrderDetailNestedNav({ screen: 'buyer', userId: String(userId) });
+        }}
+        onOpenProduct={({ productId }) => {
+          setOrderDetailNestedNav({ screen: 'product', productId: String(productId) });
+        }}
       />
     );
   }

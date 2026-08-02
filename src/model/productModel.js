@@ -64,7 +64,7 @@ export function normalizeProduct(row) {
     categoryName: row.categoryName || '',
     categoryIcon: row.categoryIcon || '',
     categoryId: String(row.categoryId || row.CategoryId || '').trim(),
-    storeName: row.storeName || '',
+    storeName: row.storeName || row.shopName || row.shop_name || '',
     location: row.location || '',
     distanceMeters: Number.isFinite(distanceMeters) ? distanceMeters : null,
     soldCount: Number(row.soldCount ?? 0),

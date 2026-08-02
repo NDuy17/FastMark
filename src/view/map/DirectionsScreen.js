@@ -7,13 +7,34 @@ import {
   Text,
   View,
 } from 'react-native';
-import * as Location from 'expo-location';
 
-import { formatDistanceMeters, formatDurationSeconds } from '../../core/utils/pickupDateTime';
-import { calculateDistanceMeters, hasValidLocation, normalizeExpoLocation } from '../../core/utils/geo';
+import { fetchRouteGeometry } from '../../api/routingApi';
+import { formatDurationSeconds } from '../../core/utils/pickupDateTime';
+import {
+  estimateTravelDurationSeconds,
+  formatDistanceLabel,
+  getDistanceFromCurrentLocation,
+  hasValidLocation,
+  calculateDistanceMeters,
+} from '../../core/utils/geo';
+import {
+  computeRemainingRouteStats,
+  findNearestSegmentIndex,
+  hasArrivedAtDestination,
+  shouldRerouteRoute,
+} from '../../core/utils/routeNavigation';
+import useLocationWatcher from '../../hooks/useLocationWatcher';
+import { useThrottledCallback } from '../../hooks/useThrottledCallback';
 import { useScreenInsets } from '../../hooks/useScreenInsets';
 import LeafletMap from '../shared/components/LeafletMap';
 import CircularBackButton from '../shared/components/CircularBackButton';
+
+const REROUTE_THRESHOLD_METERS = 30;
+const ARRIVAL_THRESHOLD_METERS = 20;
+const REROUTE_COOLDOWN_MS = 10000;
+const ROUTE_TRIM_MIN_MOVE_METERS = 8;
+const ROUTE_TRIM_MIN_INTERVAL_MS = 500;
+const DISPLAY_DISTANCE_THROTTLE_MS = 700;
 
 function isRemoteIcon(value) {
   return /^https?:\/\//i.test(String(value || '').trim());
@@ -23,13 +44,27 @@ export default function DirectionsScreen({
   session,
   onStop,
 }) {
-  const watcherRef = useRef(null);
   const mountedRef = useRef(true);
+  const fullRouteRef = useRef(null);
+  const routeFetchInFlightRef = useRef(false);
+  const routeFetchFailedRef = useRef(false);
+  const hasArrivedRef = useRef(false);
+  const lastRerouteAtRef = useRef(0);
+  const lastSegmentIndexRef = useRef(0);
+  const lastRouteTrimAtRef = useRef(0);
+  const lastRouteTrimLocationRef = useRef(null);
   const insets = useScreenInsets();
-  const [liveLocation, setLiveLocation] = useState(null);
-  const [routeInfo, setRouteInfo] = useState(null);
+
+  const liveLocation = useLocationWatcher({
+    mode: 'navigation',
+    enabled: true,
+    seedLocation: session?.initialLocation ?? null,
+  });
+
+  const [routePolyline, setRoutePolyline] = useState(null);
   const [recenterRequest, setRecenterRequest] = useState(null);
-  const [routeRequest, setRouteRequest] = useState(null);
+  const [followUser, setFollowUser] = useState(true);
+  const [displayDistanceMeters, setDisplayDistanceMeters] = useState(null);
 
   const destination = session?.destination ?? null;
   const storeAvatar = String(session?.storeAvatar || '').trim();
@@ -47,78 +82,200 @@ export default function DirectionsScreen({
 
   useEffect(() => {
     mountedRef.current = true;
-    let active = true;
-
-    async function startNavigationTracking() {
-      try {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!active || permission.status !== 'granted') {
-          return;
-        }
-
-        const last = await Location.getLastKnownPositionAsync();
-        if (last && active) {
-          setLiveLocation(normalizeExpoLocation(last));
-        }
-
-        const current = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.BestForNavigation,
-        });
-        if (current && active) {
-          setLiveLocation(normalizeExpoLocation(current));
-        }
-
-        watcherRef.current = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.BestForNavigation,
-            distanceInterval: 2,
-            timeInterval: 2000,
-          },
-          (position) => {
-            if (!mountedRef.current) {
-              return;
-            }
-            setLiveLocation(normalizeExpoLocation(position));
-          }
-        );
-      } catch (error) {
-        Alert.alert('Vị trí', error.message || 'Không theo dõi được vị trí hiện tại.');
-      }
-    }
-
-    startNavigationTracking();
+    fullRouteRef.current = null;
+    routeFetchInFlightRef.current = false;
+    routeFetchFailedRef.current = false;
+    hasArrivedRef.current = false;
+    lastRerouteAtRef.current = 0;
+    lastSegmentIndexRef.current = 0;
+    lastRouteTrimAtRef.current = 0;
+    lastRouteTrimLocationRef.current = null;
+    setRoutePolyline(null);
+    setFollowUser(true);
+    setDisplayDistanceMeters(null);
 
     return () => {
-      active = false;
       mountedRef.current = false;
-      watcherRef.current?.remove();
-      watcherRef.current = null;
+      fullRouteRef.current = null;
+      routeFetchInFlightRef.current = false;
     };
+  }, [destinationWithIcon?.latitude, destinationWithIcon?.longitude]);
+
+  const applyRemainingRoute = useCallback(
+    (origin, fullRoute, { fitBounds = false } = {}) => {
+      const remaining = computeRemainingRouteStats(
+        origin,
+        fullRoute.coordinates,
+        fullRoute.distanceMeters,
+        fullRoute.durationSeconds
+      );
+
+      setRoutePolyline({
+        coordinates: remaining.coordinates,
+        destination: destinationWithIcon,
+        fitBounds,
+      });
+    },
+    [destinationWithIcon]
+  );
+
+  const markRouteTrimmed = useCallback((origin) => {
+    lastRouteTrimAtRef.current = Date.now();
+    lastRouteTrimLocationRef.current = origin ? { ...origin } : null;
   }, []);
 
-  useEffect(() => {
-    if (routeRequest || !hasValidLocation(liveLocation) || !hasValidLocation(destinationWithIcon)) {
-      return;
+  const updateDisplayDistance = useThrottledCallback((origin) => {
+    setDisplayDistanceMeters(getDistanceFromCurrentLocation(origin, destinationWithIcon));
+  }, DISPLAY_DISTANCE_THROTTLE_MS);
+
+  const fetchAndApplyRoute = useCallback(
+    async (origin, { fitBounds = false } = {}) => {
+      if (
+        !mountedRef.current ||
+        !hasValidLocation(origin) ||
+        !hasValidLocation(destinationWithIcon) ||
+        routeFetchInFlightRef.current
+      ) {
+        return null;
+      }
+
+      routeFetchInFlightRef.current = true;
+
+      try {
+        const geometry = await fetchRouteGeometry(origin, destinationWithIcon);
+        if (!mountedRef.current) {
+          return null;
+        }
+
+        if (!geometry?.coordinates?.length) {
+          if (!routeFetchFailedRef.current) {
+            routeFetchFailedRef.current = true;
+            Alert.alert('Chỉ đường', 'Không tính được lộ trình.');
+          }
+          return null;
+        }
+
+        routeFetchFailedRef.current = false;
+        fullRouteRef.current = geometry;
+        applyRemainingRoute(origin, geometry, { fitBounds });
+        markRouteTrimmed(origin);
+        return geometry;
+      } catch (error) {
+        if (mountedRef.current && !routeFetchFailedRef.current) {
+          routeFetchFailedRef.current = true;
+          Alert.alert(
+            'Chỉ đường',
+            'Không kết nối được máy chủ lộ trình. Kiểm tra backend đang chạy.'
+          );
+        }
+        return null;
+      } finally {
+        routeFetchInFlightRef.current = false;
+      }
+    },
+    [applyRemainingRoute, destinationWithIcon, markRouteTrimmed]
+  );
+
+  const displayDurationSeconds = useMemo(() => {
+    if (!Number.isFinite(displayDistanceMeters)) {
+      return null;
+    }
+    return estimateTravelDurationSeconds(displayDistanceMeters);
+  }, [displayDistanceMeters]);
+
+  const hasRoutePolyline = Boolean(routePolyline?.coordinates?.length);
+
+  const shouldTrimRouteNow = useCallback((origin) => {
+    const now = Date.now();
+    const lastAt = lastRouteTrimAtRef.current;
+    const lastLocation = lastRouteTrimLocationRef.current;
+
+    if (!lastLocation || !lastAt) {
+      return true;
     }
 
-    setRouteRequest({
-      from: liveLocation,
-      to: destinationWithIcon,
-      at: Date.now(),
-    });
-  }, [liveLocation, destinationWithIcon, routeRequest]);
+    if (now - lastAt >= ROUTE_TRIM_MIN_INTERVAL_MS) {
+      return true;
+    }
+
+    const movedMeters = calculateDistanceMeters(lastLocation, origin);
+    return movedMeters != null && movedMeters >= ROUTE_TRIM_MIN_MOVE_METERS;
+  }, []);
+
+  const processNavigationUpdate = useCallback(
+    (origin) => {
+      if (!mountedRef.current || !hasValidLocation(origin) || !hasValidLocation(destinationWithIcon)) {
+        return;
+      }
+
+      if (hasArrivedAtDestination(origin, destinationWithIcon, ARRIVAL_THRESHOLD_METERS)) {
+        if (!hasArrivedRef.current) {
+          hasArrivedRef.current = true;
+          Alert.alert(
+            'Đã đến nơi',
+            `Bạn đã đến gần ${session?.storeName || 'điểm đích'}.`,
+            [{ text: 'OK' }]
+          );
+        }
+        return;
+      }
+
+      const fullRoute = fullRouteRef.current;
+      if (!fullRoute?.coordinates?.length) {
+        fetchAndApplyRoute(origin, { fitBounds: true });
+        return;
+      }
+
+      const progress = findNearestSegmentIndex(
+        origin,
+        fullRoute.coordinates,
+        lastSegmentIndexRef.current
+      );
+      lastSegmentIndexRef.current = progress.segmentIndex;
+      const offRouteMeters = progress.distanceMeters;
+
+      if (shouldRerouteRoute(offRouteMeters, REROUTE_THRESHOLD_METERS)) {
+        const now = Date.now();
+        if (now - lastRerouteAtRef.current >= REROUTE_COOLDOWN_MS) {
+          lastRerouteAtRef.current = now;
+          fetchAndApplyRoute(origin, { fitBounds: false });
+        } else if (shouldTrimRouteNow(origin)) {
+          markRouteTrimmed(origin);
+          applyRemainingRoute(origin, fullRoute, { fitBounds: false });
+        }
+        return;
+      }
+
+      if (!shouldTrimRouteNow(origin)) {
+        return;
+      }
+
+      markRouteTrimmed(origin);
+      applyRemainingRoute(origin, fullRoute, { fitBounds: false });
+    },
+    [
+      applyRemainingRoute,
+      destinationWithIcon,
+      fetchAndApplyRoute,
+      markRouteTrimmed,
+      session?.storeName,
+      shouldTrimRouteNow,
+    ]
+  );
+
+  useEffect(() => {
+    if (!hasValidLocation(liveLocation)) {
+      return undefined;
+    }
+
+    updateDisplayDistance(liveLocation);
+    processNavigationUpdate(liveLocation);
+    return undefined;
+  }, [liveLocation, processNavigationUpdate, updateDisplayDistance]);
 
   const handleMapEvent = useCallback((payload) => {
-    if (payload?.type === 'routeReady') {
-      setRouteInfo({
-        distance: payload.distance,
-        duration: payload.duration,
-      });
-      return;
-    }
-    if (payload?.type === 'routeError') {
-      setRouteInfo(null);
-      Alert.alert('Chỉ đường', payload.message || 'Không vẽ được lộ trình.');
+    if (payload?.type === 'userMovedMap') {
+      setFollowUser(false);
     }
   }, []);
 
@@ -126,18 +283,12 @@ export default function DirectionsScreen({
     if (!hasValidLocation(liveLocation)) {
       return;
     }
+    setFollowUser(true);
     setRecenterRequest({
       location: liveLocation,
       at: Date.now(),
     });
   }, [liveLocation]);
-
-  const remainingDistance = useMemo(() => {
-    if (!hasValidLocation(liveLocation) || !hasValidLocation(destinationWithIcon)) {
-      return null;
-    }
-    return calculateDistanceMeters(liveLocation, destinationWithIcon);
-  }, [liveLocation, destinationWithIcon]);
 
   return (
     <View style={styles.container}>
@@ -145,9 +296,10 @@ export default function DirectionsScreen({
         <LeafletMap
           currentLocation={liveLocation}
           recenterRequest={recenterRequest}
-          routeRequest={routeRequest}
+          routePolyline={routePolyline}
           restaurants={[]}
           navigationMode
+          followUser={followUser}
           onEvent={handleMapEvent}
         />
 
@@ -180,16 +332,22 @@ export default function DirectionsScreen({
           )}
           <View style={styles.directionsCardTitles}>
             <Text style={styles.directionsTitle}>Chỉ đường đến {session?.storeName || 'Gian hàng'}</Text>
-            {routeInfo ? (
+            {Number.isFinite(displayDistanceMeters) ? (
               <Text style={styles.directionsMeta}>
-                {formatDistanceMeters(routeInfo.distance)} • {formatDurationSeconds(routeInfo.duration)}
+                {formatDistanceLabel(displayDistanceMeters)} • {formatDurationSeconds(displayDurationSeconds)}
               </Text>
             ) : (
-              <Text style={styles.directionsMeta}>Đang tính lộ trình...</Text>
+              <Text style={styles.directionsMeta}>
+                {!hasValidLocation(liveLocation)
+                  ? 'Đang lấy vị trí GPS...'
+                  : hasRoutePolyline
+                    ? 'Đang cập nhật khoảng cách...'
+                    : 'Đang tính lộ trình...'}
+              </Text>
             )}
-            {remainingDistance != null ? (
+            {Number.isFinite(displayDistanceMeters) ? (
               <Text style={styles.directionsLiveMeta}>
-                Còn khoảng {formatDistanceMeters(remainingDistance)} từ vị trí hiện tại
+                Còn khoảng {formatDistanceLabel(displayDistanceMeters)} phía trước
               </Text>
             ) : null}
           </View>

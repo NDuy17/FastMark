@@ -10,7 +10,16 @@ function pickQueryValue(query, keys) {
   }
   return "";
 }
+exports.getAccountStatistics = async (req, res) => {
+  const statistics = await adminAccountService.getAccountStatistics(req.query);
 
+  return res.json({
+    success: true,
+    data: {
+      statistics,
+    },
+  });
+};
 function pickDateRangeQuery(query) {
   return {
     from: pickQueryValue(query, ["from", "dateFrom"]),
